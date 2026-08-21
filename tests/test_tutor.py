@@ -27,6 +27,7 @@ class TutorSessionTests(unittest.TestCase):
         self.assertEqual(1, sum(item["role"] == "system" for item in request))
         self.assertEqual(TutorMode.COACH, reply.mode)
         self.assertEqual(1, session.turn_count)
+        self.assertIn("exactly one conceptual first step", request[-1]["content"])
 
     def test_hint_mode_has_explicit_no_answer_boundary(self) -> None:
         provider = FakeProvider()
@@ -61,6 +62,28 @@ class TutorSessionTests(unittest.TestCase):
         self.assertIsNone(session.problem_statement)
         self.assertEqual(0, session.turn_count)
         self.assertEqual((), session.context_messages())
+
+    def test_learning_snapshot_tracks_help_without_unbounded_history(self) -> None:
+        provider = FakeProvider()
+        session = TutorSession(provider, "test-model")
+        session.respond("Differentiate sin(x^2)", TutorMode.HINT)
+        session.respond("Show the solution", TutorMode.SOLVE)
+        snapshot = session.learning_snapshot()
+        self.assertEqual(2, snapshot.tutor_turns)
+        self.assertEqual(1, snapshot.hints_used)
+        self.assertTrue(snapshot.solution_revealed)
+        self.assertEqual(tuple(session.context_messages()), snapshot.messages)
+
+    def test_persistent_context_is_added_without_an_extra_system_message(self) -> None:
+        provider = FakeProvider()
+        session = TutorSession(provider, "test-model")
+        session.set_learner_context(
+            "- Chain rule: beginning; watch for: missing inner derivative"
+        )
+        session.respond("Differentiate sin(x^2)")
+        request = provider.requests[0]
+        self.assertEqual(1, sum(item["role"] == "system" for item in request))
+        self.assertIn("missing inner derivative", request[0]["content"])
 
     def test_tagged_reasoning_is_removed(self) -> None:
         text = student_facing_text("<think>private plan</think>Use the chain rule.")

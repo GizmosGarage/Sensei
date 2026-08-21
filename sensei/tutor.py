@@ -46,6 +46,18 @@ MODE_INSTRUCTIONS = {
     ),
 }
 
+NEW_PROBLEM_REQUESTS = {
+    TutorMode.COACH: (
+        "I have not shown any work yet. Give exactly one conceptual first step, do "
+        "not calculate later steps, and end with one question for me to answer."
+    ),
+    TutorMode.HINT: (
+        "Give exactly one hint for this problem, reveal no final answer, and end with "
+        "one question for me to answer."
+    ),
+    TutorMode.SOLVE: "Give the complete explained solution to this problem.",
+}
+
 
 @dataclass(frozen=True)
 class TutorReply:
@@ -53,6 +65,17 @@ class TutorReply:
     mode: TutorMode
     prompt_tokens: int | None
     completion_tokens: int | None
+
+
+@dataclass(frozen=True)
+class LearningSnapshot:
+    """The bounded evidence needed to finalize one problem into learning memory."""
+
+    problem: str
+    messages: tuple[Message, ...]
+    tutor_turns: int
+    hints_used: int
+    solution_revealed: bool
 
 
 def student_facing_text(text: str) -> str:
@@ -83,12 +106,15 @@ class TutorSession:
         self.model_name = model_name
         self.history_character_budget = history_character_budget
         self.problem_statement: str | None = None
+        self.learner_context: str | None = None
         self._history: list[Message] = []
+        self._mode_counts = {mode: 0 for mode in TutorMode}
         self.turn_count = 0
 
     def reset(self, problem: str | None = None) -> None:
         self.problem_statement = problem.strip() if problem and problem.strip() else None
         self._history.clear()
+        self._mode_counts = {mode: 0 for mode in TutorMode}
         self.turn_count = 0
 
     def _recent_history(self) -> list[Message]:
@@ -115,6 +141,13 @@ class TutorSession:
             f"{MODE_INSTRUCTIONS[mode]}\n\n"
             f"Current problem or study question:\n{self.problem_statement}"
         )
+        if self.learner_context:
+            system_content += (
+                "\n\nRelevant persistent learner context:\n"
+                f"{self.learner_context}\n"
+                "Use this only when relevant. Adapt instruction without mentioning "
+                "scores or stored records unless the student asks."
+            )
         return [
             {"role": "system", "content": system_content},
             *self._recent_history(),
@@ -134,9 +167,7 @@ class TutorSession:
             raise ValueError("Enter a calculus problem, attempt, or question.")
         if starts_new_problem or self.problem_statement is None:
             self.reset(student_message)
-            request_text = (
-                "Help me begin this problem according to the active help mode."
-            )
+            request_text = NEW_PROBLEM_REQUESTS[mode]
         else:
             request_text = student_message
 
@@ -150,6 +181,7 @@ class TutorSession:
                 {"role": "assistant", "content": safe_text},
             ]
         )
+        self._mode_counts[mode] += 1
         self.turn_count += 1
         return TutorReply(
             text=safe_text,
@@ -162,6 +194,20 @@ class TutorSession:
         """Expose a read-only copy for status reporting and tests."""
 
         return tuple(dict(message) for message in self._recent_history())
+
+    def learning_snapshot(self) -> LearningSnapshot:
+        if self.problem_statement is None or self.turn_count == 0:
+            raise RuntimeError("Complete at least one tutor turn before recording it.")
+        return LearningSnapshot(
+            problem=self.problem_statement,
+            messages=tuple(dict(message) for message in self._recent_history()),
+            tutor_turns=self.turn_count,
+            hints_used=self._mode_counts[TutorMode.HINT],
+            solution_revealed=self._mode_counts[TutorMode.SOLVE] > 0,
+        )
+
+    def set_learner_context(self, context: str | None) -> None:
+        self.learner_context = context.strip() if context and context.strip() else None
 
     @property
     def context_characters(self) -> int:

@@ -1,0 +1,204 @@
+"""Validated conversion from a tutoring session into compact learning evidence."""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from enum import Enum
+from typing import Collection
+
+from sensei.providers import ChatProvider
+from sensei.tutor import LearningSnapshot
+
+
+class Outcome(str, Enum):
+    CORRECT = "correct"
+    PARTIAL = "partial"
+    INCORRECT = "incorrect"
+
+
+@dataclass(frozen=True)
+class LearningEvent:
+    skill_id: str
+    outcome: Outcome
+    misconception: str | None
+    evidence: str
+    confidence: float
+    problem: str
+    hints_used: int
+    solution_revealed: bool
+    tutor_turns: int
+    outcome_source: str = "model"
+
+
+class LearningEventError(ValueError):
+    """Raised when model output cannot satisfy the learning-event contract."""
+
+
+def _json_object(text: str) -> dict[str, object]:
+    stripped = text.strip()
+    fenced = re.fullmatch(
+        r"```(?:json)?\s*(.*?)\s*```", stripped, flags=re.DOTALL | re.IGNORECASE
+    )
+    if fenced:
+        stripped = fenced.group(1)
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError as error:
+        raise LearningEventError(f"invalid JSON: {error}") from error
+    if not isinstance(parsed, dict):
+        raise LearningEventError("learning event must be a JSON object")
+    return parsed
+
+
+def parse_learning_event(
+    text: str,
+    *,
+    valid_skill_ids: Collection[str],
+    snapshot: LearningSnapshot,
+    outcome_override: Outcome | None = None,
+) -> LearningEvent:
+    document = _json_object(text)
+    required = {"skill_id", "outcome", "misconception", "evidence", "confidence"}
+    if set(document) != required:
+        raise LearningEventError(
+            f"fields must be exactly {sorted(required)}; received {sorted(document)}"
+        )
+
+    skill_id = document["skill_id"]
+    if not isinstance(skill_id, str) or skill_id not in valid_skill_ids:
+        raise LearningEventError(f"unknown skill_id: {skill_id!r}")
+    try:
+        extracted_outcome = Outcome(document["outcome"])
+    except (ValueError, TypeError) as error:
+        raise LearningEventError(
+            "outcome must be correct, partial, or incorrect"
+        ) from error
+
+    misconception = document["misconception"]
+    if misconception is not None:
+        if not isinstance(misconception, str):
+            raise LearningEventError("misconception must be a string or null")
+        misconception = misconception.strip() or None
+        if misconception and len(misconception) > 300:
+            raise LearningEventError("misconception exceeds 300 characters")
+
+    evidence = document["evidence"]
+    if not isinstance(evidence, str) or not evidence.strip():
+        raise LearningEventError("evidence must be a non-empty string")
+    evidence = evidence.strip()
+    if len(evidence) > 500:
+        raise LearningEventError("evidence exceeds 500 characters")
+
+    confidence = document["confidence"]
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        raise LearningEventError("confidence must be a number from 0 to 1")
+    confidence = float(confidence)
+    if not 0 <= confidence <= 1:
+        raise LearningEventError("confidence must be a number from 0 to 1")
+
+    return LearningEvent(
+        skill_id=skill_id,
+        outcome=outcome_override or extracted_outcome,
+        misconception=misconception,
+        evidence=evidence,
+        confidence=confidence,
+        problem=snapshot.problem,
+        hints_used=snapshot.hints_used,
+        solution_revealed=snapshot.solution_revealed,
+        tutor_turns=snapshot.tutor_turns,
+        outcome_source="student" if outcome_override else "model",
+    )
+
+
+class LearningEventExtractor:
+    """Asks the local model for one validated, retryable learning record."""
+
+    def __init__(
+        self,
+        provider: ChatProvider,
+        skills: dict[str, str],
+        *,
+        validation_attempts: int = 2,
+    ) -> None:
+        if validation_attempts < 1:
+            raise ValueError("validation_attempts must be positive")
+        self.provider = provider
+        self.skills = dict(skills)
+        self.validation_attempts = validation_attempts
+
+    def _system_prompt(self) -> str:
+        skill_lines = "\n".join(
+            f"- {skill_id}: {name}" for skill_id, name in self.skills.items()
+        )
+        return f"""You extract a compact learning record from one calculus tutoring session.
+Return only one JSON object with exactly these fields:
+skill_id, outcome, misconception, evidence, confidence.
+
+Rules:
+- skill_id must be one ID from the catalog below.
+- outcome must be correct, partial, or incorrect.
+- misconception must be a concise string or null.
+- evidence must describe only observable student work, not the tutor's work.
+- confidence must be a number from 0 to 1.
+- Do not include markdown, explanations, hidden reasoning, or extra fields.
+- If the session is ambiguous, use calculus_foundations and lower confidence.
+
+Skill catalog:
+{skill_lines}"""
+
+    @staticmethod
+    def _transcript(snapshot: LearningSnapshot) -> str:
+        lines = []
+        for message in snapshot.messages:
+            role = "Student" if message["role"] == "user" else "Sensei"
+            lines.append(f"{role}: {message['content']}")
+        return "\n".join(lines)
+
+    def extract(
+        self,
+        snapshot: LearningSnapshot,
+        outcome_override: Outcome | None = None,
+    ) -> LearningEvent:
+        self_report = outcome_override.value if outcome_override else "not provided"
+        base_request = f"""Problem:
+{snapshot.problem}
+
+Recent tutoring transcript:
+{self._transcript(snapshot)}
+
+Student-reported outcome: {self_report}
+Create the learning record now."""
+        validation_error = ""
+        prior_text = ""
+
+        for attempt in range(self.validation_attempts):
+            repair = ""
+            if attempt:
+                repair = (
+                    "\n\nYour previous output was invalid. Correct it without commentary.\n"
+                    f"Validation error: {validation_error}\n"
+                    f"Previous output: {prior_text[:1000]}"
+                )
+            result = self.provider.complete(
+                [
+                    {"role": "system", "content": self._system_prompt()},
+                    {"role": "user", "content": f"{base_request}{repair}"},
+                ]
+            )
+            prior_text = result.text
+            try:
+                return parse_learning_event(
+                    result.text,
+                    valid_skill_ids=self.skills,
+                    snapshot=snapshot,
+                    outcome_override=outcome_override,
+                )
+            except LearningEventError as error:
+                validation_error = str(error)
+
+        raise LearningEventError(
+            f"The local model did not return a valid learning record after "
+            f"{self.validation_attempts} attempts: {validation_error}"
+        )

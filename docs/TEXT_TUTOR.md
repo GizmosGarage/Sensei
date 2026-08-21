@@ -32,8 +32,15 @@ Model weights are not downloaded implicitly. If the selected artifact is missing
 | Plain text | Uses coach mode; the first message starts a problem and later messages are attempts or questions. |
 | `/hint [question]` | Gives exactly one hint without revealing the final answer. |
 | `/solve [question]` | Gives a complete explained solution. |
+| `/done [outcome]` | Finalizes the active problem into learning memory; the optional outcome is `correct`, `partial`, or `incorrect`. |
+| `/profile` | Shows level, XP, recorded attempts, and mastery totals. |
+| `/skills [all]` | Shows practiced skills or the complete 17-skill catalog. |
+| `/review` | Recommends the next scheduled skill and shows an unresolved misconception when present. |
 | `/new [problem]` | Clears the current context and optionally starts another problem. |
 | `/status` | Shows the model, active problem, tutor-turn count, and recent-context usage. |
+| `/export [path]` | Exports personal learning records to a new JSON file. |
+| `/backup [path]` | Creates a new SQLite backup without overwriting an existing file. |
+| `/delete-data` | Clears learning records after an exact `DELETE` confirmation. |
 | `/help` | Shows the command reference. |
 | `/quit` | Stops the managed runtime and exits. |
 
@@ -62,7 +69,7 @@ The terminal session is problem-scoped rather than an ever-growing general chat:
 
 This leaves room inside the 4,096-token runtime context for the current response while preventing later problems from inheriting irrelevant transcripts. The character limit is a conservative approximation, not a tokenizer-exact budget.
 
-Long-term learning state is intentionally absent from this milestone. The next phase will store compact, validated learning records in SQLite and retrieve only relevant records for future prompts.
+Long-term learning state is stored separately in SQLite. Up to five of the weakest practiced skills and their unresolved misconceptions are added to the system context; Sensei is instructed to use them only when relevant and not announce stored scores. Raw transcripts are not placed in learning memory. See [learning memory and progression](LEARNING_MEMORY.md) for the schema, progression rules, and data controls.
 
 ## Architecture
 
@@ -86,10 +93,12 @@ The provider boundary allows another local runtime or model vendor to be added w
 ## Privacy and runtime files
 
 - Prompts and responses are not written to the repository.
+- The default database is `data/sensei.db`; all of `data/` is ignored by Git.
 - The server binds to `127.0.0.1`, not the local network.
 - Runtime logs are written to `data/runtime/llama-server.log`; `data/` is ignored by Git.
 - Model weights, partial downloads, and raw benchmark logs remain ignored.
 - The runtime is configured with reasoning output disabled. Tagged reasoning is also removed before a response is retained in session context.
+- Use `--no-memory` for a stateless session or `--database PATH` for another local database.
 
 ## Verification
 

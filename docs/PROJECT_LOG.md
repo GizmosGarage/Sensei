@@ -1,5 +1,38 @@
 # Project log
 
+## 2026-08-21 - Milestone 3: persistent learning memory and progression
+
+### Completed
+
+- Added a versioned SQLite schema with migrations and foreign-key enforcement.
+- Added a 17-skill Calculus I catalog with explicit prerequisite relationships.
+- Added validated, exact-field learning-event extraction with one repair attempt.
+- Added `/done` as the explicit boundary between transient tutoring and durable learning memory.
+- Stored problems, outcomes and their source, concise evidence, help use, misconceptions, confidence, and timestamps without storing raw transcripts.
+- Added separate mastery, misconception, attempt, and XP records updated in one database transaction.
+- Added additive effort XP, increasing RPG level thresholds, confidence-aware mastery evidence, and spaced-review scheduling.
+- Added `/profile`, `/skills`, and `/review` progress commands.
+- Added compact weak-skill and misconception retrieval for future problem prompts.
+- Added JSON export, SQLite backup, confirmed data clearing, custom database paths, and stateless mode.
+- Added storage, progression, extraction, catalog, adaptive-context, and terminal-format tests.
+
+### Live validation
+
+A temporary-database workflow was completed through the actual Qwen 3.5 4B Vulkan runtime: two tutoring turns, `/done incorrect`, model extraction, SQLite persistence, XP/mastery update, review recommendation, JSON export, backup, and clean shutdown.
+
+The stored chain-rule misconception was then loaded into a later `cos(x^3)` problem. Qwen focused on the outer/inner structure but initially gave too many steps. The new-problem request was tightened and revalidated; the fallback then stopped after one conceptual step and one student question.
+
+### Trust boundary
+
+Student-reported outcomes are authoritative when supplied to `/done` and are recorded with `outcome_source=student`; otherwise the model classifies the outcome and the source is recorded as `model`. Neither is yet a deterministic proof of mathematical correctness. Confidence reduces uncertain mastery movement toward neutral, XP is never removed, and the next milestone will add symbolic/numeric verification before correctness can become high-confidence mastery evidence.
+
+### Next milestone
+
+- Add a deterministic expression and numeric-equivalence verification boundary.
+- Verify derivatives, limits, and basic antiderivatives independently from model prose.
+- Distinguish verified correctness from student- or model-reported outcomes.
+- Expand evaluation cases for equivalent notation, domains, constants of integration, and undefined expressions.
+
 ## 2026-08-21 - Milestone 2: local terminal tutor
 
 ### Completed

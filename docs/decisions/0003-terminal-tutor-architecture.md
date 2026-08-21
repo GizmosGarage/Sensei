@@ -49,4 +49,4 @@ Do not persist transcripts or infer durable mastery in this milestone. Add those
 - A character budget only approximates token usage.
 - The model can still violate pedagogical instructions, so live behavior and expanded evaluations remain necessary.
 - Tagged reasoning can be removed from retained context, but token streaming cannot retract text already printed; the runtime-level reasoning-off setting remains the primary safeguard.
-- No learning survives process exit until the SQLite milestone is implemented.
+- At acceptance, no learning survived process exit; this limitation was resolved by [ADR 0004](0004-learning-memory-and-progression.md).

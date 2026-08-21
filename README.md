@@ -6,9 +6,9 @@ Repository: [GizmosGarage/Sensei](https://github.com/GizmosGarage/Sensei)
 
 ## Project status
 
-**Phase 2: persistent learning memory**
+**Phase 3: deterministic calculus verification**
 
-The local terminal tutor is now usable. It starts the selected model automatically, streams responses, and keeps each problem's recent context bounded. The provisional local stack is:
+The local terminal tutor now has persistent SQLite learning memory. It starts the selected model automatically, streams responses, keeps each problem's recent context bounded, and records compact learning evidence only when `/done` is used. The provisional local stack is:
 
 - `llama.cpp` b10549 with its Vulkan backend
 - Qwen 3.5 9B Q4_K_M as the default tutor model
@@ -31,7 +31,7 @@ Use the lighter model when faster startup and lower memory use are more importan
 python -m sensei --fast
 ```
 
-Inside the tutor, use `/hint`, `/solve`, `/new`, `/status`, `/help`, or `/quit`. Plain text uses coach mode. For an automated one-shot check:
+Inside the tutor, use `/hint`, `/solve`, `/done`, `/profile`, `/skills`, `/review`, `/new`, `/status`, `/help`, or `/quit`. Plain text uses coach mode. For an automated one-shot check:
 
 ```powershell
 python -m sensei --prompt "Evaluate lim_(x->0) sin(x)/x" --mode hint
@@ -54,15 +54,17 @@ python -m sensei --prompt "Evaluate lim_(x->0) sin(x)/x" --mode hint
 - [Benchmark results](docs/BENCHMARK_RESULTS.md)
 - [Local inference setup](docs/LOCAL_INFERENCE_SETUP.md)
 - [Terminal tutor guide](docs/TEXT_TUTOR.md)
+- [Learning memory and progression](docs/LEARNING_MEMORY.md)
 - [Local-first architecture decision](docs/decisions/0001-local-first-architecture.md)
 - [Runtime and default-model decision](docs/decisions/0002-runtime-and-default-model.md)
 - [Terminal tutor architecture decision](docs/decisions/0003-terminal-tutor-architecture.md)
+- [Learning-memory architecture decision](docs/decisions/0004-learning-memory-and-progression.md)
 - [Project log](docs/PROJECT_LOG.md)
 
 ## Planned phases
 
 1. ~~Benchmark local model and inference-runtime candidates.~~
 2. ~~Build a minimal text-based tutoring loop.~~
-3. **Add persistent skill, attempt, and misconception tracking.**
-4. Add deterministic calculus verification.
+3. ~~Add persistent skill, attempt, and misconception tracking.~~
+4. **Add deterministic calculus verification.**
 5. Add XP, levels, review scheduling, and a portfolio-ready interface.

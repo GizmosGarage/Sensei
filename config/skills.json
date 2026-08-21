@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "skills": [
+    {
+      "id": "calculus_foundations",
+      "name": "Calculus foundations",
+      "unit": "Foundations",
+      "description": "Algebra, functions, graphs, and prerequisite reasoning used in calculus.",
+      "prerequisites": []
+    },
+    {
+      "id": "limit_concepts",
+      "name": "Limit concepts",
+      "unit": "Limits and continuity",
+      "description": "Interpret and estimate limits numerically, graphically, and symbolically.",
+      "prerequisites": ["calculus_foundations"]
+    },
+    {
+      "id": "limit_techniques",
+      "name": "Limit techniques",
+      "unit": "Limits and continuity",
+      "description": "Evaluate limits using algebra, conjugates, factoring, and standard limit laws.",
+      "prerequisites": ["limit_concepts"]
+    },
+    {
+      "id": "continuity",
+      "name": "Continuity",
+      "unit": "Limits and continuity",
+      "description": "Test continuity and reason about discontinuities and the intermediate value theorem.",
+      "prerequisites": ["limit_concepts"]
+    },
+    {
+      "id": "derivative_definition",
+      "name": "Derivative definition",
+      "unit": "Derivatives",
+      "description": "Use the difference quotient and interpret the derivative as a rate and slope.",
+      "prerequisites": ["limit_concepts"]
+    },
+    {
+      "id": "basic_derivative_rules",
+      "name": "Basic derivative rules",
+      "unit": "Derivatives",
+      "description": "Apply constant, power, sum, exponential, and trigonometric derivative rules.",
+      "prerequisites": ["derivative_definition"]
+    },
+    {
+      "id": "product_rule",
+      "name": "Product rule",
+      "unit": "Derivatives",
+      "description": "Differentiate products and identify when the product rule is required.",
+      "prerequisites": ["basic_derivative_rules"]
+    },
+    {
+      "id": "quotient_rule",
+      "name": "Quotient rule",
+      "unit": "Derivatives",
+      "description": "Differentiate quotients and simplify the resulting expression.",
+      "prerequisites": ["basic_derivative_rules"]
+    },
+    {
+      "id": "chain_rule",
+      "name": "Chain rule",
+      "unit": "Derivatives",
+      "description": "Differentiate composite functions and track inner derivatives.",
+      "prerequisites": ["basic_derivative_rules"]
+    },
+    {
+      "id": "implicit_differentiation",
+      "name": "Implicit differentiation",
+      "unit": "Applications of derivatives",
+      "description": "Differentiate implicit relations and solve for the requested derivative.",
+      "prerequisites": ["chain_rule"]
+    },
+    {
+      "id": "related_rates",
+      "name": "Related rates",
+      "unit": "Applications of derivatives",
+      "description": "Build and differentiate time-dependent constraints to relate changing quantities.",
+      "prerequisites": ["implicit_differentiation"]
+    },
+    {
+      "id": "optimization",
+      "name": "Optimization",
+      "unit": "Applications of derivatives",
+      "description": "Model and solve extrema problems using derivatives and domain reasoning.",
+      "prerequisites": ["basic_derivative_rules"]
+    },
+    {
+      "id": "curve_analysis",
+      "name": "Curve analysis",
+      "unit": "Applications of derivatives",
+      "description": "Use first and second derivatives to analyze shape, extrema, and concavity.",
+      "prerequisites": ["basic_derivative_rules"]
+    },
+    {
+      "id": "antiderivatives",
+      "name": "Antiderivatives",
+      "unit": "Integrals",
+      "description": "Find basic indefinite integrals and include constants of integration.",
+      "prerequisites": ["basic_derivative_rules"]
+    },
+    {
+      "id": "definite_integrals",
+      "name": "Definite integrals",
+      "unit": "Integrals",
+      "description": "Interpret and evaluate accumulated change and signed area.",
+      "prerequisites": ["limit_concepts"]
+    },
+    {
+      "id": "fundamental_theorem",
+      "name": "Fundamental theorem of calculus",
+      "unit": "Integrals",
+      "description": "Connect differentiation and integration through both parts of the theorem.",
+      "prerequisites": ["antiderivatives", "definite_integrals"]
+    },
+    {
+      "id": "u_substitution",
+      "name": "Substitution",
+      "unit": "Integration techniques",
+      "description": "Recognize reverse-chain-rule structure and evaluate integrals by substitution.",
+      "prerequisites": ["chain_rule", "antiderivatives"]
+    }
+  ]
+}
