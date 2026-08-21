@@ -1,5 +1,37 @@
 # Project log
 
+## 2026-08-21 - Milestone 2: local terminal tutor
+
+### Completed
+
+- Added an installable Python package and `python -m sensei` entry point with no third-party runtime dependencies.
+- Added a model-provider boundary around the local OpenAI-compatible API.
+- Added automatic, loopback-only `llama.cpp` startup and reliable shutdown.
+- Added token streaming, completion-schema validation, bounded retry behavior, and normal-completion enforcement.
+- Added coach, one-hint, and complete-solution modes with explicit answer boundaries.
+- Added problem-scoped context that always retains the active problem while limiting recent chat history to 12,000 characters.
+- Added `/hint`, `/solve`, `/new`, `/status`, `/help`, and `/quit` terminal commands plus a one-shot automation mode.
+- Added safeguards that disable reasoning at the server and remove tagged reasoning from the final stored turn.
+- Added tests for the provider, stream parser, model catalog, runtime command, tutor context policy, and CLI.
+- Validated streaming against Qwen 3.5 9B and a multi-turn session against the Qwen 3.5 4B fallback on the target GPU.
+
+### Failure found during live validation
+
+The first live request failed because Qwen's chat template requires the system message to appear only once at the beginning. The tutor originally sent separate system messages for its identity, help mode, and problem. Those instructions are now consolidated into one system message, and a regression test enforces the requirement.
+
+The first 4B coach response also advanced through too many steps. The coach contract was tightened to one small next step and one question, then revalidated against the local fallback model.
+
+### Context and privacy boundary
+
+This milestone deliberately does not treat chat history as learning memory. The active problem and recent exchanges exist only for the running process, runtime logs are stored under ignored `data/`, and model weights remain ignored. Durable skills, attempts, misconceptions, mastery, and XP belong in the next SQLite milestone.
+
+### Next milestone
+
+- Define and migrate the local SQLite learning-state schema.
+- Extract a validated learning event after each completed problem interaction.
+- Store skills, attempts, misconceptions, mastery evidence, and review scheduling independently from chat context.
+- Add export, backup, and deletion controls for student-owned data.
+
 ## 2026-08-21 - Milestone 1: local runtime and model baseline
 
 ### Completed

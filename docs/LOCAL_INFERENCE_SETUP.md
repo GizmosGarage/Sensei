@@ -65,6 +65,16 @@ python scripts\download_models.py --all
 
 The server exposes an OpenAI-compatible API at `http://127.0.0.1:8080/v1`. It is bound only to localhost and does not require hosted inference credits.
 
+## Run Sensei
+
+Sensei can manage the local server lifecycle automatically, so starting a server by hand is optional:
+
+```powershell
+python -m sensei
+```
+
+Use `python -m sensei --fast` for the 4B fallback. See the [terminal tutor guide](TEXT_TUTOR.md) for commands, one-shot mode, context behavior, and troubleshooting.
+
 ## Reproduce the benchmark
 
 After the candidates are present:
