@@ -13,6 +13,7 @@ data/
 
 # Model weights and model-manager storage
 models/
+.local/
 *.gguf
 *.safetensors
 

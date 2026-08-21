@@ -6,6 +6,12 @@ Choose the best open-weight model and local inference runtime for Sensei on the 
 
 "Best" means the best complete experience for this project, not the largest parameter count or highest general leaderboard position.
 
+## Outcome
+
+The first baseline is complete. Qwen 3.5 9B Q4_K_M is the provisional default, and Qwen 3.5 4B Q4_K_M is the lighter fallback. Both run locally through `llama.cpp`'s Vulkan backend.
+
+See [Benchmark results](BENCHMARK_RESULTS.md) for the measurements and [ADR 0002](decisions/0002-runtime-and-default-model.md) for the decision.
+
 ## Hard requirements
 
 - Runs locally without per-token API charges.
@@ -18,7 +24,7 @@ Choose the best open-weight model and local inference runtime for Sensei on the 
 
 ## Benchmark tiers
 
-1. **Primary tier:** quantized 7B-9B-class models expected to fit mostly or entirely in GPU memory.
+1. **Primary tier:** quantized 4B-9B-class models expected to fit entirely in GPU memory.
 2. **Stretch tier:** selected 12B-14B-class models using partial offload when necessary.
 3. **Exceptional candidates:** larger or mixture-of-experts models only when a realistic quantization is interactive on this machine.
 
@@ -69,4 +75,6 @@ Raw logs may contain personal study material and remain ignored. Sanitized bench
 
 ## Decision rule
 
-Select a default model only after at least one candidate from the primary tier and viable candidates from the stretch tier have completed the same benchmark. Keep the application model-agnostic so a future model can replace the winner without rewriting the learning system.
+The initial selection compared five current, hardware-viable artifacts from Google, Mistral AI, and Qwen. Models whose Q4 weights would leave inadequate headroom for a 4,096-token context were screened out before download. Microsoft Phi and DeepSeek candidates were researched, but the relevant community GGUF repositories required authenticated access during this run and were not suitable for the unauthenticated reproducibility requirement.
+
+The application must remain model-agnostic so a future model can replace the winner without rewriting the learning system. The default should be challenged again after the benchmark grows beyond seven cases and whenever a promising hardware-compatible model is released.

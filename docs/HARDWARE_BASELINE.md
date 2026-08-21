@@ -26,6 +26,17 @@ The values were collected locally through Windows CIM and registry queries. The 
 
 These are starting hypotheses, not final model requirements. Actual benchmark results will control the decision.
 
+## Validated inference path
+
+The installed AMD driver exposes the RX 5700 XT as a Vulkan 1.4 device. `llama.cpp` b10549 detected 8,176 MiB total device memory and 7,382 MiB free during setup, then fully offloaded every selected Q4 model in the benchmark.
+
+The RX 5700 XT is not listed in AMD's current Windows HIP SDK consumer-GPU compatibility table. ROCm-dependent runtimes were therefore not selected as the reproducible baseline. A Vulkan backend avoids relying on unsupported ROCm hardware while still using the GPU.
+
+Sources:
+
+- [llama.cpp Vulkan build documentation](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md#vulkan)
+- [AMD HIP SDK for Windows system requirements](https://rocm.docs.amd.com/projects/install-on-windows/en/latest/reference/system-requirements.html)
+
 ## Reproduce the inventory
 
 Future automation should capture at least:
@@ -37,4 +48,4 @@ Future automation should capture at least:
 - free storage
 - inference runtime and graphics-driver versions
 
-Runtime versions will be added once candidates are installed.
+Pinned runtime and model details are recorded in the [local inference setup](LOCAL_INFERENCE_SETUP.md).

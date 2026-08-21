@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "id": "gemma-4-e4b-q4",
+      "vendor": "Google",
+      "base_model": "google/gemma-4-E4B-it",
+      "repository": "google/gemma-4-E4B-it-qat-q4_0-gguf",
+      "revision": "4b4a2c1d584be7264f87aac328a1bc739ce81b6c",
+      "filename": "gemma-4-E4B_q4_0-it.gguf",
+      "quantization": "Q4_0 QAT",
+      "license": "Apache-2.0",
+      "size_bytes": 5154941280,
+      "sha256": "676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee"
+    },
+    {
+      "id": "ministral-3-8b-instruct-q4-k-m",
+      "vendor": "Mistral AI",
+      "base_model": "mistralai/Ministral-3-8B-Instruct-2512",
+      "repository": "mistralai/Ministral-3-8B-Instruct-2512-GGUF",
+      "revision": "0102285ad796bd99af90f58de616092e5630e970",
+      "filename": "Ministral-3-8B-Instruct-2512-Q4_K_M.gguf",
+      "quantization": "Q4_K_M",
+      "license": "Apache-2.0",
+      "size_bytes": 5198911904,
+      "sha256": "33e7a72cf5e6e2cfc2f2847075acc013d68bba023e35310cef86b5cf8fdca761"
+    },
+    {
+      "id": "ministral-3-8b-reasoning-q4-k-m",
+      "vendor": "Mistral AI",
+      "base_model": "mistralai/Ministral-3-8B-Reasoning-2512",
+      "repository": "mistralai/Ministral-3-8B-Reasoning-2512-GGUF",
+      "revision": "4413bc9b7b091ddad28101650d1395f5e045a328",
+      "filename": "Ministral-3-8B-Reasoning-2512-Q4_K_M.gguf",
+      "quantization": "Q4_K_M",
+      "license": "Apache-2.0",
+      "size_bytes": 5198910368,
+      "sha256": "894aa3645ef8708a81dbe201c26105ce37c4c741252c89c5a78f81b49ac438c6"
+    },
+    {
+      "id": "qwen-3.5-4b-q4-k-m",
+      "vendor": "Alibaba Cloud / Qwen",
+      "base_model": "Qwen/Qwen3.5-4B",
+      "repository": "bartowski/Qwen_Qwen3.5-4B-GGUF",
+      "revision": "4168f45a16a1290d65a4ec0fa312ae917a4c15d6",
+      "filename": "Qwen_Qwen3.5-4B-Q4_K_M.gguf",
+      "quantization": "Q4_K_M",
+      "license": "Apache-2.0",
+      "size_bytes": 3013027808,
+      "sha256": "13c16f426047e2de38cd075bdade4a7bcbc8c774384876f677740cda65f8a983"
+    },
+    {
+      "id": "qwen-3.5-9b-q4-k-m",
+      "vendor": "Alibaba Cloud / Qwen",
+      "base_model": "Qwen/Qwen3.5-9B",
+      "repository": "bartowski/Qwen_Qwen3.5-9B-GGUF",
+      "revision": "182be2fd6c7bc44887d88a91cb03ff009cc9f549",
+      "filename": "Qwen_Qwen3.5-9B-Q4_K_M.gguf",
+      "quantization": "Q4_K_M",
+      "license": "Apache-2.0",
+      "size_bytes": 6169341984,
+      "sha256": "d784ce9eda1a5a7b51e8f705a9e6310844bf4f173654d115823c775fdea56d43"
+    }
+  ]
+}

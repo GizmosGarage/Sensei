@@ -6,9 +6,16 @@ Repository: [GizmosGarage/Sensei](https://github.com/GizmosGarage/Sensei)
 
 ## Project status
 
-**Phase 0: hardware baseline and local-model evaluation design**
+**Phase 1: minimal text tutoring loop**
 
-The first engineering decision is to benchmark open-weight models that can run well on the target computer. No model has been selected yet.
+The hardware and model-selection milestone is complete. The provisional local stack is:
+
+- `llama.cpp` b10549 with its Vulkan backend
+- Qwen 3.5 9B Q4_K_M as the default tutor model
+- Qwen 3.5 4B Q4_K_M as the lighter fallback
+- 4,096-token working context with reasoning output disabled
+
+The default model scored 23/23 on the initial tutoring rubric and generated 29.6 tokens/second on the target RX 5700 XT. See the [benchmark report](docs/BENCHMARK_RESULTS.md) for methodology and limitations.
 
 ## Product principles
 
@@ -24,13 +31,16 @@ The first engineering decision is to benchmark open-weight models that can run w
 
 - [Hardware baseline](docs/HARDWARE_BASELINE.md)
 - [Model evaluation plan](docs/MODEL_EVALUATION.md)
+- [Benchmark results](docs/BENCHMARK_RESULTS.md)
+- [Local inference setup](docs/LOCAL_INFERENCE_SETUP.md)
 - [Local-first architecture decision](docs/decisions/0001-local-first-architecture.md)
+- [Runtime and default-model decision](docs/decisions/0002-runtime-and-default-model.md)
 - [Project log](docs/PROJECT_LOG.md)
 
 ## Planned phases
 
-1. Benchmark local model and inference-runtime candidates.
-2. Build a minimal text-based tutoring loop.
+1. ~~Benchmark local model and inference-runtime candidates.~~
+2. **Build a minimal text-based tutoring loop.**
 3. Add persistent skill, attempt, and misconception tracking.
 4. Add deterministic calculus verification.
 5. Add XP, levels, review scheduling, and a portfolio-ready interface.
