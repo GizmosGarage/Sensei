@@ -10,10 +10,10 @@
 - Established a reproducible model-evaluation framework.
 - Accepted local inference and local learning memory as the first architecture decision.
 - Added ignore rules for model weights, personal study records, databases, raw benchmark output, and secrets.
+- Initialized the Git repository on `main` and published it publicly at [GizmosGarage/Sensei](https://github.com/GizmosGarage/Sensei).
 
 ### Decisions pending
 
-- GitHub repository destination and visibility
 - Local inference runtime shortlist
 - Open-weight model shortlist
 - Benchmark implementation language and application stack

@@ -2,6 +2,8 @@
 
 Sensei is a local-first, adaptive calculus tutor. It is intended to teach through guided practice, remember demonstrated skills and misconceptions, and turn progress into an RPG-style mastery system without requiring paid model inference.
 
+Repository: [GizmosGarage/Sensei](https://github.com/GizmosGarage/Sensei)
+
 ## Project status
 
 **Phase 0: hardware baseline and local-model evaluation design**
