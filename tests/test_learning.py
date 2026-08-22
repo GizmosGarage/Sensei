@@ -16,7 +16,12 @@ from sensei.verification import (
 )
 
 
-def snapshot(verification: VerificationResult | None = None) -> LearningSnapshot:
+def snapshot(
+    verification: VerificationResult | None = None,
+    *,
+    quest_id: str | None = None,
+    quest_skill_id: str | None = None,
+) -> LearningSnapshot:
     return LearningSnapshot(
         problem="Differentiate sin(x^2)",
         messages=(
@@ -27,6 +32,8 @@ def snapshot(verification: VerificationResult | None = None) -> LearningSnapshot
         hints_used=0,
         solution_revealed=False,
         verification=verification,
+        quest_id=quest_id,
+        quest_skill_id=quest_skill_id,
     )
 
 
@@ -133,6 +140,37 @@ class LearningEventTests(unittest.TestCase):
         self.assertEqual("student", event.outcome_source)
         self.assertEqual("verifier", event.effective_outcome_source)
         self.assertEqual("verified_incorrect", event.verification_status)
+
+    def test_curated_quest_owns_skill_classification_and_provenance(self) -> None:
+        verification = VerificationResult(
+            VerificationKind.DERIVATIVE,
+            VerificationStatus.VERIFIED_CORRECT,
+            "3*x**2*cos(x**3)",
+            "3*x**2*cos(x**3)",
+            "The quest answer is equivalent.",
+        )
+        content = json.dumps(
+            {
+                "skill_id": "basic_derivative_rules",
+                "outcome": "correct",
+                "misconception": None,
+                "evidence": "The student supplied the verified derivative.",
+                "confidence": 0.2,
+            }
+        )
+        event = parse_learning_event(
+            content,
+            valid_skill_ids={"basic_derivative_rules", "chain_rule"},
+            snapshot=snapshot(
+                verification,
+                quest_id="chain-sine-cubic",
+                quest_skill_id="chain_rule",
+            ),
+        )
+        self.assertEqual("chain_rule", event.skill_id)
+        self.assertEqual("chain-sine-cubic", event.quest_id)
+        self.assertEqual(1.0, event.confidence)
+        self.assertEqual("verifier", event.effective_outcome_source)
 
 
 if __name__ == "__main__":

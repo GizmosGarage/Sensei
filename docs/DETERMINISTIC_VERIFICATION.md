@@ -17,6 +17,8 @@ The terminal asks only for the fields needed by that check. For example, a deriv
 
 Run the check again after revising an answer. Only the latest result is attached to the active problem. `/new`, `/done`, and a new problem clear it.
 
+Curated review quests use the same verifier through `/answer`. Their symbolic target is fixed by the versioned quest catalog, so the general `/check` wizard cannot replace it while a quest is active.
+
 ## Supported checks
 
 | Type | Method |

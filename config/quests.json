@@ -1,0 +1,253 @@
+{
+  "schema_version": 1,
+  "quests": [
+    {
+      "id": "foundation-difference-squares",
+      "skill_id": "calculus_foundations",
+      "title": "Foundation Forge",
+      "prompt": "Simplify (x + 4)(x - 4). Submit an equivalent expression.",
+      "sample_answer": "x^2 - 16",
+      "verification": {
+        "kind": "equivalent",
+        "reference": "(x + 4)(x - 4)",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "foundation-combine-linear",
+      "skill_id": "calculus_foundations",
+      "title": "Algebra Tempering",
+      "prompt": "Simplify 2(x + 3) + 4x. Submit an equivalent expression.",
+      "sample_answer": "6x + 6",
+      "verification": {
+        "kind": "equivalent",
+        "reference": "2(x + 3) + 4x",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "limits-sign-clash",
+      "skill_id": "limit_concepts",
+      "title": "Two-Sided Gate",
+      "prompt": "Evaluate the two-sided limit of abs(x)/x as x approaches 0. Enter DNE if it does not exist.",
+      "sample_answer": "DNE",
+      "verification": {
+        "kind": "limit",
+        "expression": "abs(x)/x",
+        "variable": "x",
+        "point": "0",
+        "direction": "both"
+      }
+    },
+    {
+      "id": "limits-standard-sine",
+      "skill_id": "limit_concepts",
+      "title": "Sine Threshold",
+      "prompt": "Evaluate the limit of sin(x)/x as x approaches 0.",
+      "sample_answer": "1",
+      "verification": {
+        "kind": "limit",
+        "expression": "sin(x)/x",
+        "variable": "x",
+        "point": "0",
+        "direction": "both"
+      }
+    },
+    {
+      "id": "limits-factor-cubic",
+      "skill_id": "limit_techniques",
+      "title": "Factor Passage",
+      "prompt": "Evaluate the limit of (x^3 - 8)/(x - 2) as x approaches 2.",
+      "sample_answer": "12",
+      "verification": {
+        "kind": "limit",
+        "expression": "(x^3 - 8)/(x - 2)",
+        "variable": "x",
+        "point": "2",
+        "direction": "both"
+      }
+    },
+    {
+      "id": "limits-rationalize-root",
+      "skill_id": "limit_techniques",
+      "title": "Conjugate Crossing",
+      "prompt": "Evaluate the limit of (sqrt(1 + x) - 1)/x as x approaches 0.",
+      "sample_answer": "1/2",
+      "verification": {
+        "kind": "limit",
+        "expression": "(sqrt(1 + x) - 1)/x",
+        "variable": "x",
+        "point": "0",
+        "direction": "both"
+      }
+    },
+    {
+      "id": "definition-quadratic",
+      "skill_id": "derivative_definition",
+      "title": "First-Principles Trial",
+      "prompt": "Use the difference quotient on paper to find the derivative of x^2 + 3x, then submit the derivative.",
+      "sample_answer": "2x + 3",
+      "verification": {
+        "kind": "derivative",
+        "expression": "x^2 + 3x",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "derivatives-polynomial",
+      "skill_id": "basic_derivative_rules",
+      "title": "Power Rule Kata",
+      "prompt": "Differentiate x^5 - 4x^2 + 7 with respect to x.",
+      "sample_answer": "5x^4 - 8x",
+      "verification": {
+        "kind": "derivative",
+        "expression": "x^5 - 4x^2 + 7",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "derivatives-transcendental",
+      "skill_id": "basic_derivative_rules",
+      "title": "Twin Functions",
+      "prompt": "Differentiate sin(x) + exp(x) with respect to x.",
+      "sample_answer": "cos(x) + exp(x)",
+      "verification": {
+        "kind": "derivative",
+        "expression": "sin(x) + exp(x)",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "product-polynomial-sine",
+      "skill_id": "product_rule",
+      "title": "Product Rule Duel",
+      "prompt": "Differentiate x^2 sin(x) with respect to x.",
+      "sample_answer": "2x sin(x) + x^2 cos(x)",
+      "verification": {
+        "kind": "derivative",
+        "expression": "x^2 sin(x)",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "product-linear-exponential",
+      "skill_id": "product_rule",
+      "title": "Exponential Pairing",
+      "prompt": "Differentiate (x + 1)exp(x) with respect to x.",
+      "sample_answer": "(x + 2)exp(x)",
+      "verification": {
+        "kind": "derivative",
+        "expression": "(x + 1)exp(x)",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "quotient-polynomial",
+      "skill_id": "quotient_rule",
+      "title": "Quotient Rule Duel",
+      "prompt": "Differentiate (x^2 + 1)/x with respect to x.",
+      "sample_answer": "(x^2 - 1)/x^2",
+      "verification": {
+        "kind": "derivative",
+        "expression": "(x^2 + 1)/x",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "quotient-sine-square",
+      "skill_id": "quotient_rule",
+      "title": "Trigonometric Ratio",
+      "prompt": "Differentiate sin(x)/x^2 with respect to x.",
+      "sample_answer": "cos(x)/x^2 - 2sin(x)/x^3",
+      "verification": {
+        "kind": "derivative",
+        "expression": "sin(x)/x^2",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "chain-sine-cubic",
+      "skill_id": "chain_rule",
+      "title": "Nested Sine",
+      "prompt": "Differentiate sin(x^3) with respect to x.",
+      "sample_answer": "3x^2 cos(x^3)",
+      "verification": {
+        "kind": "derivative",
+        "expression": "sin(x^3)",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "chain-square-root",
+      "skill_id": "chain_rule",
+      "title": "Radical Labyrinth",
+      "prompt": "Differentiate sqrt(1 + x^2) with respect to x.",
+      "sample_answer": "x/sqrt(1 + x^2)",
+      "verification": {
+        "kind": "derivative",
+        "expression": "sqrt(1 + x^2)",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "chain-exponential-linear",
+      "skill_id": "chain_rule",
+      "title": "Exponential Labyrinth",
+      "prompt": "Differentiate exp(2x + 1) with respect to x.",
+      "sample_answer": "2exp(2x + 1)",
+      "verification": {
+        "kind": "derivative",
+        "expression": "exp(2x + 1)",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "antiderivative-polynomial",
+      "skill_id": "antiderivatives",
+      "title": "Reverse Power Kata",
+      "prompt": "Find an antiderivative of 3x^2 - 4. Include + C if you want to show the family.",
+      "sample_answer": "x^3 - 4x + C",
+      "verification": {
+        "kind": "antiderivative",
+        "integrand": "3x^2 - 4",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "antiderivative-cosine",
+      "skill_id": "antiderivatives",
+      "title": "Cosine Reversal",
+      "prompt": "Find an antiderivative of cos(x). Include + C if you want to show the family.",
+      "sample_answer": "sin(x) + C",
+      "verification": {
+        "kind": "antiderivative",
+        "integrand": "cos(x)",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "substitution-cosine-chain",
+      "skill_id": "u_substitution",
+      "title": "Reverse Chain Quest",
+      "prompt": "Find an antiderivative of 2x cos(x^2). Include + C if you want to show the family.",
+      "sample_answer": "sin(x^2) + C",
+      "verification": {
+        "kind": "antiderivative",
+        "integrand": "2x cos(x^2)",
+        "variable": "x"
+      }
+    },
+    {
+      "id": "substitution-exponential-chain",
+      "skill_id": "u_substitution",
+      "title": "Exponential Reverse Chain",
+      "prompt": "Find an antiderivative of 3x^2 exp(x^3). Include + C if you want to show the family.",
+      "sample_answer": "exp(x^3) + C",
+      "verification": {
+        "kind": "antiderivative",
+        "integrand": "3x^2 exp(x^3)",
+        "variable": "x"
+      }
+    }
+  ]
+}

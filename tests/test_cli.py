@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sensei.cli import (
+    _answer_quest,
     _check_problem,
     _memory_command,
     _profile_text,
@@ -14,6 +15,7 @@ from sensei.cli import (
     parse_args,
 )
 from sensei.learning import LearningEvent, Outcome
+from sensei.quests import QuestDeck
 from sensei.storage import LearningStore
 from sensei.tutor import TutorSession
 from sensei.verification import CalculusVerifier, VerificationStatus
@@ -41,6 +43,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(VerificationStatus.VERIFIED_CORRECT, result.status)
         self.assertIs(result, session.last_verification)
         self.assertIn("VERIFIED CORRECT", output.getvalue())
+
+    def test_quest_answer_uses_curated_target(self) -> None:
+        quest = QuestDeck.load().by_skill["chain_rule"][0]
+        session = TutorSession(object(), "test-model")
+        session.reset(quest.prompt)
+        session.set_quest(quest)
+        output = StringIO()
+        with redirect_stdout(output):
+            result = _answer_quest(
+                session,
+                CalculusVerifier(),
+                "3x^2 cos(x^3)",
+            )
+        self.assertEqual(VerificationStatus.VERIFIED_CORRECT, result.status)
+        self.assertIn("Quest cleared", output.getvalue())
+        self.assertIs(result, session.last_verification)
 
     def test_profile_and_skills_format_for_terminal(self) -> None:
         profile = _profile_text(

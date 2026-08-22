@@ -6,9 +6,9 @@ Repository: [GizmosGarage/Sensei](https://github.com/GizmosGarage/Sensei)
 
 ## Project status
 
-**Phase 4 complete: deterministic calculus verification**
+**Phase 5 complete: review quests and local RPG dashboard**
 
-The local terminal tutor now combines a local language model, persistent SQLite learning memory, and a restricted symbolic verifier. It starts the selected model automatically, keeps each problem's recent context bounded, and can independently check derivatives, limits, antiderivatives, and expression equivalence before `/done` records progress. The provisional local stack is:
+Sensei now turns scheduled review into playable, verifier-backed quests and renders progress in a loopback-only browser dashboard. The terminal tutor combines a local language model, persistent SQLite memory, and a restricted symbolic verifier; the dashboard reads that same student-owned database without cloud storage or hosted inference. The provisional local stack is:
 
 - `llama.cpp` b10549 with its Vulkan backend
 - Qwen 3.5 9B Q4_K_M as the default tutor model
@@ -37,6 +37,12 @@ Inside the tutor, use `/check derivative`, `/check limit`, `/check antiderivativ
 python -m sensei --prompt "Evaluate lim_(x->0) sin(x)/x" --mode hint
 ```
 
+Start a scheduled challenge with `/quest`, submit it with `/answer`, and record a cleared quest with `/done`. In another terminal, open the local dashboard:
+
+```powershell
+python -m sensei.dashboard
+```
+
 ## Product principles
 
 - Run the tutor and learning memory locally.
@@ -56,11 +62,14 @@ python -m sensei --prompt "Evaluate lim_(x->0) sin(x)/x" --mode hint
 - [Terminal tutor guide](docs/TEXT_TUTOR.md)
 - [Learning memory and progression](docs/LEARNING_MEMORY.md)
 - [Deterministic verification](docs/DETERMINISTIC_VERIFICATION.md)
+- [Review quests](docs/REVIEW_QUESTS.md)
+- [Local RPG dashboard](docs/LOCAL_DASHBOARD.md)
 - [Local-first architecture decision](docs/decisions/0001-local-first-architecture.md)
 - [Runtime and default-model decision](docs/decisions/0002-runtime-and-default-model.md)
 - [Terminal tutor architecture decision](docs/decisions/0003-terminal-tutor-architecture.md)
 - [Learning-memory architecture decision](docs/decisions/0004-learning-memory-and-progression.md)
 - [Deterministic-verification decision](docs/decisions/0005-deterministic-verification.md)
+- [Quest-and-dashboard decision](docs/decisions/0006-local-quests-and-dashboard.md)
 - [Project log](docs/PROJECT_LOG.md)
 
 ## Planned phases
@@ -69,4 +78,5 @@ python -m sensei --prompt "Evaluate lim_(x->0) sin(x)/x" --mode hint
 2. ~~Build a minimal text-based tutoring loop.~~
 3. ~~Add persistent skill, attempt, and misconception tracking.~~
 4. ~~Add deterministic calculus verification.~~
-5. **Build guided review quests and a portfolio-ready interface.**
+5. ~~Build guided review quests and a portfolio-ready interface.~~
+6. **Bring tutor conversation into the dashboard and expand quest coverage.**

@@ -1,6 +1,7 @@
 import unittest
 
 from sensei.providers import CompletionResult
+from sensei.quests import QuestDeck
 from sensei.tutor import TutorMode, TutorSession, student_facing_text
 from sensei.verification import CalculusVerifier
 
@@ -76,6 +77,18 @@ class TutorSessionTests(unittest.TestCase):
         request = provider.requests[-1]
         self.assertEqual(1, sum(item["role"] == "system" for item in request))
         self.assertIn("verified_incorrect", request[0]["content"])
+
+    def test_learning_snapshot_carries_quest_identity_and_reset_clears_it(self) -> None:
+        provider = FakeProvider()
+        quest = QuestDeck.load().quests[0]
+        session = TutorSession(provider, "test-model")
+        session.respond(quest.prompt)
+        session.set_quest(quest)
+        snapshot = session.learning_snapshot()
+        self.assertEqual(quest.id, snapshot.quest_id)
+        self.assertEqual(quest.skill_id, snapshot.quest_skill_id)
+        session.reset()
+        self.assertIsNone(session.active_quest)
 
     def test_learning_snapshot_tracks_help_without_unbounded_history(self) -> None:
         provider = FakeProvider()

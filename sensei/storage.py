@@ -8,7 +8,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Collection
 
 from sensei.learning import LearningEvent, Outcome
 
@@ -16,7 +16,7 @@ from sensei.learning import LearningEvent, Outcome
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = REPOSITORY_ROOT / "data" / "sensei.db"
 DEFAULT_SKILLS_PATH = REPOSITORY_ROOT / "config" / "skills.json"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 MIGRATION_1 = """
@@ -107,6 +107,10 @@ ALTER TABLE attempts ADD COLUMN verification_submitted TEXT;
 ALTER TABLE attempts ADD COLUMN verification_expected TEXT;
 ALTER TABLE attempts ADD COLUMN verification_detail TEXT;
 UPDATE attempts SET reported_outcome = outcome WHERE reported_outcome IS NULL;
+"""
+
+MIGRATION_3 = """
+ALTER TABLE attempts ADD COLUMN quest_id TEXT;
 """
 
 
@@ -241,6 +245,14 @@ class LearningStore:
                 (2, utc_now().isoformat()),
             )
             self.connection.commit()
+            applied.add(2)
+        if 3 not in applied:
+            self.connection.executescript(MIGRATION_3)
+            self.connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (3, utc_now().isoformat()),
+            )
+            self.connection.commit()
         current = self.connection.execute(
             "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations"
         ).fetchone()["version"]
@@ -351,9 +363,11 @@ class LearningStore:
                        effective_outcome_source, verification_status,
                        verification_kind, verifier_version, verification_submitted,
                        verification_expected, verification_detail,
-                       misconception_id, evidence,
+                       quest_id, misconception_id, evidence,
                        confidence, hints_used, solution_revealed, tutor_turns, created_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   ) VALUES (
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                   )""",
                 (
                     event.skill_id,
                     event.problem,
@@ -367,6 +381,7 @@ class LearningStore:
                     event.verification_submitted,
                     event.verification_expected,
                     event.verification_detail,
+                    event.quest_id,
                     misconception_id,
                     event.evidence,
                     event.confidence,
@@ -550,9 +565,15 @@ class LearningStore:
         return "\n".join(lines)
 
     def review_recommendation(
-        self, *, now: datetime | None = None
+        self,
+        *,
+        now: datetime | None = None,
+        skill_ids: Collection[str] | None = None,
     ) -> dict[str, Any] | None:
         rows = self._practiced_skill_rows()
+        if skill_ids is not None:
+            allowed = set(skill_ids)
+            rows = [row for row in rows if row["id"] in allowed]
         if not rows:
             return None
         now = now or utc_now()
@@ -571,6 +592,21 @@ class LearningStore:
         )
         result["due"] = row["next_review_at"] <= now_text
         return result
+
+    def recent_attempts(self, limit: int = 6) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 50:
+            raise ValueError("Recent-attempt limit must be from 1 to 50.")
+        rows = self.connection.execute(
+            """SELECT a.id, a.problem, a.outcome, a.reported_outcome,
+                      a.effective_outcome_source, a.verification_status,
+                      a.quest_id, a.created_at, s.id AS skill_id, s.name AS skill_name
+                 FROM attempts a
+                 JOIN skills s ON s.id = a.skill_id
+                ORDER BY a.created_at DESC, a.id DESC
+                LIMIT ?""",
+            (limit,),
+        )
+        return [dict(row) for row in rows]
 
     def export_json(self, path: Path) -> Path:
         destination = path.resolve()

@@ -1,5 +1,34 @@
 # Project log
 
+## 2026-08-21 - Milestone 5: review quests and local RPG dashboard
+
+### Completed
+
+- Added a validated, versioned catalog of 20 curated quests across 10 verifier-backed Calculus I skills.
+- Regression-checked every catalog sample answer through the production symbolic verifier.
+- Added `/quest` to choose a challenge from scheduled practiced skills and rotate templates using attempt count.
+- Added `/answer` to check the active quest without allowing an unrelated manual check to replace its target.
+- Made curated quest skill classification authoritative and preserved the quest ID in each completed attempt.
+- Migrated learning memory to schema version 3 with automatic v1→v3 and v2→v3 coverage.
+- Removed model-confidence discounting when both a curated skill and its answer are deterministic.
+- Added a responsive local dashboard for level, XP, rank, next quest, mastery disciplines, and recent attempts.
+- Added an answer-key-free JSON boundary, loopback-only HTTP server, restrictive browser headers, and no browser-owned learning state.
+- Added a packaged `sensei-dashboard` entry point and retained the standard-library application stack outside the existing SymPy dependency.
+
+### Live validation
+
+The actual Qwen 3.5 4B Vulkan tutor completed `/quest` → `/answer x^2 - 16` → `/done correct` against a temporary database. The result stored `foundation-difference-squares`, the authoritative `calculus_foundations` skill, verified correctness with confidence 1.0, 100/100 first-attempt evidence, 25 independent XP, and schema version 3. The first local dashboard preview returned level 2, the scheduled `chain-square-root` quest, and all 17 skill records from representative data on `127.0.0.1`.
+
+### Privacy and trust boundary
+
+The dashboard is a local read surface, not a second learning store. It binds only to `127.0.0.1`, serves only fixed packaged assets and GET endpoints, and reads the selected SQLite database. Quest sample answers and symbolic target configuration are not returned by its JSON API. No hosted dashboard was created because Sensei's tutor and learning history are intentionally local-first.
+
+### Next milestone
+
+- Bring the tutor conversation and quest-answer input into the browser surface.
+- Add deterministic quests for continuity, implicit differentiation, applications, and definite integrals as verifier support expands.
+- Add achievement rules only after their learning meaning and anti-inflation behavior are explicit.
+
 ## 2026-08-21 - Milestone 4: deterministic calculus verification
 
 ### Completed

@@ -8,6 +8,7 @@ from pathlib import Path
 from sensei.learning import LearningEvent, Outcome
 from sensei.storage import (
     MIGRATION_1,
+    MIGRATION_2,
     LearningStore,
     evidence_score,
     xp_award,
@@ -71,14 +72,14 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(2, version)
+        self.assertEqual(3, version)
         self.assertEqual(17, len(self.store.skill_names()))
         self.store.close()
         self.store = LearningStore(self.database)
         migration_count = self.store.connection.execute(
             "SELECT COUNT(*) AS count FROM schema_migrations"
         ).fetchone()["count"]
-        self.assertEqual(2, migration_count)
+        self.assertEqual(3, migration_count)
 
     def test_schema_v1_database_migrates_and_backfills_provenance(self) -> None:
         self.store.close()
@@ -117,7 +118,32 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(2, version)
+        self.assertEqual(3, version)
+        self.assertIsNone(attempt["quest_id"])
+
+    def test_schema_v2_database_migrates_quest_provenance(self) -> None:
+        self.store.close()
+        old_database = self.root / "version-two.db"
+        connection = sqlite3.connect(old_database)
+        connection.executescript(MIGRATION_1)
+        connection.executescript(MIGRATION_2)
+        connection.executemany(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+            [(1, NOW.isoformat()), (2, NOW.isoformat())],
+        )
+        connection.commit()
+        connection.close()
+
+        self.store = LearningStore(old_database)
+        columns = {
+            row["name"]
+            for row in self.store.connection.execute("PRAGMA table_info(attempts)")
+        }
+        self.assertIn("quest_id", columns)
+        version = self.store.connection.execute(
+            "SELECT MAX(version) AS version FROM schema_migrations"
+        ).fetchone()["version"]
+        self.assertEqual(3, version)
 
     def test_record_event_updates_xp_mastery_and_review(self) -> None:
         first = self.store.record_event(event(), now=NOW)
@@ -154,6 +180,7 @@ class LearningStoreTests(unittest.TestCase):
             verification_submitted="cos(x**2)",
             verification_expected="2*x*cos(x**2)",
             verification_detail="Residual difference: -2*x*cos(x**2) + cos(x**2).",
+            quest_id="chain-sine-cubic",
         )
         update = self.store.record_event(verified, now=NOW)
         attempt = self.store.connection.execute(
@@ -166,6 +193,10 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual("verifier", attempt["effective_outcome_source"])
         self.assertEqual("verified_incorrect", attempt["verification_status"])
         self.assertEqual("test-verifier-1", attempt["verifier_version"])
+        self.assertEqual("chain-sine-cubic", attempt["quest_id"])
+        recent = self.store.recent_attempts()
+        self.assertEqual("chain-sine-cubic", recent[0]["quest_id"])
+        self.assertEqual("Chain rule", recent[0]["skill_name"])
 
     def test_misconceptions_are_counted_without_duplicate_rows(self) -> None:
         mistaken = event(

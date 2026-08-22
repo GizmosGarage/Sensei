@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Local RPG progress dashboard for the Sensei calculus tutor.">
+    <title>Sensei // Calculus Dojo</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <div class="ambient-grid" aria-hidden="true"></div>
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="Sensei dashboard home">
+        <span class="brand-mark" aria-hidden="true">道</span>
+        <span>
+          <strong>Sensei</strong>
+          <small>Calculus Dojo</small>
+        </span>
+      </a>
+      <div class="topbar-actions">
+        <span class="local-badge"><i aria-hidden="true"></i> Local only</span>
+        <button class="icon-button" id="refresh-button" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Your training ground</p>
+          <h1 id="hero-title">Sharpen the<br><em>next step.</em></h1>
+          <p class="hero-lede">Practice earns experience. Verified work builds mastery. Your next review is already waiting.</p>
+          <div class="system-strip" aria-label="Local system status">
+            <span><b id="catalog-quests">--</b> curated quests</span>
+            <span><b id="catalog-skills">--</b> quest skills</span>
+            <span><b>0</b> cloud calls</span>
+          </div>
+        </div>
+
+        <article class="rank-card panel" aria-labelledby="rank-heading">
+          <div class="rank-ring" id="rank-ring">
+            <div>
+              <span>LVL</span>
+              <strong id="level">1</strong>
+            </div>
+          </div>
+          <div class="rank-copy">
+            <p class="panel-kicker">Current rank</p>
+            <h2 id="rank-heading"><span id="rank-name">Dojo Novice</span></h2>
+            <div class="xp-label">
+              <span id="xp-summary">0 / 100 XP</span>
+              <span id="total-xp">0 total</span>
+            </div>
+            <div class="progress-track" aria-label="Experience toward next level">
+              <i id="xp-progress"></i>
+            </div>
+            <dl class="mini-stats">
+              <div><dt>Attempts</dt><dd id="attempts">0</dd></div>
+              <div><dt>Practiced</dt><dd id="practiced">0</dd></div>
+              <div><dt>Mastered</dt><dd id="mastered">0</dd></div>
+            </dl>
+          </div>
+        </article>
+      </section>
+
+      <section class="quest-section" aria-labelledby="quest-heading">
+        <article class="quest-card panel">
+          <div class="quest-seal" aria-hidden="true"><span>次</span></div>
+          <div class="quest-main">
+            <div class="quest-meta">
+              <span class="status-chip" id="quest-timing">Next quest</span>
+              <span id="quest-skill">Calculus foundations</span>
+            </div>
+            <h2 id="quest-heading"><span id="quest-title">Foundation Forge</span></h2>
+            <p id="quest-prompt">Loading your next verifier-backed challenge...</p>
+            <p class="quest-reason" id="quest-reason"></p>
+          </div>
+          <div class="quest-action">
+            <span>In the tutor</span>
+            <code>/quest</code>
+            <small>then submit with <b>/answer</b></small>
+          </div>
+        </article>
+      </section>
+
+      <section class="mastery-section" aria-labelledby="mastery-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Skill map</p>
+            <h2 id="mastery-heading">Mastery disciplines</h2>
+          </div>
+          <div class="unit-filters" id="unit-filters" aria-label="Filter skills by unit"></div>
+        </div>
+        <div class="skill-grid" id="skill-grid" aria-live="polite"></div>
+      </section>
+
+      <section class="history-section" aria-labelledby="history-heading">
+        <div class="section-heading compact">
+          <div>
+            <p class="eyebrow">Training log</p>
+            <h2 id="history-heading">Recent attempts</h2>
+          </div>
+          <p class="updated-at" id="updated-at" role="status">Connecting to local memory...</p>
+        </div>
+        <div class="history-list panel" id="history-list"></div>
+      </section>
+    </main>
+
+    <footer>
+      <p><span class="footer-mark">S</span> Sensei runs on your machine.</p>
+      <p>127.0.0.1 <span aria-hidden="true">•</span> Local SQLite <span aria-hidden="true">•</span> Student-owned data</p>
+    </footer>
+
+    <template id="skill-template">
+      <article class="skill-card panel">
+        <div class="skill-topline">
+          <span class="skill-unit"></span>
+          <span class="skill-score"></span>
+        </div>
+        <h3 class="skill-name"></h3>
+        <p class="skill-label"></p>
+        <div class="progress-track skill-track"><i></i></div>
+        <div class="skill-footer">
+          <span class="skill-attempts"></span>
+          <span class="skill-review"></span>
+        </div>
+      </article>
+    </template>
+
+    <template id="history-template">
+      <article class="history-row">
+        <span class="outcome-glyph" aria-hidden="true"></span>
+        <div>
+          <h3 class="history-skill"></h3>
+          <p class="history-problem"></p>
+        </div>
+        <div class="history-meta">
+          <span class="history-outcome"></span>
+          <time class="history-time"></time>
+        </div>
+      </article>
+    </template>
+  </body>
+</html>

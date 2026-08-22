@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Sequence
 from sensei.providers import ChatProvider, CompletionResult, Message, TokenCallback
 
 if TYPE_CHECKING:
+    from sensei.quests import QuestTemplate
     from sensei.verification import VerificationResult
 
 
@@ -80,6 +81,8 @@ class LearningSnapshot:
     hints_used: int
     solution_revealed: bool
     verification: VerificationResult | None = None
+    quest_id: str | None = None
+    quest_skill_id: str | None = None
 
 
 def student_facing_text(text: str) -> str:
@@ -112,6 +115,7 @@ class TutorSession:
         self.problem_statement: str | None = None
         self.learner_context: str | None = None
         self.last_verification: VerificationResult | None = None
+        self.active_quest: QuestTemplate | None = None
         self._history: list[Message] = []
         self._mode_counts = {mode: 0 for mode in TutorMode}
         self.turn_count = 0
@@ -121,6 +125,7 @@ class TutorSession:
         self._history.clear()
         self._mode_counts = {mode: 0 for mode in TutorMode}
         self.last_verification = None
+        self.active_quest = None
         self.turn_count = 0
 
     def _recent_history(self) -> list[Message]:
@@ -217,6 +222,10 @@ class TutorSession:
             hints_used=self._mode_counts[TutorMode.HINT],
             solution_revealed=self._mode_counts[TutorMode.SOLVE] > 0,
             verification=self.last_verification,
+            quest_id=self.active_quest.id if self.active_quest else None,
+            quest_skill_id=(
+                self.active_quest.skill_id if self.active_quest else None
+            ),
         )
 
     def set_learner_context(self, context: str | None) -> None:
@@ -226,6 +235,11 @@ class TutorSession:
         if self.problem_statement is None:
             raise RuntimeError("Start a problem before attaching a verification result.")
         self.last_verification = verification
+
+    def set_quest(self, quest: QuestTemplate) -> None:
+        if self.problem_statement != quest.prompt:
+            raise RuntimeError("The quest must match the active problem.")
+        self.active_quest = quest
 
     @property
     def context_characters(self) -> int:

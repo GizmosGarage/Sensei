@@ -39,6 +39,7 @@ class LearningEvent:
     verification_submitted: str | None = None
     verification_expected: str | None = None
     verification_detail: str | None = None
+    quest_id: str | None = None
 
 
 class LearningEventError(ValueError):
@@ -130,9 +131,15 @@ def parse_learning_event(
         elif verification.status is VerificationStatus.VERIFIED_INCORRECT:
             effective_outcome = Outcome.INCORRECT
             effective_source = "verifier"
+        if snapshot.quest_id and verification.status in {
+            VerificationStatus.VERIFIED_CORRECT,
+            VerificationStatus.VERIFIED_INCORRECT,
+        }:
+            confidence = 1.0
 
+    effective_skill_id = snapshot.quest_skill_id or skill_id
     return LearningEvent(
-        skill_id=skill_id,
+        skill_id=effective_skill_id,
         outcome=effective_outcome,
         misconception=misconception,
         evidence=evidence,
@@ -150,6 +157,7 @@ def parse_learning_event(
         verification_submitted=verification_submitted,
         verification_expected=verification_expected,
         verification_detail=verification_detail,
+        quest_id=snapshot.quest_id,
     )
 
 
@@ -208,6 +216,11 @@ Skill catalog:
             if snapshot.verification
             else "not performed"
         )
+        quest = (
+            f"{snapshot.quest_id} (authoritative skill: {snapshot.quest_skill_id})"
+            if snapshot.quest_id
+            else "not a curated quest"
+        )
         base_request = f"""Problem:
 {snapshot.problem}
 
@@ -216,6 +229,7 @@ Recent tutoring transcript:
 
 Student-reported outcome: {self_report}
 Deterministic verification: {verification}
+Curated quest: {quest}
 Create the learning record now."""
         validation_error = ""
         prior_text = ""

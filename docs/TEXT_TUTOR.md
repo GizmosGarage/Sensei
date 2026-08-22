@@ -30,6 +30,8 @@ Model weights are not downloaded implicitly. If the selected artifact is missing
 | Command | Behavior |
 | --- | --- |
 | Plain text | Uses coach mode; the first message starts a problem and later messages are attempts or questions. |
+| `/quest` | Starts the next verifier-backed quest chosen from the review schedule. |
+| `/answer EXPRESSION` | Checks an answer against the active quest without asking the model to judge it. |
 | `/hint [question]` | Gives exactly one hint without revealing the final answer. |
 | `/solve [question]` | Gives a complete explained solution. |
 | `/check TYPE` | Deterministically checks a `derivative`, `limit`, `antiderivative`, or pair of `equivalent` expressions through a short wizard. |
@@ -46,6 +48,8 @@ Model weights are not downloaded implicitly. If the selected artifact is missing
 | `/quit` | Stops the managed runtime and exits. |
 
 Coach mode asks the student to identify the first relevant rule or structure when no attempt has been provided. It advances one small step at a time after that. The explicit `/solve` command is the escape hatch when a full walkthrough is wanted.
+
+The quest loop is `/quest` → tutoring or hints → `/answer` → `/done`. A wrong answer can be revised and resubmitted; the latest check remains authoritative. While a curated quest is active, the general `/check` wizard is disabled so a different expression cannot accidentally replace the quest target. The quest's skill ID also overrides model classification when the learning event is recorded. See [review quests](REVIEW_QUESTS.md) for selection and rotation rules.
 
 Run `/check` after entering an active problem and an answer. The latest conclusive check is attached to the problem, shown to the tutor on the next turn, and used as the authoritative correctness result when `/done` records progress. If the answer changes, run `/check` again. An inconclusive result is retained as provenance but does not override the reported outcome. See [deterministic verification](DETERMINISTIC_VERIFICATION.md) for supported notation and limits.
 

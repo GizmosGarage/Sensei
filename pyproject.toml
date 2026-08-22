@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sensei-calculus-tutor"
-version = "0.3.0"
+version = "0.4.0"
 description = "A local-first adaptive calculus tutor"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,6 +13,10 @@ dependencies = ["sympy==1.14.0"]
 
 [project.scripts]
 sensei = "sensei.cli:main"
+sensei-dashboard = "sensei.dashboard:main"
 
 [tool.setuptools.packages.find]
 include = ["sensei*"]
+
+[tool.setuptools.package-data]
+sensei = ["web/*.html", "web/*.css", "web/*.js"]

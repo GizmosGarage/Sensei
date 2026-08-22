@@ -22,6 +22,7 @@ from sensei.learning import (
     Outcome,
 )
 from sensei.providers import LlamaCppProvider, ProviderError
+from sensei.quests import QuestDeck, QuestRecommendation
 from sensei.runtime import DEFAULT_RUNTIME_DIRECTORY, LocalLlamaRuntime, RuntimeSettings
 from sensei.storage import (
     DEFAULT_DATABASE_PATH,
@@ -40,11 +41,14 @@ from sensei.verification import (
 
 
 BANNER = """Sensei - local calculus tutor
-Commands: /hint, /solve, /check, /done, /profile, /skills, /review, /new, /help, /quit
+Commands: /quest, /answer, /hint, /solve, /check, /done, /profile,
+          /skills, /review, /new, /help, /quit
 Study text is kept out of Git.
 """
 
 HELP = """Commands
+  /quest            Start the next verifier-backed review quest.
+  /answer EXPR      Check an answer against the active quest.
   /hint [question]  Give one hint for the active problem.
   /solve [question] Give a complete explained solution.
   /check TYPE       Deterministically check a derivative, limit, antiderivative,
@@ -224,6 +228,52 @@ def _verification_text(result: VerificationResult) -> str:
     if result.expected:
         lines.append(f"Expected: {result.expected}")
     return "\n".join(lines)
+
+
+def _quest_text(recommendation: QuestRecommendation) -> str:
+    timing = "DUE NOW" if recommendation.due else "UP NEXT"
+    return (
+        f"{timing} // {recommendation.quest.title}\n"
+        f"Skill: {recommendation.skill_name} - "
+        f"{recommendation.mastery_score:.0f}/100 "
+        f"({recommendation.mastery_label})\n"
+        f"{recommendation.quest.prompt}\n"
+        "Submit with: /answer YOUR_EXPRESSION"
+    )
+
+
+def _start_quest(
+    session: TutorSession,
+    recommendation: QuestRecommendation,
+    *,
+    stream: bool,
+) -> None:
+    print(_quest_text(recommendation))
+    _print_reply(
+        session,
+        recommendation.quest.prompt,
+        TutorMode.COACH,
+        starts_new_problem=True,
+        stream=stream,
+    )
+    session.set_quest(recommendation.quest)
+
+
+def _answer_quest(
+    session: TutorSession,
+    verifier: CalculusVerifier,
+    answer: str,
+) -> VerificationResult:
+    if session.active_quest is None:
+        raise RuntimeError("Start a review quest with /quest first.")
+    result = session.active_quest.check(answer, verifier)
+    session.set_verification(result)
+    print(_verification_text(result))
+    if result.status is VerificationStatus.VERIFIED_INCORRECT:
+        print("Keep working or ask Sensei for a hint, then submit /answer again.")
+    elif result.status is VerificationStatus.VERIFIED_CORRECT:
+        print("Quest cleared. Use /done to record XP, mastery, and review progress.")
+    return result
 
 
 def _ask_math(prompt: str, *, default: str | None = None) -> str:
@@ -407,6 +457,7 @@ def run_interactive(
     store: LearningStore | None = None,
     extractor: LearningEventExtractor | None = None,
     verifier: CalculusVerifier | None = None,
+    quest_deck: QuestDeck | None = None,
     stream: bool = True,
 ) -> int:
     verifier = verifier or CalculusVerifier()
@@ -432,7 +483,32 @@ def run_interactive(
         if command == "/status":
             print(_status(session))
             continue
+        if command == "/quest":
+            if argument:
+                print("Use /quest without arguments.", file=sys.stderr)
+                continue
+            if store is None or quest_deck is None:
+                print("Learning memory is required for review quests.")
+                continue
+            try:
+                recommendation = quest_deck.recommend(store)
+                _start_quest(session, recommendation, stream=stream)
+            except (ProviderError, RuntimeError, ValueError) as error:
+                print(f"Quest could not start: {error}", file=sys.stderr)
+            continue
+        if command == "/answer":
+            try:
+                _answer_quest(session, verifier, argument)
+            except (MathInputError, RuntimeError, ValueError) as error:
+                print(f"Answer check failed: {error}", file=sys.stderr)
+            continue
         if command == "/check":
+            if session.active_quest is not None:
+                print(
+                    "Use /answer for an active quest so its target stays authoritative.",
+                    file=sys.stderr,
+                )
+                continue
             try:
                 _check_problem(session, verifier, argument)
             except (MathInputError, RuntimeError, ValueError) as error:
@@ -556,10 +632,12 @@ def main(argv: list[str] | None = None) -> int:
             store = stack.enter_context(LearningStore(args.database))
             session.set_learner_context(store.tutor_context())
             extractor = LearningEventExtractor(provider, store.skill_names())
+            quest_deck = QuestDeck.load(skills_path=store.skills_path)
             return run_interactive(
                 session,
                 store=store,
                 extractor=extractor,
+                quest_deck=quest_deck,
                 stream=not args.no_stream,
             )
     except (

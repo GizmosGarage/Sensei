@@ -43,7 +43,7 @@ flowchart LR
 
 Only the active problem, structured event, and concise observable evidence cross into durable memory. The raw message list is discarded when the problem resets.
 
-## Schema version 2
+## Schema version 3
 
 | Table | Purpose |
 | --- | --- |
@@ -56,7 +56,9 @@ Only the active problem, structured event, and concise observable evidence cross
 
 Foreign keys are enabled and the mutation for one attempt is atomic. The database uses SQLite WAL mode and defaults to `data/sensei.db`, which is ignored by Git.
 
-Schema version 2 adds `reported_outcome`, `effective_outcome_source`, verification status and kind, verifier version, submitted and expected expressions, and a concise check detail to each attempt. Existing version-1 attempts migrate automatically: their original outcome becomes the report, their effective source is `reported`, and their verification status is `unverified`.
+Schema version 2 added `reported_outcome`, `effective_outcome_source`, verification status and kind, verifier version, submitted and expected expressions, and a concise check detail to each attempt. Existing version-1 attempts migrate automatically: their original outcome becomes the report, their effective source is `reported`, and their verification status is `unverified`.
+
+Schema version 3 adds the optional `quest_id`. Existing attempts migrate with a null quest ID. Curated quests supply an authoritative skill ID; when their answer is also conclusively verified, progression confidence is 1.0 because neither the skill classification nor correctness depends on the model.
 
 The outcome trust order is:
 
