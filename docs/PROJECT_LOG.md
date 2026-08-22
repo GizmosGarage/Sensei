@@ -1,5 +1,34 @@
 # Project log
 
+## 2026-08-21 - Milestone 4: deterministic calculus verification
+
+### Completed
+
+- Added a restricted, non-`eval` expression parser with an explicit symbol, function, operator, size, depth, and exponent allowlist.
+- Added deterministic checks for derivatives, one- and two-sided limits, basic antiderivatives, and symbolic expression equivalence.
+- Added `/check TYPE` as an interactive terminal wizard and attached its latest result to the active problem.
+- Added authoritative verifier context to later tutor replies without violating the model's single-system-message constraint.
+- Migrated learning memory to schema version 2 with reported outcome, effective source, verification status and kind, verifier version, submitted answer, expected answer, and check detail.
+- Made conclusive verification authoritative for XP, mastery, and review scheduling while retaining the conflicting student or model report for auditability.
+- Added automatic migration and provenance backfill for existing schema-version-1 databases.
+- Added adversarial parser, symbolic equivalence, command integration, tutor-context, outcome-precedence, persistence, and migration tests.
+
+### Verification boundary
+
+Derivative expectations are computed symbolically. Antiderivatives are checked by differentiating the proposal. Finite two-sided limits compare both one-sided results; directional and infinite limits use their requested direction. Expression comparison uses exact and simplified symbolic residuals rather than string equality.
+
+Unsupported syntax is rejected before it reaches the symbolic engine. Supported expressions are still bounded, but symbolic work does not yet run behind a hard wall-clock timeout. A check can therefore return inconclusive, and broader notation, assumptions, domains, piecewise functions, and multivariable calculus remain future work.
+
+### Live validation
+
+A temporary-database workflow was completed through the actual Qwen 3.5 4B Vulkan runtime. The student submitted `cos(x^2)` for the derivative of `sin(x^2)`, then deliberately used `/done correct`. The terminal displayed `VERIFIED INCORRECT`, SQLite retained the student report as `correct`, stored the effective outcome as `incorrect` with source `verifier`, recorded the expected `2*x*cos(x**2)`, and awarded only 5 effort XP. The managed model server shut down cleanly.
+
+### Next milestone
+
+- Turn scheduled reviews into guided practice quests.
+- Add an RPG-style progress surface around existing XP, levels, skills, and mastery.
+- Design a portfolio-ready local interface without weakening the local-first data boundary.
+
 ## 2026-08-21 - Milestone 3: persistent learning memory and progression
 
 ### Completed

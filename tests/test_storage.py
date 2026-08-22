@@ -6,7 +6,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sensei.learning import LearningEvent, Outcome
-from sensei.storage import LearningStore, evidence_score, xp_award, xp_level
+from sensei.storage import (
+    MIGRATION_1,
+    LearningStore,
+    evidence_score,
+    xp_award,
+    xp_level,
+)
 
 
 NOW = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
@@ -65,14 +71,53 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(1, version)
+        self.assertEqual(2, version)
         self.assertEqual(17, len(self.store.skill_names()))
         self.store.close()
         self.store = LearningStore(self.database)
         migration_count = self.store.connection.execute(
             "SELECT COUNT(*) AS count FROM schema_migrations"
         ).fetchone()["count"]
-        self.assertEqual(1, migration_count)
+        self.assertEqual(2, migration_count)
+
+    def test_schema_v1_database_migrates_and_backfills_provenance(self) -> None:
+        self.store.close()
+        old_database = self.root / "version-one.db"
+        connection = sqlite3.connect(old_database)
+        connection.executescript(MIGRATION_1)
+        connection.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (1, ?)",
+            (NOW.isoformat(),),
+        )
+        connection.execute(
+            """INSERT INTO skills(
+                   id, name, unit, description, prerequisites_json, sort_order
+               ) VALUES ('chain_rule', 'Chain rule', 'Derivatives', 'Test', '[]', 0)"""
+        )
+        connection.execute(
+            """INSERT INTO attempts(
+                   skill_id, problem, outcome, outcome_source, evidence, confidence,
+                   hints_used, solution_revealed, tutor_turns, created_at
+               ) VALUES (
+                   'chain_rule', 'Differentiate x^2', 'correct', 'student',
+                   'Student answer.', 1, 0, 0, 1, ?
+               )""",
+            (NOW.isoformat(),),
+        )
+        connection.commit()
+        connection.close()
+
+        self.store = LearningStore(old_database)
+        attempt = self.store.connection.execute(
+            "SELECT * FROM attempts"
+        ).fetchone()
+        self.assertEqual("correct", attempt["reported_outcome"])
+        self.assertEqual("reported", attempt["effective_outcome_source"])
+        self.assertEqual("unverified", attempt["verification_status"])
+        version = self.store.connection.execute(
+            "SELECT MAX(version) AS version FROM schema_migrations"
+        ).fetchone()["version"]
+        self.assertEqual(2, version)
 
     def test_record_event_updates_xp_mastery_and_review(self) -> None:
         first = self.store.record_event(event(), now=NOW)
@@ -88,6 +133,39 @@ class LearningStoreTests(unittest.TestCase):
         profile = self.store.profile()
         self.assertEqual(75, profile["total_xp"])
         self.assertEqual(1, profile["skills_mastered"])
+
+    def test_record_event_preserves_report_and_verifier_provenance(self) -> None:
+        verified = LearningEvent(
+            skill_id="chain_rule",
+            outcome=Outcome.INCORRECT,
+            misconception="Forgot the inner derivative.",
+            evidence="The submitted derivative omitted 2x.",
+            confidence=1.0,
+            problem="Differentiate sin(x^2)",
+            hints_used=0,
+            solution_revealed=False,
+            tutor_turns=1,
+            outcome_source="student",
+            reported_outcome=Outcome.CORRECT,
+            effective_outcome_source="verifier",
+            verification_status="verified_incorrect",
+            verification_kind="derivative",
+            verifier_version="test-verifier-1",
+            verification_submitted="cos(x**2)",
+            verification_expected="2*x*cos(x**2)",
+            verification_detail="Residual difference: -2*x*cos(x**2) + cos(x**2).",
+        )
+        update = self.store.record_event(verified, now=NOW)
+        attempt = self.store.connection.execute(
+            "SELECT * FROM attempts"
+        ).fetchone()
+        self.assertEqual(5, update.xp_awarded)
+        self.assertEqual("incorrect", attempt["outcome"])
+        self.assertEqual("correct", attempt["reported_outcome"])
+        self.assertEqual("student", attempt["outcome_source"])
+        self.assertEqual("verifier", attempt["effective_outcome_source"])
+        self.assertEqual("verified_incorrect", attempt["verification_status"])
+        self.assertEqual("test-verifier-1", attempt["verifier_version"])
 
     def test_misconceptions_are_counted_without_duplicate_rows(self) -> None:
         mistaken = event(

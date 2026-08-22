@@ -32,6 +32,7 @@ Model weights are not downloaded implicitly. If the selected artifact is missing
 | Plain text | Uses coach mode; the first message starts a problem and later messages are attempts or questions. |
 | `/hint [question]` | Gives exactly one hint without revealing the final answer. |
 | `/solve [question]` | Gives a complete explained solution. |
+| `/check TYPE` | Deterministically checks a `derivative`, `limit`, `antiderivative`, or pair of `equivalent` expressions through a short wizard. |
 | `/done [outcome]` | Finalizes the active problem into learning memory; the optional outcome is `correct`, `partial`, or `incorrect`. |
 | `/profile` | Shows level, XP, recorded attempts, and mastery totals. |
 | `/skills [all]` | Shows practiced skills or the complete 17-skill catalog. |
@@ -45,6 +46,8 @@ Model weights are not downloaded implicitly. If the selected artifact is missing
 | `/quit` | Stops the managed runtime and exits. |
 
 Coach mode asks the student to identify the first relevant rule or structure when no attempt has been provided. It advances one small step at a time after that. The explicit `/solve` command is the escape hatch when a full walkthrough is wanted.
+
+Run `/check` after entering an active problem and an answer. The latest conclusive check is attached to the problem, shown to the tutor on the next turn, and used as the authoritative correctness result when `/done` records progress. If the answer changes, run `/check` again. An inconclusive result is retained as provenance but does not override the reported outcome. See [deterministic verification](DETERMINISTIC_VERIFICATION.md) for supported notation and limits.
 
 ## One-shot mode
 
@@ -77,6 +80,7 @@ Long-term learning state is stored separately in SQLite. Up to five of the weake
 flowchart LR
     Student --> CLI[Terminal CLI]
     CLI --> Session[TutorSession]
+    CLI --> Verifier[Restricted symbolic verifier]
     Session --> Provider[ChatProvider interface]
     Provider --> API[localhost llama.cpp API]
     API --> Model[Local GGUF model]
@@ -85,6 +89,7 @@ flowchart LR
 - `sensei/cli.py` owns terminal commands and rendering.
 - `sensei/tutor.py` owns pedagogy modes and bounded context.
 - `sensei/providers.py` owns the model-independent completion boundary and streaming schema.
+- `sensei/verification.py` owns restricted parsing and deterministic answer checks.
 - `sensei/runtime.py` owns the local server process and loopback-only configuration.
 - `sensei/models.py` owns selection from the pinned model manifest.
 

@@ -16,7 +16,7 @@ from sensei.learning import LearningEvent, Outcome
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = REPOSITORY_ROOT / "data" / "sensei.db"
 DEFAULT_SKILLS_PATH = REPOSITORY_ROOT / "config" / "skills.json"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 MIGRATION_1 = """
@@ -89,6 +89,24 @@ CREATE INDEX IF NOT EXISTS idx_mastery_review
     ON mastery(next_review_at);
 CREATE INDEX IF NOT EXISTS idx_misconceptions_skill
     ON misconceptions(skill_id, last_seen_at DESC);
+"""
+
+MIGRATION_2 = """
+ALTER TABLE attempts ADD COLUMN reported_outcome TEXT
+    CHECK (reported_outcome IN ('correct', 'partial', 'incorrect'));
+ALTER TABLE attempts ADD COLUMN effective_outcome_source TEXT NOT NULL DEFAULT 'reported'
+    CHECK (effective_outcome_source IN ('reported', 'verifier'));
+ALTER TABLE attempts ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'unverified'
+    CHECK (verification_status IN (
+        'unverified', 'verified_correct', 'verified_incorrect', 'inconclusive'
+    ));
+ALTER TABLE attempts ADD COLUMN verification_kind TEXT
+    CHECK (verification_kind IN ('derivative', 'limit', 'antiderivative', 'equivalent'));
+ALTER TABLE attempts ADD COLUMN verifier_version TEXT;
+ALTER TABLE attempts ADD COLUMN verification_submitted TEXT;
+ALTER TABLE attempts ADD COLUMN verification_expected TEXT;
+ALTER TABLE attempts ADD COLUMN verification_detail TEXT;
+UPDATE attempts SET reported_outcome = outcome WHERE reported_outcome IS NULL;
 """
 
 
@@ -215,6 +233,14 @@ class LearningStore:
                 (1, utc_now().isoformat()),
             )
             self.connection.commit()
+            applied.add(1)
+        if 2 not in applied:
+            self.connection.executescript(MIGRATION_2)
+            self.connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (2, utc_now().isoformat()),
+            )
+            self.connection.commit()
         current = self.connection.execute(
             "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations"
         ).fetchone()["version"]
@@ -321,15 +347,26 @@ class LearningStore:
             misconception_id = self._upsert_misconception(event, timestamp)
             cursor = self.connection.execute(
                 """INSERT INTO attempts(
-                       skill_id, problem, outcome, outcome_source,
+                       skill_id, problem, outcome, outcome_source, reported_outcome,
+                       effective_outcome_source, verification_status,
+                       verification_kind, verifier_version, verification_submitted,
+                       verification_expected, verification_detail,
                        misconception_id, evidence,
                        confidence, hints_used, solution_revealed, tutor_turns, created_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     event.skill_id,
                     event.problem,
                     event.outcome.value,
                     event.outcome_source,
+                    (event.reported_outcome or event.outcome).value,
+                    event.effective_outcome_source,
+                    event.verification_status,
+                    event.verification_kind,
+                    event.verifier_version,
+                    event.verification_submitted,
+                    event.verification_expected,
+                    event.verification_detail,
                     misconception_id,
                     event.evidence,
                     event.confidence,

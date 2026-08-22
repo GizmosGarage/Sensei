@@ -15,7 +15,12 @@ from sensei.models import (
     ModelCatalog,
     model_path,
 )
-from sensei.learning import LearningEventError, LearningEventExtractor, Outcome
+from sensei.learning import (
+    LearningEvent,
+    LearningEventError,
+    LearningEventExtractor,
+    Outcome,
+)
 from sensei.providers import LlamaCppProvider, ProviderError
 from sensei.runtime import DEFAULT_RUNTIME_DIRECTORY, LocalLlamaRuntime, RuntimeSettings
 from sensei.storage import (
@@ -25,16 +30,25 @@ from sensei.storage import (
     timestamped_data_path,
 )
 from sensei.tutor import TutorMode, TutorSession
+from sensei.verification import (
+    CalculusVerifier,
+    MathInputError,
+    VerificationKind,
+    VerificationResult,
+    VerificationStatus,
+)
 
 
 BANNER = """Sensei - local calculus tutor
-Commands: /hint, /solve, /done, /profile, /skills, /review, /new, /help, /quit
+Commands: /hint, /solve, /check, /done, /profile, /skills, /review, /new, /help, /quit
 Study text is kept out of Git.
 """
 
 HELP = """Commands
   /hint [question]  Give one hint for the active problem.
   /solve [question] Give a complete explained solution.
+  /check TYPE       Deterministically check a derivative, limit, antiderivative,
+                    or equivalent expression through a short input wizard.
   /done [outcome]   Record the problem. Outcome: correct, partial, or incorrect.
   /profile          Show RPG level, XP, attempts, and mastery totals.
   /skills [all]     Show practiced skills, or the complete skill catalog.
@@ -181,15 +195,96 @@ def _skills_text(progress: list[dict[str, object]], *, include_all: bool) -> str
 
 
 def _progress_text(
-    update: ProgressUpdate, skill_name: str, outcome: Outcome
+    update: ProgressUpdate, skill_name: str, event: LearningEvent
 ) -> str:
+    outcome_text = event.outcome.value
+    if event.effective_outcome_source == "verifier":
+        outcome_text = f"verified {outcome_text}"
+    reported_note = ""
+    if event.reported_outcome and event.reported_outcome is not event.outcome:
+        reported_note = (
+            f" (reported {event.reported_outcome.value} by {event.outcome_source})"
+        )
     return (
-        f"Recorded {skill_name}: {outcome.value}.\n"
+        f"Recorded {skill_name}: {outcome_text}{reported_note}.\n"
         f"+{update.xp_awarded} XP | Level {update.level} | "
         f"{update.xp_into_level}/{update.xp_for_next_level} XP to progress\n"
         f"Mastery: {update.mastery_score:.0f}/100 ({update.mastery_label})\n"
         f"Next review: {update.next_review_at[:10]}"
     )
+
+
+def _verification_text(result: VerificationResult) -> str:
+    heading = {
+        VerificationStatus.VERIFIED_CORRECT: "VERIFIED CORRECT",
+        VerificationStatus.VERIFIED_INCORRECT: "VERIFIED INCORRECT",
+        VerificationStatus.INCONCLUSIVE: "INCONCLUSIVE",
+    }[result.status]
+    lines = [f"{heading}: {result.detail}", f"Submitted: {result.submitted}"]
+    if result.expected:
+        lines.append(f"Expected: {result.expected}")
+    return "\n".join(lines)
+
+
+def _ask_math(prompt: str, *, default: str | None = None) -> str:
+    suffix = f" [{default}]" if default is not None else ""
+    try:
+        value = input(f"{prompt}{suffix}: ").strip()
+    except (EOFError, KeyboardInterrupt) as error:
+        raise MathInputError("Verification canceled.") from error
+    if not value and default is not None:
+        return default
+    if not value:
+        raise MathInputError(f"{prompt} is required.")
+    return value
+
+
+def _check_problem(
+    session: TutorSession,
+    verifier: CalculusVerifier,
+    kind_text: str,
+) -> VerificationResult:
+    if session.problem_statement is None:
+        raise MathInputError("Start a problem before using /check.")
+    try:
+        kind = VerificationKind(kind_text.lower())
+    except ValueError as error:
+        raise MathInputError(
+            "Check type must be derivative, limit, antiderivative, or equivalent."
+        ) from error
+
+    if kind is VerificationKind.DERIVATIVE:
+        function = _ask_math("Function to differentiate")
+        variable = _ask_math("Variable", default="x")
+        answer = _ask_math("Your derivative")
+        result = verifier.derivative(function, answer, variable=variable)
+    elif kind is VerificationKind.LIMIT:
+        expression = _ask_math("Limit expression")
+        variable = _ask_math("Variable", default="x")
+        point = _ask_math("Approach point", default="0")
+        direction = _ask_math("Direction: both, left, or right", default="both")
+        answer = _ask_math("Your limit (or DNE)")
+        result = verifier.limit(
+            expression,
+            answer,
+            variable=variable,
+            point=point,
+            direction=direction.lower(),
+        )
+    elif kind is VerificationKind.ANTIDERIVATIVE:
+        integrand = _ask_math("Integrand")
+        variable = _ask_math("Variable", default="x")
+        answer = _ask_math("Your antiderivative")
+        result = verifier.antiderivative(integrand, answer, variable=variable)
+    else:
+        first = _ask_math("First expression")
+        second = _ask_math("Second expression")
+        variable = _ask_math("Primary variable", default="x")
+        result = verifier.equivalent(first, second, variable=variable)
+
+    session.set_verification(result)
+    print(_verification_text(result))
+    return result
 
 
 def _review_text(recommendation: dict[str, object] | None) -> str:
@@ -233,7 +328,7 @@ def _finish_problem(
     event = extractor.extract(snapshot, override)
     update = store.record_event(event)
     skill_name = store.skill_names()[event.skill_id]
-    print(_progress_text(update, skill_name, event.outcome))
+    print(_progress_text(update, skill_name, event))
     session.reset()
     session.set_learner_context(store.tutor_context())
 
@@ -311,8 +406,10 @@ def run_interactive(
     *,
     store: LearningStore | None = None,
     extractor: LearningEventExtractor | None = None,
+    verifier: CalculusVerifier | None = None,
     stream: bool = True,
 ) -> int:
+    verifier = verifier or CalculusVerifier()
     print(BANNER)
     while True:
         try:
@@ -334,6 +431,12 @@ def run_interactive(
             continue
         if command == "/status":
             print(_status(session))
+            continue
+        if command == "/check":
+            try:
+                _check_problem(session, verifier, argument)
+            except (MathInputError, RuntimeError, ValueError) as error:
+                print(f"Verification failed: {error}", file=sys.stderr)
             continue
         try:
             if _memory_command(command, argument, session, store, extractor):

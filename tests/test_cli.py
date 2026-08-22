@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sensei.cli import (
+    _check_problem,
     _memory_command,
     _profile_text,
     _review_text,
@@ -15,6 +16,7 @@ from sensei.cli import (
 from sensei.learning import LearningEvent, Outcome
 from sensei.storage import LearningStore
 from sensei.tutor import TutorSession
+from sensei.verification import CalculusVerifier, VerificationStatus
 
 
 class CliTests(unittest.TestCase):
@@ -26,6 +28,19 @@ class CliTests(unittest.TestCase):
         args = parse_args(["--prompt", "Differentiate x^2", "--mode", "hint"])
         self.assertEqual("Differentiate x^2", args.prompt)
         self.assertEqual("hint", args.mode)
+
+    def test_derivative_check_wizard_attaches_authoritative_result(self) -> None:
+        session = TutorSession(object(), "test-model")
+        session.reset("Differentiate sin(x^2)")
+        output = StringIO()
+        with redirect_stdout(output), patch(
+            "builtins.input",
+            side_effect=["sin(x^2)", "", "2x*cos(x^2)"],
+        ):
+            result = _check_problem(session, CalculusVerifier(), "derivative")
+        self.assertEqual(VerificationStatus.VERIFIED_CORRECT, result.status)
+        self.assertIs(result, session.last_verification)
+        self.assertIn("VERIFIED CORRECT", output.getvalue())
 
     def test_profile_and_skills_format_for_terminal(self) -> None:
         profile = _profile_text(

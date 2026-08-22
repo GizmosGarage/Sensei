@@ -5,9 +5,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from sensei.providers import ChatProvider, CompletionResult, Message, TokenCallback
+
+if TYPE_CHECKING:
+    from sensei.verification import VerificationResult
 
 
 SYSTEM_PROMPT = """You are Sensei, a patient college calculus tutor.
@@ -76,6 +79,7 @@ class LearningSnapshot:
     tutor_turns: int
     hints_used: int
     solution_revealed: bool
+    verification: VerificationResult | None = None
 
 
 def student_facing_text(text: str) -> str:
@@ -107,6 +111,7 @@ class TutorSession:
         self.history_character_budget = history_character_budget
         self.problem_statement: str | None = None
         self.learner_context: str | None = None
+        self.last_verification: VerificationResult | None = None
         self._history: list[Message] = []
         self._mode_counts = {mode: 0 for mode in TutorMode}
         self.turn_count = 0
@@ -115,6 +120,7 @@ class TutorSession:
         self.problem_statement = problem.strip() if problem and problem.strip() else None
         self._history.clear()
         self._mode_counts = {mode: 0 for mode in TutorMode}
+        self.last_verification = None
         self.turn_count = 0
 
     def _recent_history(self) -> list[Message]:
@@ -147,6 +153,12 @@ class TutorSession:
                 f"{self.learner_context}\n"
                 "Use this only when relevant. Adapt instruction without mentioning "
                 "scores or stored records unless the student asks."
+            )
+        if self.last_verification:
+            system_content += (
+                "\n\nLatest deterministic check (authoritative):\n"
+                f"{self.last_verification.learning_summary()}\n"
+                "Use this result to target the next explanation."
             )
         return [
             {"role": "system", "content": system_content},
@@ -204,10 +216,16 @@ class TutorSession:
             tutor_turns=self.turn_count,
             hints_used=self._mode_counts[TutorMode.HINT],
             solution_revealed=self._mode_counts[TutorMode.SOLVE] > 0,
+            verification=self.last_verification,
         )
 
     def set_learner_context(self, context: str | None) -> None:
         self.learner_context = context.strip() if context and context.strip() else None
+
+    def set_verification(self, verification: VerificationResult) -> None:
+        if self.problem_statement is None:
+            raise RuntimeError("Start a problem before attaching a verification result.")
+        self.last_verification = verification
 
     @property
     def context_characters(self) -> int:

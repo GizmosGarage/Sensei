@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sensei-calculus-tutor"
-version = "0.2.0"
+version = "0.3.0"
 description = "A local-first adaptive calculus tutor"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "GizmosGarage" }]
-dependencies = []
+dependencies = ["sympy==1.14.0"]
 
 [project.scripts]
 sensei = "sensei.cli:main"

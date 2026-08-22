@@ -10,6 +10,7 @@ from typing import Collection
 
 from sensei.providers import ChatProvider
 from sensei.tutor import LearningSnapshot
+from sensei.verification import VerificationStatus
 
 
 class Outcome(str, Enum):
@@ -30,6 +31,14 @@ class LearningEvent:
     solution_revealed: bool
     tutor_turns: int
     outcome_source: str = "model"
+    reported_outcome: Outcome | None = None
+    effective_outcome_source: str = "reported"
+    verification_status: str = "unverified"
+    verification_kind: str | None = None
+    verifier_version: str | None = None
+    verification_submitted: str | None = None
+    verification_expected: str | None = None
+    verification_detail: str | None = None
 
 
 class LearningEventError(ValueError):
@@ -98,9 +107,33 @@ def parse_learning_event(
     if not 0 <= confidence <= 1:
         raise LearningEventError("confidence must be a number from 0 to 1")
 
+    reported_outcome = outcome_override or extracted_outcome
+    effective_outcome = reported_outcome
+    effective_source = "reported"
+    verification_status = "unverified"
+    verification_kind = None
+    verifier_version = None
+    verification_submitted = None
+    verification_expected = None
+    verification_detail = None
+    if snapshot.verification:
+        verification = snapshot.verification
+        verification_status = verification.status.value
+        verification_kind = verification.kind.value
+        verifier_version = verification.verifier_version
+        verification_submitted = verification.submitted
+        verification_expected = verification.expected
+        verification_detail = verification.detail
+        if verification.status is VerificationStatus.VERIFIED_CORRECT:
+            effective_outcome = Outcome.CORRECT
+            effective_source = "verifier"
+        elif verification.status is VerificationStatus.VERIFIED_INCORRECT:
+            effective_outcome = Outcome.INCORRECT
+            effective_source = "verifier"
+
     return LearningEvent(
         skill_id=skill_id,
-        outcome=outcome_override or extracted_outcome,
+        outcome=effective_outcome,
         misconception=misconception,
         evidence=evidence,
         confidence=confidence,
@@ -109,6 +142,14 @@ def parse_learning_event(
         solution_revealed=snapshot.solution_revealed,
         tutor_turns=snapshot.tutor_turns,
         outcome_source="student" if outcome_override else "model",
+        reported_outcome=reported_outcome,
+        effective_outcome_source=effective_source,
+        verification_status=verification_status,
+        verification_kind=verification_kind,
+        verifier_version=verifier_version,
+        verification_submitted=verification_submitted,
+        verification_expected=verification_expected,
+        verification_detail=verification_detail,
     )
 
 
@@ -162,6 +203,11 @@ Skill catalog:
         outcome_override: Outcome | None = None,
     ) -> LearningEvent:
         self_report = outcome_override.value if outcome_override else "not provided"
+        verification = (
+            snapshot.verification.learning_summary()
+            if snapshot.verification
+            else "not performed"
+        )
         base_request = f"""Problem:
 {snapshot.problem}
 
@@ -169,6 +215,7 @@ Recent tutoring transcript:
 {self._transcript(snapshot)}
 
 Student-reported outcome: {self_report}
+Deterministic verification: {verification}
 Create the learning record now."""
         validation_error = ""
         prior_text = ""

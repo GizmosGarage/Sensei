@@ -2,6 +2,7 @@ import unittest
 
 from sensei.providers import CompletionResult
 from sensei.tutor import TutorMode, TutorSession, student_facing_text
+from sensei.verification import CalculusVerifier
 
 
 class FakeProvider:
@@ -58,10 +59,23 @@ class TutorSessionTests(unittest.TestCase):
         provider = FakeProvider()
         session = TutorSession(provider, "test-model")
         session.respond("Differentiate x^2")
+        session.set_verification(CalculusVerifier().derivative("x^2", "2x"))
         session.reset()
         self.assertIsNone(session.problem_statement)
+        self.assertIsNone(session.last_verification)
         self.assertEqual(0, session.turn_count)
         self.assertEqual((), session.context_messages())
+
+    def test_verification_is_added_without_an_extra_system_message(self) -> None:
+        provider = FakeProvider()
+        session = TutorSession(provider, "test-model")
+        session.respond("Differentiate sin(x^2)")
+        result = CalculusVerifier().derivative("sin(x^2)", "cos(x^2)")
+        session.set_verification(result)
+        session.respond("Help me find my mistake")
+        request = provider.requests[-1]
+        self.assertEqual(1, sum(item["role"] == "system" for item in request))
+        self.assertIn("verified_incorrect", request[0]["content"])
 
     def test_learning_snapshot_tracks_help_without_unbounded_history(self) -> None:
         provider = FakeProvider()

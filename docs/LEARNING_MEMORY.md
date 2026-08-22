@@ -13,7 +13,9 @@ Nothing becomes a learning attempt automatically. Finish an active problem expli
 /done incorrect
 ```
 
-Without an argument, the local model classifies the observable student work. With an argument, the student's outcome is authoritative. The database records `outcome_source` as either `model` or `student` so later verification can distinguish them.
+Without an argument, the local model classifies the observable student work. With an argument, the student supplies the reported outcome. The database records that report and its `model` or `student` source.
+
+If the active problem also has a conclusive `/check` result, deterministic verification becomes authoritative for correctness. The original report is still stored beside the effective outcome. An inconclusive check does not override either the student or model report.
 
 The model returns exactly five extraction fields:
 
@@ -29,7 +31,9 @@ The application rejects extra fields, unknown skill IDs, invalid outcomes, overs
 
 ```mermaid
 flowchart LR
-    Session[Bounded problem session] -->|/done| Extract[Local event extraction]
+    Session[Bounded problem session] --> Verify[Optional deterministic check]
+    Session -->|/done| Extract[Local event extraction]
+    Verify --> Extract
     Extract --> Validate[Exact schema validation]
     Validate -->|one transaction| DB[(SQLite learning memory)]
     DB --> Progress[XP, mastery, review]
@@ -39,7 +43,7 @@ flowchart LR
 
 Only the active problem, structured event, and concise observable evidence cross into durable memory. The raw message list is discarded when the problem resets.
 
-## Schema version 1
+## Schema version 2
 
 | Table | Purpose |
 | --- | --- |
@@ -51,6 +55,16 @@ Only the active problem, structured event, and concise observable evidence cross
 | `xp_events` | Stores additive XP linked one-to-one with attempts. |
 
 Foreign keys are enabled and the mutation for one attempt is atomic. The database uses SQLite WAL mode and defaults to `data/sensei.db`, which is ignored by Git.
+
+Schema version 2 adds `reported_outcome`, `effective_outcome_source`, verification status and kind, verifier version, submitted and expected expressions, and a concise check detail to each attempt. Existing version-1 attempts migrate automatically: their original outcome becomes the report, their effective source is `reported`, and their verification status is `unverified`.
+
+The outcome trust order is:
+
+1. A conclusive deterministic check (`verified_correct` or `verified_incorrect`).
+2. An explicit student report supplied to `/done`.
+3. The local model's structured classification.
+
+This order affects XP, mastery, and scheduling, while provenance keeps disagreements inspectable.
 
 ## XP rules
 
@@ -115,7 +129,7 @@ Default exports and backups are created under ignored `data/exports/` and `data/
 
 ## Current limitations
 
-- Correctness is student-reported or model-classified, not yet symbolically verified.
+- Deterministic checks cover a deliberately restricted Calculus I expression grammar; unsupported work remains student-reported or model-classified.
 - The skill catalog currently targets a broad Calculus I sequence rather than a specific college syllabus.
 - One local database represents one learner; profiles and multi-user isolation are not implemented.
 - Misconceptions accumulate but do not yet have an evidence-based resolution workflow.

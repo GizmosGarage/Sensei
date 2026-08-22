@@ -9,9 +9,14 @@ from sensei.learning import (
 )
 from sensei.providers import CompletionResult
 from sensei.tutor import LearningSnapshot
+from sensei.verification import (
+    VerificationKind,
+    VerificationResult,
+    VerificationStatus,
+)
 
 
-def snapshot() -> LearningSnapshot:
+def snapshot(verification: VerificationResult | None = None) -> LearningSnapshot:
     return LearningSnapshot(
         problem="Differentiate sin(x^2)",
         messages=(
@@ -21,6 +26,7 @@ def snapshot() -> LearningSnapshot:
         tutor_turns=1,
         hints_used=0,
         solution_revealed=False,
+        verification=verification,
     )
 
 
@@ -98,6 +104,35 @@ class LearningEventTests(unittest.TestCase):
                 for request in provider.requests
             )
         )
+
+    def test_verified_result_overrides_report_without_losing_provenance(self) -> None:
+        verification = VerificationResult(
+            VerificationKind.DERIVATIVE,
+            VerificationStatus.VERIFIED_INCORRECT,
+            "cos(x**2)",
+            "2*x*cos(x**2)",
+            "The inner derivative is missing.",
+        )
+        content = json.dumps(
+            {
+                "skill_id": "chain_rule",
+                "outcome": "correct",
+                "misconception": "Missing the inner derivative.",
+                "evidence": "The submitted derivative omitted 2x.",
+                "confidence": 1.0,
+            }
+        )
+        event = parse_learning_event(
+            content,
+            valid_skill_ids={"chain_rule"},
+            snapshot=snapshot(verification),
+            outcome_override=Outcome.CORRECT,
+        )
+        self.assertEqual(Outcome.INCORRECT, event.outcome)
+        self.assertEqual(Outcome.CORRECT, event.reported_outcome)
+        self.assertEqual("student", event.outcome_source)
+        self.assertEqual("verifier", event.effective_outcome_source)
+        self.assertEqual("verified_incorrect", event.verification_status)
 
 
 if __name__ == "__main__":
