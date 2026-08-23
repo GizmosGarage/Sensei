@@ -35,7 +35,7 @@
           <h1 id="hero-title">Sharpen the<br><em>next step.</em></h1>
           <p class="hero-lede">Practice earns experience. Verified work builds mastery. Choose a subject and train directly in this dashboard.</p>
           <div class="system-strip" aria-label="Local system status">
-            <span><b id="catalog-quests">--</b> course quests</span>
+            <span><b id="catalog-quests">Fresh</b> generated quests</span>
             <span><b id="catalog-skills">--</b> course subjects</span>
             <span><b>0</b> cloud calls</span>
           </div>
@@ -81,7 +81,7 @@
           </div>
           <div class="quest-action">
             <span>Ready to train?</span>
-            <button class="primary-button" id="start-next-quest" type="button">Start quest</button>
+            <button class="primary-button" id="start-next-quest" type="button">Generate quest</button>
             <small>Check and record it here</small>
           </div>
         </article>
@@ -93,7 +93,10 @@
             <p class="eyebrow" id="arena-skill">Selected discipline</p>
             <h2 id="arena-title">Quest title</h2>
           </div>
-          <button class="icon-button" id="close-arena" type="button" aria-label="Close practice quest">Close</button>
+          <div class="arena-actions">
+            <button class="secondary-button" id="new-question" type="button">New question</button>
+            <button class="icon-button" id="close-arena" type="button" aria-label="Close practice quest">Close</button>
+          </div>
         </div>
         <p class="arena-prompt" id="arena-prompt"></p>
         <label class="answer-label" for="quest-answer">Your answer</label>

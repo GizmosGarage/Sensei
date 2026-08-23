@@ -8,6 +8,7 @@ let activeCourse = "precalculus";
 let activeUnit = "All";
 let activeQuest = null;
 let attemptToken = null;
+let generatingQuestion = false;
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, Number(value) || 0));
@@ -53,17 +54,9 @@ function renderProfile(profile) {
 function renderQuest(quest) {
   byId("quest-timing").textContent = quest.due ? "Due now" : "Up next";
   byId("quest-skill").textContent = quest.skill_name;
-  byId("quest-title").textContent = quest.title;
-  byId("quest-prompt").textContent = quest.prompt;
+  byId("quest-title").textContent = `Fresh ${quest.skill_name} quest`;
+  byId("quest-prompt").textContent = `Generate a new ${quest.skill_name.toLowerCase()} challenge. Sensei will keep it inside this subject and verify its hidden answer before you see it.`;
   byId("quest-reason").textContent = `${quest.reason} ${Math.round(quest.mastery_score)}/100 mastery.`;
-}
-
-function questsForCourse() {
-  return dashboardState.quests.filter((quest) => quest.course === activeCourse);
-}
-
-function questForSkill(skillId) {
-  return questsForCourse().find((quest) => quest.skill_id === skillId);
 }
 
 function filterSkills() {
@@ -108,9 +101,9 @@ function renderSkills(skills) {
     card.querySelector(".skill-attempts").textContent = `${skill.attempts_count} attempt${skill.attempts_count === 1 ? "" : "s"}`;
     card.querySelector(".skill-review").textContent = relativeDate(skill.next_review_at);
     const practiceButton = card.querySelector(".practice-button");
-    const quest = questForSkill(skill.id);
-    practiceButton.disabled = !quest;
-    practiceButton.addEventListener("click", () => openArena(quest));
+    const supported = dashboardState.catalog.generated_skill_ids.includes(skill.id);
+    practiceButton.disabled = !supported;
+    practiceButton.addEventListener("click", () => startQuest(skill.id));
     grid.append(card);
   });
   renderFilters(skills);
@@ -171,6 +164,26 @@ function openArena(quest) {
   byId("quest-answer").focus({ preventScroll: true });
 }
 
+async function startQuest(skillId) {
+  if (!dashboardState || generatingQuestion) return;
+  generatingQuestion = true;
+  byId("start-next-quest").disabled = true;
+  byId("new-question").disabled = true;
+  try {
+    const response = await postJson("/api/quest/generate", { skill_id: skillId });
+    openArena({
+      ...response.quest,
+      challenge_token: response.challenge_token,
+    });
+  } catch (error) {
+    byId("updated-at").textContent = `Question generation failed: ${error.message}`;
+  } finally {
+    generatingQuestion = false;
+    byId("start-next-quest").disabled = false;
+    byId("new-question").disabled = generatingQuestion;
+  }
+}
+
 function closeArena() {
   activeQuest = null;
   resetArenaFeedback();
@@ -191,7 +204,7 @@ function renderCourse() {
   renderHistory(dashboardState.recent_attempts);
   byId("course-label").textContent = `${courseName} path`;
   byId("mastery-heading").textContent = `${courseName} subjects`;
-  byId("catalog-quests").textContent = questsForCourse().length;
+  byId("catalog-quests").textContent = "Fresh";
   byId("catalog-skills").textContent = dashboardState.catalog.courses[activeCourse];
 }
 
@@ -218,6 +231,7 @@ async function postJson(path, document) {
 
 async function checkAnswer() {
   if (!activeQuest) return;
+  const challengeToken = activeQuest.challenge_token;
   const answer = byId("quest-answer").value.trim();
   if (!answer) {
     byId("quest-answer").focus();
@@ -225,12 +239,14 @@ async function checkAnswer() {
   }
   const button = byId("check-answer");
   button.disabled = true;
+  byId("new-question").disabled = true;
   resetArenaFeedback();
   try {
     const response = await postJson("/api/quest/check", {
-      quest_id: activeQuest.id,
+      challenge_token: challengeToken,
       answer,
     });
+    if (!activeQuest || activeQuest.challenge_token !== challengeToken) return;
     const result = response.result;
     attemptToken = response.attempt_token;
     const feedback = byId("answer-feedback");
@@ -258,6 +274,7 @@ async function checkAnswer() {
     feedback.hidden = false;
   } finally {
     button.disabled = false;
+    byId("new-question").disabled = generatingQuestion;
   }
 }
 
@@ -265,6 +282,7 @@ async function recordAttempt() {
   if (!attemptToken) return;
   const button = byId("record-attempt");
   button.disabled = true;
+  byId("new-question").disabled = true;
   try {
     const response = await postJson("/api/quest/record", {
       attempt_token: attemptToken,
@@ -277,6 +295,7 @@ async function recordAttempt() {
     byId("feedback-detail").textContent = error.message;
   } finally {
     button.disabled = false;
+    byId("new-question").disabled = generatingQuestion;
   }
 }
 
@@ -303,7 +322,10 @@ document.querySelectorAll(".course-switch button").forEach((button) => {
   });
 });
 byId("start-next-quest").addEventListener("click", () => {
-  if (dashboardState) openArena(dashboardState.next_quests[activeCourse]);
+  if (dashboardState) startQuest(dashboardState.next_quests[activeCourse].skill_id);
+});
+byId("new-question").addEventListener("click", () => {
+  if (activeQuest) startQuest(activeQuest.skill_id);
 });
 byId("close-arena").addEventListener("click", closeArena);
 byId("check-answer").addEventListener("click", checkAnswer);

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from sensei.generation import GENERATED_SKILL_IDS, GeneratedQuestFactory
 from sensei.learning import LearningEvent, Outcome
 from sensei.quests import DEFAULT_QUESTS_PATH, QuestDeck, QuestTemplate
 from sensei.storage import DEFAULT_DATABASE_PATH, DEFAULT_SKILLS_PATH, LearningStore, utc_now
@@ -32,6 +33,7 @@ LOOPBACK_HOST = "127.0.0.1"
 DEFAULT_DASHBOARD_PORT = 8765
 MAX_REQUEST_BYTES = 4_096
 ATTEMPT_TOKEN_LIFETIME_SECONDS = 15 * 60
+CHALLENGE_TOKEN_LIFETIME_SECONDS = 60 * 60
 WEB_DIRECTORY = Path(__file__).resolve().parent / "web"
 ASSETS = {
     "/": (WEB_DIRECTORY / "index.html", "text/html; charset=utf-8"),
@@ -56,6 +58,56 @@ def rank_name(level: int) -> str:
     if level >= 2:
         return "Foundation Initiate"
     return "Dojo Novice"
+
+
+def generated_recommendation(
+    store: LearningStore,
+    skills: list[dict[str, Any]],
+    course: str,
+) -> dict[str, Any]:
+    eligible = {
+        str(skill["id"])
+        for skill in skills
+        if skill["course"] == course and skill["id"] in GENERATED_SKILL_IDS
+    }
+    review = store.review_recommendation(skill_ids=eligible)
+    if review is None:
+        starting_skill = (
+            "precalc_exponent_properties"
+            if course == "precalculus"
+            else "calculus_foundations"
+        )
+        skill = next(item for item in skills if item["id"] == starting_skill)
+        due = True
+        reason = "Begin your path with a fresh foundation quest."
+        mastery_score = 0.0
+        mastery_label = "not started"
+        next_review_at = None
+    else:
+        skill = next(item for item in skills if item["id"] == review["id"])
+        due = bool(review["due"])
+        reason = (
+            "Scheduled review is due now."
+            if due
+            else "This is the next subject in your generated review queue."
+        )
+        mastery_score = float(review["mastery_score"])
+        mastery_label = str(review["mastery_label"])
+        next_review_at = str(review["next_review_at"])
+    return {
+        "id": f"generated-recommendation-{skill['id']}",
+        "skill_id": skill["id"],
+        "skill_name": skill["name"],
+        "course": course,
+        "title": f"Fresh {skill['name']} quest",
+        "prompt": "Generate a new verifier-backed challenge for this subject.",
+        "check_kind": "generated",
+        "due": due,
+        "reason": reason,
+        "mastery_score": mastery_score,
+        "mastery_label": mastery_label,
+        "next_review_at": next_review_at,
+    }
 
 
 def verification_document(result: VerificationResult) -> dict[str, str | None]:
@@ -112,6 +164,59 @@ class PendingAttemptStore:
             del self._attempts[token]
 
 
+@dataclass(frozen=True)
+class PendingChallenge:
+    quest: QuestTemplate
+    issued_at: float
+
+
+class ChallengeStore:
+    """Keeps generated answer targets server-side and avoids immediate repeats."""
+
+    def __init__(self, factory: GeneratedQuestFactory | None = None) -> None:
+        self.factory = factory or GeneratedQuestFactory()
+        self._challenges: dict[str, PendingChallenge] = {}
+        self._last_prompts: dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    def issue(self, skill_id: str) -> tuple[str, QuestTemplate]:
+        now = time.monotonic()
+        with self._lock:
+            self._prune(now)
+            last_prompt = self._last_prompts.get(skill_id)
+            quest = self.factory.generate(skill_id)
+            for _ in range(19):
+                if quest.prompt != last_prompt:
+                    break
+                quest = self.factory.generate(skill_id)
+            if quest.prompt == last_prompt:
+                raise RuntimeError("A distinct question could not be generated.")
+            token = secrets.token_urlsafe(32)
+            self._challenges[token] = PendingChallenge(quest, now)
+            self._last_prompts[skill_id] = quest.prompt
+            return token, quest
+
+    def get(self, token: str) -> QuestTemplate:
+        now = time.monotonic()
+        with self._lock:
+            self._prune(now)
+            try:
+                return self._challenges[token].quest
+            except KeyError as error:
+                raise ValueError(
+                    "This generated question is missing or expired. Request a new one."
+                ) from error
+
+    def _prune(self, now: float) -> None:
+        expired = [
+            token
+            for token, challenge in self._challenges.items()
+            if now - challenge.issued_at > CHALLENGE_TOKEN_LIFETIME_SECONDS
+        ]
+        for token in expired:
+            del self._challenges[token]
+
+
 class DashboardService:
     """Builds a public, answer-key-free snapshot from local application state."""
 
@@ -134,12 +239,12 @@ class DashboardService:
             )
             profile = store.profile()
             profile["rank_name"] = rank_name(int(profile["level"]))
+            skills = store.skill_progress()
             recommendations = {
-                course: deck.recommend(store, course=course).public_dict()
+                course: generated_recommendation(store, skills, course)
                 for course in ("precalculus", "calculus")
             }
             review = store.review_recommendation()
-            skills = store.skill_progress()
             return {
                 "generated_at": utc_now().astimezone(timezone.utc).isoformat(),
                 "profile": profile,
@@ -152,6 +257,8 @@ class DashboardService:
                 "catalog": {
                     "quest_count": len(deck.quests),
                     "quest_skill_count": len(deck.eligible_skill_ids),
+                    "generated_skill_count": len(GENERATED_SKILL_IDS),
+                    "generated_skill_ids": list(GENERATED_SKILL_IDS),
                     "courses": {
                         course: sum(
                             skill["course"] == course for skill in skills
@@ -166,17 +273,27 @@ class DashboardService:
                 },
             }
 
-    def check_quest(
-        self,
-        quest_id: str,
-        answer: str,
-    ) -> tuple[QuestTemplate, VerificationResult]:
+    def public_generated_quest(self, quest: QuestTemplate) -> dict[str, str]:
         deck = QuestDeck.load(
             self.quests_path,
             skills_path=self.skills_path,
         )
-        quest = deck.get(quest_id)
-        return quest, quest.check(answer, CalculusVerifier())
+        try:
+            return quest.public_dict(
+                skill_name=deck.skill_names[quest.skill_id],
+                course=deck.skill_courses[quest.skill_id],
+            )
+        except KeyError as error:
+            raise ValueError(
+                f"Generated question has unknown skill {quest.skill_id!r}."
+            ) from error
+
+    def check_quest(
+        self,
+        quest: QuestTemplate,
+        answer: str,
+    ) -> VerificationResult:
+        return quest.check(answer, CalculusVerifier())
 
     def record_attempt(
         self,
@@ -231,9 +348,11 @@ class SenseiDashboardServer(ThreadingHTTPServer):
         self,
         server_address: tuple[str, int],
         service: DashboardService,
+        quest_factory: GeneratedQuestFactory | None = None,
     ) -> None:
         self.service = service
         self.csrf_token = secrets.token_urlsafe(32)
+        self.challenges = ChallengeStore(quest_factory)
         self.pending_attempts = PendingAttemptStore()
         super().__init__(server_address, DashboardRequestHandler)
 
@@ -346,13 +465,32 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
+            if path == "/api/quest/generate":
+                document = self._read_json({"skill_id"})
+                skill_id = document["skill_id"]
+                if not isinstance(skill_id, str) or len(skill_id) > 80:
+                    raise ValueError("Skill ID must be valid text.")
+                challenge_token, quest = self.server.challenges.issue(skill_id)
+                self._send_json(
+                    200,
+                    {
+                        "quest": self.server.service.public_generated_quest(quest),
+                        "challenge_token": challenge_token,
+                    },
+                )
+                return
             if path == "/api/quest/check":
-                document = self._read_json({"quest_id", "answer"})
-                quest_id = document["quest_id"]
+                document = self._read_json({"challenge_token", "answer"})
+                challenge_token = document["challenge_token"]
                 answer = document["answer"]
-                if not isinstance(quest_id, str) or not isinstance(answer, str):
-                    raise ValueError("Quest ID and answer must be text.")
-                quest, result = self.server.service.check_quest(quest_id, answer)
+                if (
+                    not isinstance(challenge_token, str)
+                    or len(challenge_token) > 200
+                    or not isinstance(answer, str)
+                ):
+                    raise ValueError("Challenge token and answer must be text.")
+                quest = self.server.challenges.get(challenge_token)
+                result = self.server.service.check_quest(quest, answer)
                 attempt_token = (
                     None
                     if result.status is VerificationStatus.INCONCLUSIVE
@@ -380,7 +518,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         except (MathInputError, ValueError) as error:
             self._send_json(400, {"error": str(error)})
             return
-        except (OSError, sqlite3.Error) as error:
+        except (OSError, RuntimeError, sqlite3.Error) as error:
             self.log_error("Dashboard write failed: %s", error)
             self._send_json(500, {"error": "The local attempt could not be recorded."})
             return
@@ -397,10 +535,15 @@ def create_server(
     service: DashboardService,
     *,
     port: int = DEFAULT_DASHBOARD_PORT,
+    quest_factory: GeneratedQuestFactory | None = None,
 ) -> SenseiDashboardServer:
     if not 0 <= port <= 65_535:
         raise ValueError("Dashboard port must be from 0 to 65535.")
-    return SenseiDashboardServer((LOOPBACK_HOST, port), service)
+    return SenseiDashboardServer(
+        (LOOPBACK_HOST, port),
+        service,
+        quest_factory,
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

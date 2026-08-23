@@ -1,4 +1,5 @@
 import json
+import random
 import tempfile
 import threading
 import unittest
@@ -12,6 +13,9 @@ from sensei.dashboard import (
     create_server,
     rank_name,
 )
+from sensei.generation import GeneratedQuestFactory
+from sensei.learning import LearningEvent, Outcome
+from sensei.storage import LearningStore
 
 
 class DashboardTests(unittest.TestCase):
@@ -39,6 +43,7 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual("Local SQLite", state["runtime"]["storage"])
         self.assertEqual(40, state["catalog"]["quest_count"])
         self.assertEqual(20, state["catalog"]["courses"]["precalculus"])
+        self.assertEqual(37, state["catalog"]["generated_skill_count"])
         self.assertEqual(37, len(state["skills"]))
 
     def test_rank_names_advance_at_documented_thresholds(self) -> None:
@@ -47,6 +52,24 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual("Algebra Adept", rank_name(4))
         self.assertEqual("Function Scholar", rank_name(7))
         self.assertEqual("Math Master", rank_name(10))
+
+    def test_recommendation_can_select_a_generated_only_calculus_subject(self) -> None:
+        with LearningStore(self.database) as store:
+            store.record_event(
+                LearningEvent(
+                    skill_id="continuity",
+                    outcome=Outcome.INCORRECT,
+                    misconception="Used the point value instead of the limit.",
+                    evidence="The proposed value did not match the limiting value.",
+                    confidence=1.0,
+                    problem="Choose k for continuity.",
+                    hints_used=0,
+                    solution_revealed=False,
+                    tutor_turns=1,
+                )
+            )
+        state = self.service.state()
+        self.assertEqual("continuity", state["next_quests"]["calculus"]["skill_id"])
 
     def test_loopback_server_serves_health_api_and_dashboard_assets(self) -> None:
         server = create_server(self.service, port=0)
@@ -75,7 +98,15 @@ class DashboardTests(unittest.TestCase):
             thread.join(timeout=5)
 
     def test_dashboard_checks_and_records_a_precalculus_quest_once(self) -> None:
-        server = create_server(self.service, port=0)
+        seed = 443
+        expected_quest = GeneratedQuestFactory(
+            random.Random(seed)
+        ).generate("precalc_linear_equations")
+        server = create_server(
+            self.service,
+            port=0,
+            quest_factory=GeneratedQuestFactory(random.Random(seed)),
+        )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base_url = f"http://{LOOPBACK_HOST}:{server.server_address[1]}"
@@ -98,9 +129,24 @@ class DashboardTests(unittest.TestCase):
             with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
                 state = json.load(response)
             csrf_token = state["csrf_token"]
+            status, generated = post(
+                "/api/quest/generate",
+                {"skill_id": "precalc_linear_equations"},
+                csrf_token,
+            )
+            self.assertEqual(200, status)
+            self.assertEqual(
+                "precalc_linear_equations",
+                generated["quest"]["skill_id"],
+            )
+            self.assertNotIn("sample_answer", generated["quest"])
+            self.assertNotIn("verification", generated["quest"])
             status, checked = post(
                 "/api/quest/check",
-                {"quest_id": "precalc-linear-equation", "answer": "6"},
+                {
+                    "challenge_token": generated["challenge_token"],
+                    "answer": expected_quest.sample_answer,
+                },
                 csrf_token,
             )
             self.assertEqual(200, status)
@@ -126,9 +172,10 @@ class DashboardTests(unittest.TestCase):
             with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
                 updated = json.load(response)
             self.assertEqual("precalculus", updated["recent_attempts"][0]["course"])
-            self.assertEqual(
-                "precalc-linear-equation",
-                updated["recent_attempts"][0]["quest_id"],
+            self.assertTrue(
+                updated["recent_attempts"][0]["quest_id"].startswith(
+                    "generated-precalc-linear-equations-"
+                )
             )
         finally:
             server.shutdown()
@@ -141,9 +188,9 @@ class DashboardTests(unittest.TestCase):
         thread.start()
         base_url = f"http://{LOOPBACK_HOST}:{server.server_address[1]}"
         request = Request(
-            f"{base_url}/api/quest/check",
+            f"{base_url}/api/quest/generate",
             data=json.dumps(
-                {"quest_id": "precalc-linear-equation", "answer": "6"}
+                {"skill_id": "precalc_linear_equations"}
             ).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -152,6 +199,47 @@ class DashboardTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as rejected:
                 urlopen(request, timeout=5)
             self.assertEqual(403, rejected.exception.code)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_generation_avoids_an_immediate_repeat_for_one_subject(self) -> None:
+        server = create_server(
+            self.service,
+            port=0,
+            quest_factory=GeneratedQuestFactory(random.Random(99)),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://{LOOPBACK_HOST}:{server.server_address[1]}"
+
+        def generate(token: str) -> dict[str, object]:
+            request = Request(
+                f"{base_url}/api/quest/generate",
+                data=json.dumps(
+                    {"skill_id": "precalc_exponent_properties"}
+                ).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Origin": base_url,
+                    "X-Sensei-CSRF": token,
+                },
+                method="POST",
+            )
+            with urlopen(request, timeout=5) as response:
+                return json.load(response)
+
+        try:
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                csrf_token = json.load(response)["csrf_token"]
+            first = generate(csrf_token)
+            second = generate(csrf_token)
+            self.assertNotEqual(
+                first["quest"]["prompt"],
+                second["quest"]["prompt"],
+            )
+            self.assertNotEqual(first["challenge_token"], second["challenge_token"])
         finally:
             server.shutdown()
             server.server_close()

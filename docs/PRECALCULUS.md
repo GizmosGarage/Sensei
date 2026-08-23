@@ -1,6 +1,6 @@
 # Precalculus path
 
-Sensei's Precalculus path is a first-class course in the local learning-memory catalog. Each subject has its own mastery score, review schedule, dashboard card, and curated verifier-backed starter quest.
+Sensei's Precalculus path is a first-class course in the local learning-memory catalog. Each subject has its own mastery score, review schedule, dashboard card, and procedurally generated verifier-backed questions.
 
 ## Subjects
 
@@ -34,13 +34,16 @@ The dashboard groups these subjects into Precalculus algebra, functions, exponen
 1. Start `python -m sensei.dashboard` from the repository root.
 2. Open `http://127.0.0.1:8765/` if the browser does not open automatically.
 3. Select **Precalculus** in the course switch.
-4. Choose **Practice topic** on any subject card, or use the recommended **Start quest** button.
+4. Choose **Practice topic** on any subject card, or use the recommended **Generate quest** button.
 5. Enter the answer using `^` for powers and `pi` for π.
 6. Select **Check answer**. Sensei's restricted symbolic verifier checks mathematical equivalence locally.
 7. Select **Record attempt** to commit the result, XP, mastery evidence, and next review date to local SQLite memory.
+8. Select **New question** to generate another challenge in the same subject.
 
 Checking is intentionally separate from recording. A checked result uses a short-lived, one-time token, so refreshing or replaying a request cannot award the same attempt twice.
 
 ## Current coverage
 
-Version 0.5.0 provides one deterministic starter quest for every subject. The quest catalog stores regression answers and symbolic targets, but the public dashboard snapshot does not expose them before an answer is attempted. Later milestones can add multiple difficulty tiers, generated variations validated against deterministic constraints, and local-model coaching without changing the course or memory identity.
+Version 0.6.0 provides a dedicated procedural generator for every subject. Each generator changes coefficients, exponents, intervals, angles, functions, or transformation values only within that subject's explicit rules. The production symbolic verifier checks the generated reference answer before the server issues the question.
+
+The hidden target remains in process memory behind a random challenge token and is not returned in the public question document. Immediate duplicate prompts for the same subject are rejected and regenerated. Future milestones can add explicit difficulty tiers and local-model coaching without changing the course or memory identity.

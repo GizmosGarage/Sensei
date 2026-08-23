@@ -1,6 +1,6 @@
 # Local RPG dashboard
 
-The dashboard is Sensei's local practice and progression interface. It shows rank, level progress, XP, course-specific recommendations, all 20 Precalculus and 17 Calculus disciplines, review timing, and recent attempts. A learner can launch, check, and record verifier-backed quests without moving learning data into a browser account or hosted service.
+The dashboard is Sensei's local practice and progression interface. It shows rank, level progress, XP, course-specific recommendations, all 20 Precalculus and 17 Calculus disciplines, review timing, and recent attempts. A learner can generate, check, and record fresh verifier-backed quests without moving learning data into a browser account or hosted service.
 
 ## Start the dashboard
 
@@ -24,11 +24,12 @@ The tutor and dashboard can run in separate terminals against the same SQLite fi
 
 1. Choose **Precalculus** or **Calculus** at the top of the page.
 2. Use a unit chip to narrow the subject cards if desired.
-3. Select the recommended **Start quest**, or **Practice topic** on a specific subject.
+3. Select the recommended **Generate quest**, or **Practice topic** on a specific subject.
 4. Enter a mathematical expression and select **Check answer**.
 5. Review the local verifier's result, then select **Record attempt** to save it.
+6. Select **New question** for another randomized challenge in the same subject.
 
-The check and record controls are deliberately separate. Checking does not mutate learning memory. A conclusive check creates a short-lived, process-local, single-use attempt token; recording consumes it and writes exactly one progression event.
+The generate, check, and record controls are deliberately separate. Generation selects parameters from a subject-specific rule and validates the hidden reference answer before issuance. Checking does not mutate learning memory. A conclusive check creates a short-lived, process-local, single-use attempt token; recording consumes it and writes exactly one progression event.
 
 ## Architecture
 
@@ -38,16 +39,18 @@ flowchart LR
     DB <--> API[Loopback dashboard API]
     API <--> Page[Packaged dashboard assets]
     Page <--> Browser[Local browser]
-    API --> Verify[Restricted symbolic verifier]
+    API --> Generate[Subject-specific generator]
+    Generate --> Verify[Restricted symbolic verifier]
 ```
 
-`sensei/dashboard.py` owns the loopback server, public snapshot, protected write endpoints, and single-use checked-attempt store. `sensei/web/` contains dependency-free HTML, CSS, and JavaScript packaged with the Python application. `sensei/quests.py` supplies answer-key-free quest representations and verifier targets. SQLite remains the only durable source of truth.
+`sensei/dashboard.py` owns the loopback server, public snapshot, protected write endpoints, temporary challenge store, and single-use checked-attempt store. `sensei/generation.py` contains one bounded generator per subject and validates every generated reference through the production verifier. `sensei/web/` contains dependency-free HTML, CSS, and JavaScript packaged with the Python application. SQLite remains the only durable source of truth.
 
 ## Privacy and safety boundary
 
 - The server address is fixed to `127.0.0.1`; there is no option to bind to the LAN.
 - The server serves a fixed route map rather than arbitrary filesystem paths.
-- The public JSON response excludes quest samples and symbolic target configuration.
+- The public JSON response excludes generated answers and symbolic target configuration.
+- Generated challenges expire after one hour and are addressed by opaque random tokens; their answer targets stay server-side.
 - Writes require a per-process CSRF token, reject cross-origin browser requests, enforce small exact-shape JSON bodies, and record only a server-issued one-time checked attempt.
 - Learning state is never copied into `localStorage`, cookies, or a cloud database.
 - Content Security Policy, frame denial, MIME sniffing protection, and a no-referrer policy are sent on responses.
@@ -64,7 +67,8 @@ The dashboard is intended for the learner at the computer. Loopback isolation is
 | `/assets/styles.css` | Responsive visual system. |
 | `/assets/app.js` | Course navigation, safe DOM rendering, quest interaction, and refresh behavior. |
 | `/api/dashboard` | Profile, public quests, skills, review, recent attempts, and write-session token. |
-| `POST /api/quest/check` | Checks one catalog quest answer and issues a one-time token for a conclusive result. |
+| `POST /api/quest/generate` | Generates and prevalidates a fresh question for one explicit skill ID. |
+| `POST /api/quest/check` | Checks an answer for one server-held challenge and issues a one-time token for a conclusive result. |
 | `POST /api/quest/record` | Consumes a checked-attempt token and records XP, mastery, and review state. |
 | `/healthz` | Minimal local health response. |
 

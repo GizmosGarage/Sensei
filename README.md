@@ -6,9 +6,9 @@ Repository: [GizmosGarage/Sensei](https://github.com/GizmosGarage/Sensei)
 
 ## Project status
 
-**Phase 6 complete: interactive dashboard and Precalculus path**
+**Phase 7 complete: fresh subject-confined question generation**
 
-Sensei now has a 20-subject Precalculus path alongside Calculus I. Its loopback-only dashboard can switch courses, filter topics, launch a verifier-backed quest, check the answer locally, and explicitly record XP and mastery into the same student-owned SQLite memory used by the terminal tutor. No hosted inference or cloud storage is involved. The provisional local stack is:
+Sensei has a 20-subject Precalculus path alongside Calculus I. Its loopback-only dashboard now procedurally generates a new question for any of the 37 subjects, validates the hidden answer before issuance, checks the student's answer locally, and explicitly records XP and mastery into the same student-owned SQLite memory used by the terminal tutor. No hosted inference or cloud storage is involved. The provisional local stack is:
 
 - `llama.cpp` b10549 with its Vulkan backend
 - Qwen 3.5 9B Q4_K_M as the default tutor model
@@ -43,7 +43,7 @@ Start a scheduled terminal challenge with `/quest`, submit it with `/answer`, an
 python -m sensei.dashboard
 ```
 
-Choose **Precalculus** or **Calculus**, select **Practice topic** on any subject, enter an expression, choose **Check answer**, and then **Record attempt** to save XP and mastery. See the [Precalculus path](docs/PRECALCULUS.md) and [dashboard guide](docs/LOCAL_DASHBOARD.md).
+Choose **Precalculus** or **Calculus**, select **Practice topic** on any subject, enter an expression, choose **Check answer**, and then **Record attempt** to save XP and mastery. Choose **New question** at any time for another randomly parameterized challenge in the same subject. See the [Precalculus path](docs/PRECALCULUS.md) and [dashboard guide](docs/LOCAL_DASHBOARD.md).
 
 ## Product principles
 
@@ -74,6 +74,7 @@ Choose **Precalculus** or **Calculus**, select **Practice topic** on any subject
 - [Deterministic-verification decision](docs/decisions/0005-deterministic-verification.md)
 - [Quest-and-dashboard decision](docs/decisions/0006-local-quests-and-dashboard.md)
 - [Interactive-course-dashboard decision](docs/decisions/0007-interactive-course-dashboard.md)
+- [Procedural-question-generation decision](docs/decisions/0008-procedural-question-generation.md)
 - [Project log](docs/PROJECT_LOG.md)
 
 ## Planned phases
@@ -84,4 +85,5 @@ Choose **Precalculus** or **Calculus**, select **Practice topic** on any subject
 4. ~~Add deterministic calculus verification.~~
 5. ~~Build guided review quests and a portfolio-ready interface.~~
 6. ~~Add an interactive dashboard practice loop and a complete Precalculus topic path.~~
-7. **Bring local-model coaching conversation into the dashboard and deepen each topic's quest pool.**
+7. ~~Generate fresh, deterministically validated questions inside every subject.~~
+8. **Bring local-model coaching conversation into the dashboard and add difficulty progression.**

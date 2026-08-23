@@ -1,5 +1,31 @@
 # Project log
 
+## 2026-08-22 - Milestone 7: subject-confined procedural questions
+
+### Completed
+
+- Added a dedicated procedural question generator for every one of the 37 Precalculus and Calculus subjects.
+- Varied coefficients, powers, roots, intervals, transformations, function parameters, unit-circle angles, and trigonometric forms within explicit subject boundaries.
+- Ran each generated reference answer through the production symbolic verifier before issuing the question.
+- Added a protected generation endpoint that returns only answer-key-free quest metadata and an opaque random challenge token.
+- Kept generated answer targets in process memory with a one-hour lifetime; they never enter HTML, browser storage, or the public dashboard snapshot.
+- Prevented an immediate repeated prompt in the same subject by regenerating before issuance.
+- Added **Generate quest** and **New question** controls and enabled dashboard practice for all seven Calculus disciplines that previously lacked curated browser quests.
+- Preserved the explicit **Record attempt** boundary and one-time recording token, so generating or checking alone does not change XP or mastery.
+- Released the application metadata as version 0.6.0.
+
+### Verification
+
+All 72 automated tests pass. Coverage now proves that generator IDs exactly match all 37 catalog skills, every subject produces multiple prompt variants, every generated sample is accepted by the production verifier, generated public documents omit answer targets, immediate repeats are rejected, generated-only subjects enter the review queue, protected writes remain enforced, and generated attempts still award and persist progression exactly once. An additional seeded fuzz pass successfully prevalidated 7,400 generated questions across all subjects.
+
+Live loopback validation generated two different factoring prompts in sequence—`x^2 - 13x + 40` and `x^2 - 13x + 36`—with no answer field exposed. The refreshed dashboard remains local on `127.0.0.1:8765`; it was not deployed or given cloud persistence.
+
+### Next milestone
+
+- Add explicit beginner, intermediate, and challenge difficulty bands per subject.
+- Bring local-model hints and Socratic coaching into the browser arena.
+- Use demonstrated mastery to select parameters and problem forms within the active subject.
+
 ## 2026-08-22 - Milestone 6: interactive Precalculus dashboard
 
 ### Completed
