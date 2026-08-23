@@ -37,7 +37,7 @@ Model weights are not downloaded implicitly. If the selected artifact is missing
 | `/check TYPE` | Deterministically checks a `derivative`, `limit`, `antiderivative`, or pair of `equivalent` expressions through a short wizard. |
 | `/done [outcome]` | Finalizes the active problem into learning memory; the optional outcome is `correct`, `partial`, or `incorrect`. |
 | `/profile` | Shows level, XP, recorded attempts, and mastery totals. |
-| `/skills [all]` | Shows practiced skills or the complete 17-skill catalog. |
+| `/skills [all]` | Shows practiced skills or the complete 37-skill Precalculus and Calculus catalog. |
 | `/review` | Recommends the next scheduled skill and shows an unresolved misconception when present. |
 | `/new [problem]` | Clears the current context and optionally starts another problem. |
 | `/status` | Shows the model, active problem, tutor-turn count, and recent-context usage. |
@@ -50,6 +50,8 @@ Model weights are not downloaded implicitly. If the selected artifact is missing
 Coach mode asks the student to identify the first relevant rule or structure when no attempt has been provided. It advances one small step at a time after that. The explicit `/solve` command is the escape hatch when a full walkthrough is wanted.
 
 The quest loop is `/quest` → tutoring or hints → `/answer` → `/done`. A wrong answer can be revised and resubmitted; the latest check remains authoritative. While a curated quest is active, the general `/check` wizard is disabled so a different expression cannot accidentally replace the quest target. The quest's skill ID also overrides model classification when the learning event is recorded. See [review quests](REVIEW_QUESTS.md) for selection and rotation rules.
+
+The browser dashboard provides explicit course selection and direct quest checking for every Precalculus subject. The terminal `/quest` command remains review-driven across eligible practiced skills and begins a new learner on Calculus foundations.
 
 Run `/check` after entering an active problem and an answer. The latest conclusive check is attached to the problem, shown to the tutor on the next turn, and used as the authoritative correctness result when `/done` records progress. If the answer changes, run `/check` again. An inconclusive result is retained as provenance but does not override the reported outcome. See [deterministic verification](DETERMINISTIC_VERIFICATION.md) for supported notation and limits.
 

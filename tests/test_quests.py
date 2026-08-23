@@ -19,8 +19,8 @@ class QuestDeckTests(unittest.TestCase):
         cls.verifier = CalculusVerifier()
 
     def test_catalog_ids_are_unique_and_samples_are_verified(self) -> None:
-        self.assertEqual(20, len(self.deck.quests))
-        self.assertEqual(20, len({quest.id for quest in self.deck.quests}))
+        self.assertEqual(40, len(self.deck.quests))
+        self.assertEqual(40, len({quest.id for quest in self.deck.quests}))
         for quest in self.deck.quests:
             with self.subTest(quest=quest.id):
                 result = quest.check(quest.sample_answer, self.verifier)
@@ -28,7 +28,10 @@ class QuestDeckTests(unittest.TestCase):
 
     def test_public_quest_does_not_reveal_sample_or_symbolic_target(self) -> None:
         quest = self.deck.quests[0]
-        public = quest.public_dict(skill_name="Calculus foundations")
+        public = quest.public_dict(
+            skill_name="Calculus foundations",
+            course="calculus",
+        )
         self.assertNotIn("sample_answer", public)
         self.assertNotIn("verification", public)
         self.assertEqual("/answer YOUR_EXPRESSION", public["answer_command"])
@@ -56,6 +59,26 @@ class QuestDeckTests(unittest.TestCase):
                 self.assertEqual("chain_rule", review.quest.skill_id)
                 self.assertEqual("chain-square-root", review.quest.id)
                 self.assertFalse(review.due)
+
+    def test_precalculus_recommendation_starts_with_exponents(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with LearningStore(Path(directory) / "sensei.db") as store:
+                recommendation = self.deck.recommend(
+                    store,
+                    now=NOW,
+                    course="precalculus",
+                )
+        self.assertEqual(
+            "precalc_exponent_properties",
+            recommendation.quest.skill_id,
+        )
+        self.assertEqual("precalculus", recommendation.course)
+        precalculus_quests = [
+            quest
+            for quest in self.deck.public_quests()
+            if quest["course"] == "precalculus"
+        ]
+        self.assertEqual(20, len(precalculus_quests))
 
 
 if __name__ == "__main__":

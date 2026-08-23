@@ -1,14 +1,14 @@
 # Sensei
 
-Sensei is a local-first, adaptive calculus tutor. It is intended to teach through guided practice, remember demonstrated skills and misconceptions, and turn progress into an RPG-style mastery system without requiring paid model inference.
+Sensei is a local-first, adaptive math tutor. It teaches through guided practice, remembers demonstrated skills and misconceptions, and turns progress into an RPG-style mastery system without requiring paid model inference.
 
 Repository: [GizmosGarage/Sensei](https://github.com/GizmosGarage/Sensei)
 
 ## Project status
 
-**Phase 5 complete: review quests and local RPG dashboard**
+**Phase 6 complete: interactive dashboard and Precalculus path**
 
-Sensei now turns scheduled review into playable, verifier-backed quests and renders progress in a loopback-only browser dashboard. The terminal tutor combines a local language model, persistent SQLite memory, and a restricted symbolic verifier; the dashboard reads that same student-owned database without cloud storage or hosted inference. The provisional local stack is:
+Sensei now has a 20-subject Precalculus path alongside Calculus I. Its loopback-only dashboard can switch courses, filter topics, launch a verifier-backed quest, check the answer locally, and explicitly record XP and mastery into the same student-owned SQLite memory used by the terminal tutor. No hosted inference or cloud storage is involved. The provisional local stack is:
 
 - `llama.cpp` b10549 with its Vulkan backend
 - Qwen 3.5 9B Q4_K_M as the default tutor model
@@ -37,11 +37,13 @@ Inside the tutor, use `/check derivative`, `/check limit`, `/check antiderivativ
 python -m sensei --prompt "Evaluate lim_(x->0) sin(x)/x" --mode hint
 ```
 
-Start a scheduled challenge with `/quest`, submit it with `/answer`, and record a cleared quest with `/done`. In another terminal, open the local dashboard:
+Start a scheduled terminal challenge with `/quest`, submit it with `/answer`, and record it with `/done`. Or open the local dashboard:
 
 ```powershell
 python -m sensei.dashboard
 ```
+
+Choose **Precalculus** or **Calculus**, select **Practice topic** on any subject, enter an expression, choose **Check answer**, and then **Record attempt** to save XP and mastery. See the [Precalculus path](docs/PRECALCULUS.md) and [dashboard guide](docs/LOCAL_DASHBOARD.md).
 
 ## Product principles
 
@@ -63,6 +65,7 @@ python -m sensei.dashboard
 - [Learning memory and progression](docs/LEARNING_MEMORY.md)
 - [Deterministic verification](docs/DETERMINISTIC_VERIFICATION.md)
 - [Review quests](docs/REVIEW_QUESTS.md)
+- [Precalculus path](docs/PRECALCULUS.md)
 - [Local RPG dashboard](docs/LOCAL_DASHBOARD.md)
 - [Local-first architecture decision](docs/decisions/0001-local-first-architecture.md)
 - [Runtime and default-model decision](docs/decisions/0002-runtime-and-default-model.md)
@@ -70,6 +73,7 @@ python -m sensei.dashboard
 - [Learning-memory architecture decision](docs/decisions/0004-learning-memory-and-progression.md)
 - [Deterministic-verification decision](docs/decisions/0005-deterministic-verification.md)
 - [Quest-and-dashboard decision](docs/decisions/0006-local-quests-and-dashboard.md)
+- [Interactive-course-dashboard decision](docs/decisions/0007-interactive-course-dashboard.md)
 - [Project log](docs/PROJECT_LOG.md)
 
 ## Planned phases
@@ -79,4 +83,5 @@ python -m sensei.dashboard
 3. ~~Add persistent skill, attempt, and misconception tracking.~~
 4. ~~Add deterministic calculus verification.~~
 5. ~~Build guided review quests and a portfolio-ready interface.~~
-6. **Bring tutor conversation into the dashboard and expand quest coverage.**
+6. ~~Add an interactive dashboard practice loop and a complete Precalculus topic path.~~
+7. **Bring local-model coaching conversation into the dashboard and deepen each topic's quest pool.**

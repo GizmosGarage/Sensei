@@ -15,6 +15,8 @@ Nothing becomes a learning attempt automatically. Finish an active problem expli
 
 Without an argument, the local model classifies the observable student work. With an argument, the student supplies the reported outcome. The database records that report and its `model` or `student` source.
 
+In the dashboard, **Check answer** is also non-durable. **Record attempt** is the explicit persistence action after a conclusive verifier result. The server consumes a single-use checked-attempt token so the same result cannot be recorded twice.
+
 If the active problem also has a conclusive `/check` result, deterministic verification becomes authoritative for correctness. The original report is still stored beside the effective outcome. An inconclusive check does not override either the student or model report.
 
 The model returns exactly five extraction fields:
@@ -34,7 +36,11 @@ flowchart LR
     Session[Bounded problem session] --> Verify[Optional deterministic check]
     Session -->|/done| Extract[Local event extraction]
     Verify --> Extract
+    Dashboard[Dashboard quest] --> Check[Deterministic check]
+    Check --> BrowserEvent[Server-owned quest event]
+    Dashboard -->|Record attempt| BrowserEvent
     Extract --> Validate[Exact schema validation]
+    BrowserEvent --> Validate
     Validate -->|one transaction| DB[(SQLite learning memory)]
     DB --> Progress[XP, mastery, review]
     DB --> Context[Compact weak-skill context]
@@ -43,12 +49,12 @@ flowchart LR
 
 Only the active problem, structured event, and concise observable evidence cross into durable memory. The raw message list is discarded when the problem resets.
 
-## Schema version 3
+## Schema version 4
 
 | Table | Purpose |
 | --- | --- |
 | `schema_migrations` | Records applied database versions. |
-| `skills` | Seeds the versioned 17-skill catalog and prerequisites. |
+| `skills` | Seeds the versioned 37-skill course catalog and prerequisites. |
 | `attempts` | Stores one completed problem's structured evidence and help use. |
 | `misconceptions` | Consolidates repeated misconception descriptions by skill. |
 | `mastery` | Stores the current evidence score, counts, streak, and review date per skill. |
@@ -59,6 +65,8 @@ Foreign keys are enabled and the mutation for one attempt is atomic. The databas
 Schema version 2 added `reported_outcome`, `effective_outcome_source`, verification status and kind, verifier version, submitted and expected expressions, and a concise check detail to each attempt. Existing version-1 attempts migrate automatically: their original outcome becomes the report, their effective source is `reported`, and their verification status is `unverified`.
 
 Schema version 3 adds the optional `quest_id`. Existing attempts migrate with a null quest ID. Curated quests supply an authoritative skill ID; when their answer is also conclusively verified, progression confidence is 1.0 because neither the skill classification nor correctness depends on the model.
+
+Schema version 4 adds a required `course` field to every skill. Existing skill rows migrate as Calculus, then catalog synchronization assigns the 20 new Precalculus skills and preserves all prior mastery and attempt relationships. Course is returned with skill progress, recommendations, and recent attempts so the dashboard can present separate paths without creating separate databases.
 
 The outcome trust order is:
 
@@ -131,8 +139,8 @@ Default exports and backups are created under ignored `data/exports/` and `data/
 
 ## Current limitations
 
-- Deterministic checks cover a deliberately restricted Calculus I expression grammar; unsupported work remains student-reported or model-classified.
-- The skill catalog currently targets a broad Calculus I sequence rather than a specific college syllabus.
+- Deterministic checks cover a deliberately restricted single-variable expression grammar; unsupported work remains student-reported or model-classified.
+- The catalog provides broad Precalculus and Calculus I paths rather than mirroring one specific college syllabus.
 - One local database represents one learner; profiles and multi-user isolation are not implemented.
 - Misconceptions accumulate but do not yet have an evidence-based resolution workflow.
 - Review intervals and mastery weights are transparent heuristics that still need evaluation.

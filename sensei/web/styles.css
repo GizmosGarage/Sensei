@@ -44,7 +44,8 @@ code {
 }
 
 button:focus-visible,
-a:focus-visible {
+a:focus-visible,
+input:focus-visible {
   outline: 2px solid var(--jade-bright);
   outline-offset: 3px;
 }
@@ -127,6 +128,34 @@ footer {
   gap: 12px;
 }
 
+.course-switch {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.course-switch button {
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  transition: color 160ms ease, background 160ms ease;
+}
+
+.course-switch button:hover,
+.course-switch button.active {
+  color: var(--ink);
+  background: var(--jade);
+}
+
 .local-badge {
   gap: 8px;
   color: var(--muted);
@@ -150,6 +179,61 @@ footer {
   background: rgba(255, 255, 255, 0.025);
   cursor: pointer;
   transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+}
+
+.primary-button,
+.secondary-button,
+.practice-button {
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 700;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.primary-button {
+  padding: 11px 15px;
+  border: 1px solid var(--jade-bright);
+  color: var(--ink);
+  background: var(--jade);
+}
+
+.secondary-button,
+.practice-button {
+  border: 1px solid var(--line-bright);
+  color: var(--paper);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.secondary-button {
+  padding: 10px 14px;
+}
+
+.practice-button {
+  width: 100%;
+  margin-top: 18px;
+  padding: 9px 11px;
+  color: var(--jade-bright);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.primary-button:hover,
+.secondary-button:hover,
+.practice-button:hover {
+  transform: translateY(-1px);
+}
+
+.secondary-button:hover,
+.practice-button:hover {
+  border-color: var(--jade);
+  background: rgba(123, 198, 164, 0.08);
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+  transform: none;
 }
 
 .icon-button {
@@ -468,15 +552,130 @@ footer {
   text-transform: uppercase;
 }
 
-.quest-action code {
+.quest-action .primary-button {
   margin: 9px 0;
-  color: var(--jade-bright);
-  font-family: ui-monospace, "Cascadia Mono", monospace;
-  font-size: 24px;
+  font-size: 13px;
 }
 
 .quest-action small b {
   color: var(--paper);
+}
+
+.arena-section[hidden] {
+  display: none;
+}
+
+.arena-section {
+  margin-bottom: 82px;
+  padding: 38px;
+  border-color: rgba(123, 198, 164, 0.3);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32), 0 0 50px rgba(123, 198, 164, 0.05);
+}
+
+.arena-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.arena-heading h2 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 38px;
+  font-weight: 400;
+}
+
+.arena-prompt {
+  max-width: 850px;
+  margin: 24px 0 27px;
+  color: #d3dad4;
+  font-size: 17px;
+  line-height: 1.6;
+}
+
+.answer-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.answer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.answer-row input {
+  min-width: 0;
+  padding: 13px 15px;
+  border: 1px solid var(--line-bright);
+  border-radius: 10px;
+  color: var(--paper);
+  background: rgba(0, 0, 0, 0.24);
+  font-family: ui-monospace, "Cascadia Mono", monospace;
+  font-size: 15px;
+}
+
+.answer-row input::placeholder {
+  color: #68736d;
+}
+
+.notation-help {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.notation-help code {
+  color: var(--jade-bright);
+  font-family: ui-monospace, "Cascadia Mono", monospace;
+}
+
+.answer-feedback[hidden] {
+  display: none;
+}
+
+.answer-feedback {
+  margin-top: 22px;
+  padding: 19px 20px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--gold);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.answer-feedback.correct {
+  border-left-color: var(--jade);
+}
+
+.answer-feedback.incorrect {
+  border-left-color: var(--danger);
+}
+
+.answer-feedback p {
+  margin: 6px 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.answer-feedback .feedback-status {
+  color: var(--paper);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.feedback-expected {
+  font-family: ui-monospace, "Cascadia Mono", monospace;
+  font-size: 11px;
+}
+
+.answer-feedback .secondary-button {
+  margin-top: 11px;
 }
 
 .mastery-section,
@@ -522,7 +721,7 @@ footer {
 }
 
 .skill-card {
-  min-height: 188px;
+  min-height: 238px;
   padding: 21px;
   box-shadow: none;
   transition: transform 180ms ease, border-color 180ms ease;
@@ -744,9 +943,8 @@ footer p {
     border-top: 1px solid var(--line);
   }
 
-  .quest-action code {
+  .quest-action .primary-button {
     margin: 0;
-    font-size: 18px;
   }
 
   .skill-grid {
@@ -767,6 +965,14 @@ footer p {
 
   .local-badge {
     display: none;
+  }
+
+  .topbar-actions {
+    gap: 7px;
+  }
+
+  .course-switch button {
+    padding-inline: 9px;
   }
 
   .hero {
@@ -804,6 +1010,10 @@ footer p {
     grid-column: 1;
   }
 
+  .arena-section {
+    padding: 28px;
+  }
+
   .section-heading {
     display: block;
   }
@@ -836,6 +1046,25 @@ footer p {
 
   .rank-card {
     padding: 25px;
+  }
+
+  .topbar {
+    height: auto;
+    min-height: 76px;
+    gap: 12px;
+  }
+
+  .brand small,
+  .icon-button#refresh-button {
+    display: none;
+  }
+
+  .course-switch button {
+    font-size: 9px;
+  }
+
+  .answer-row {
+    grid-template-columns: 1fr;
   }
 
   .skill-grid {

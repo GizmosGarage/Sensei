@@ -4,21 +4,34 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 import sqlite3
 import sys
+import threading
+import time
 import webbrowser
+from dataclasses import asdict, dataclass
 from datetime import timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from sensei.quests import DEFAULT_QUESTS_PATH, QuestDeck
+from sensei.learning import LearningEvent, Outcome
+from sensei.quests import DEFAULT_QUESTS_PATH, QuestDeck, QuestTemplate
 from sensei.storage import DEFAULT_DATABASE_PATH, DEFAULT_SKILLS_PATH, LearningStore, utc_now
+from sensei.verification import (
+    CalculusVerifier,
+    MathInputError,
+    VerificationResult,
+    VerificationStatus,
+)
 
 
 LOOPBACK_HOST = "127.0.0.1"
 DEFAULT_DASHBOARD_PORT = 8765
+MAX_REQUEST_BYTES = 4_096
+ATTEMPT_TOKEN_LIFETIME_SECONDS = 15 * 60
 WEB_DIRECTORY = Path(__file__).resolve().parent / "web"
 ASSETS = {
     "/": (WEB_DIRECTORY / "index.html", "text/html; charset=utf-8"),
@@ -35,14 +48,68 @@ ASSETS = {
 
 def rank_name(level: int) -> str:
     if level >= 10:
-        return "Calculus Master"
+        return "Math Master"
     if level >= 7:
-        return "Integral Scholar"
+        return "Function Scholar"
     if level >= 4:
-        return "Derivative Adept"
+        return "Algebra Adept"
     if level >= 2:
-        return "Limit Initiate"
+        return "Foundation Initiate"
     return "Dojo Novice"
+
+
+def verification_document(result: VerificationResult) -> dict[str, str | None]:
+    return {
+        "kind": result.kind.value,
+        "status": result.status.value,
+        "submitted": result.submitted,
+        "expected": result.expected,
+        "detail": result.detail,
+        "verifier_version": result.verifier_version,
+    }
+
+
+@dataclass(frozen=True)
+class PendingAttempt:
+    quest: QuestTemplate
+    result: VerificationResult
+    issued_at: float
+
+
+class PendingAttemptStore:
+    """Keeps checked browser attempts one-time and process-local until recorded."""
+
+    def __init__(self) -> None:
+        self._attempts: dict[str, PendingAttempt] = {}
+        self._lock = threading.Lock()
+
+    def issue(self, quest: QuestTemplate, result: VerificationResult) -> str:
+        token = secrets.token_urlsafe(32)
+        now = time.monotonic()
+        with self._lock:
+            self._prune(now)
+            self._attempts[token] = PendingAttempt(quest, result, now)
+        return token
+
+    def consume(self, token: str) -> PendingAttempt:
+        now = time.monotonic()
+        with self._lock:
+            self._prune(now)
+            try:
+                return self._attempts.pop(token)
+            except KeyError as error:
+                raise ValueError(
+                    "This checked attempt is missing, expired, or already recorded."
+                ) from error
+
+    def _prune(self, now: float) -> None:
+        expired = [
+            token
+            for token, attempt in self._attempts.items()
+            if now - attempt.issued_at > ATTEMPT_TOKEN_LIFETIME_SECONDS
+        ]
+        for token in expired:
+            del self._attempts[token]
 
 
 class DashboardService:
@@ -67,24 +134,93 @@ class DashboardService:
             )
             profile = store.profile()
             profile["rank_name"] = rank_name(int(profile["level"]))
-            recommendation = deck.recommend(store)
+            recommendations = {
+                course: deck.recommend(store, course=course).public_dict()
+                for course in ("precalculus", "calculus")
+            }
             review = store.review_recommendation()
+            skills = store.skill_progress()
             return {
                 "generated_at": utc_now().astimezone(timezone.utc).isoformat(),
                 "profile": profile,
-                "next_quest": recommendation.public_dict(),
+                "next_quest": recommendations["calculus"],
+                "next_quests": recommendations,
+                "quests": deck.public_quests(),
                 "review": review,
-                "skills": store.skill_progress(),
-                "recent_attempts": store.recent_attempts(),
+                "skills": skills,
+                "recent_attempts": store.recent_attempts(limit=50),
                 "catalog": {
                     "quest_count": len(deck.quests),
                     "quest_skill_count": len(deck.eligible_skill_ids),
+                    "courses": {
+                        course: sum(
+                            skill["course"] == course for skill in skills
+                        )
+                        for course in ("precalculus", "calculus")
+                    },
                 },
                 "runtime": {
                     "host": LOOPBACK_HOST,
                     "storage": "Local SQLite",
                     "model_access": "Tutor process only",
                 },
+            }
+
+    def check_quest(
+        self,
+        quest_id: str,
+        answer: str,
+    ) -> tuple[QuestTemplate, VerificationResult]:
+        deck = QuestDeck.load(
+            self.quests_path,
+            skills_path=self.skills_path,
+        )
+        quest = deck.get(quest_id)
+        return quest, quest.check(answer, CalculusVerifier())
+
+    def record_attempt(
+        self,
+        attempt: PendingAttempt,
+    ) -> dict[str, Any]:
+        result = attempt.result
+        if result.status is VerificationStatus.INCONCLUSIVE:
+            raise ValueError("An inconclusive check cannot be recorded as a quest result.")
+        outcome = (
+            Outcome.CORRECT
+            if result.status is VerificationStatus.VERIFIED_CORRECT
+            else Outcome.INCORRECT
+        )
+        evidence = (
+            "The local verifier confirmed the submitted dashboard quest answer."
+            if outcome is Outcome.CORRECT
+            else "The local verifier rejected the submitted dashboard quest answer."
+        )
+        event = LearningEvent(
+            skill_id=attempt.quest.skill_id,
+            outcome=outcome,
+            misconception=None,
+            evidence=evidence,
+            confidence=1.0,
+            problem=attempt.quest.prompt,
+            hints_used=0,
+            solution_revealed=False,
+            tutor_turns=1,
+            outcome_source="student",
+            reported_outcome=outcome,
+            effective_outcome_source="verifier",
+            verification_status=result.status.value,
+            verification_kind=result.kind.value,
+            verifier_version=result.verifier_version,
+            verification_submitted=result.submitted,
+            verification_expected=result.expected,
+            verification_detail=result.detail,
+            quest_id=attempt.quest.id,
+        )
+        with LearningStore(self.database_path, self.skills_path) as store:
+            update = store.record_event(event)
+            return {
+                "progress": asdict(update),
+                "profile": store.profile(),
             }
 
 
@@ -97,6 +233,8 @@ class SenseiDashboardServer(ThreadingHTTPServer):
         service: DashboardService,
     ) -> None:
         self.service = service
+        self.csrf_token = secrets.token_urlsafe(32)
+        self.pending_attempts = PendingAttemptStore()
         super().__init__(server_address, DashboardRequestHandler)
 
 
@@ -134,6 +272,41 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         body = json.dumps(document, ensure_ascii=False).encode("utf-8")
         self._send_bytes(status, body, "application/json; charset=utf-8")
 
+    def _read_json(self, expected_fields: set[str]) -> dict[str, object]:
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0]
+        if content_type.strip().lower() != "application/json":
+            raise ValueError("Requests must use application/json.")
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except ValueError as error:
+            raise ValueError("A valid Content-Length is required.") from error
+        if not 1 <= length <= MAX_REQUEST_BYTES:
+            raise ValueError(
+                f"Request body must be from 1 to {MAX_REQUEST_BYTES} bytes."
+            )
+        try:
+            document = json.loads(self.rfile.read(length))
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise ValueError("Request body must be valid UTF-8 JSON.") from error
+        if not isinstance(document, dict) or set(document) != expected_fields:
+            raise ValueError(
+                f"Request fields must be exactly {sorted(expected_fields)}."
+            )
+        return document
+
+    def _write_is_allowed(self) -> bool:
+        supplied = self.headers.get("X-Sensei-CSRF", "")
+        if not secrets.compare_digest(supplied, self.server.csrf_token):
+            return False
+        origin = self.headers.get("Origin")
+        expected_origin = f"http://{LOOPBACK_HOST}:{self.server.server_address[1]}"
+        if origin and origin != expected_origin:
+            return False
+        return self.headers.get("Sec-Fetch-Site", "same-origin") in {
+            "same-origin",
+            "none",
+        }
+
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         path = urlsplit(self.path).path
         if path == "/healthz":
@@ -146,6 +319,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self.log_error("Dashboard snapshot failed: %s", error)
                 self._send_json(500, {"error": "Dashboard data is unavailable."})
                 return
+            document["csrf_token"] = self.server.csrf_token
             self._send_json(200, document)
             return
         asset = ASSETS.get(path)
@@ -165,6 +339,52 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             content_type,
             cache_control="no-cache",
         )
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        if not self._write_is_allowed():
+            self._send_json(403, {"error": "Local write authorization failed."})
+            return
+        path = urlsplit(self.path).path
+        try:
+            if path == "/api/quest/check":
+                document = self._read_json({"quest_id", "answer"})
+                quest_id = document["quest_id"]
+                answer = document["answer"]
+                if not isinstance(quest_id, str) or not isinstance(answer, str):
+                    raise ValueError("Quest ID and answer must be text.")
+                quest, result = self.server.service.check_quest(quest_id, answer)
+                attempt_token = (
+                    None
+                    if result.status is VerificationStatus.INCONCLUSIVE
+                    else self.server.pending_attempts.issue(quest, result)
+                )
+                self._send_json(
+                    200,
+                    {
+                        "result": verification_document(result),
+                        "attempt_token": attempt_token,
+                    },
+                )
+                return
+            if path == "/api/quest/record":
+                document = self._read_json({"attempt_token"})
+                token = document["attempt_token"]
+                if not isinstance(token, str) or len(token) > 200:
+                    raise ValueError("Attempt token must be valid text.")
+                attempt = self.server.pending_attempts.consume(token)
+                self._send_json(
+                    200,
+                    self.server.service.record_attempt(attempt),
+                )
+                return
+        except (MathInputError, ValueError) as error:
+            self._send_json(400, {"error": str(error)})
+            return
+        except (OSError, sqlite3.Error) as error:
+            self.log_error("Dashboard write failed: %s", error)
+            self._send_json(500, {"error": "The local attempt could not be recorded."})
+            return
+        self._send_json(404, {"error": "Not found."})
 
     def log_message(self, format: str, *args: object) -> None:
         print(

@@ -1,5 +1,30 @@
 # Project log
 
+## 2026-08-22 - Milestone 6: interactive Precalculus dashboard
+
+### Completed
+
+- Expanded the versioned skill catalog from 17 Calculus disciplines to 37 course-aware disciplines, including the requested 20-subject Precalculus path in its specified order.
+- Added one curated, production-verifier-backed starter quest for every Precalculus subject, increasing the catalog from 20 to 40 quests.
+- Added independent Precalculus and Calculus review recommendations while retaining the existing learning-memory and scheduling rules.
+- Migrated local learning memory to schema version 4 with a required course identity and automatic v1, v2, and v3 upgrade coverage.
+- Turned the dashboard into an interactive practice surface with course tabs, unit filters, subject-specific launch buttons, answer entry, local symbolic checking, feedback, and explicit attempt recording.
+- Added protected loopback write endpoints with exact-shape request validation, a per-process CSRF token, origin/fetch-metadata checks, bounded request bodies, and short-lived one-time checked-attempt tokens.
+- Kept SQLite as the only durable source of truth; the browser still stores no learning history, answer keys, cookies, or model state.
+- Renamed progression ranks to course-neutral titles and released the application metadata as version 0.5.0.
+
+### Verification
+
+All 67 automated tests pass, including every one of the 40 quest sample answers, schema upgrades from versions 1-3, exact Precalculus subject coverage, answer-key-free public representations, protected HTTP writes, correct XP persistence, and one-time token replay rejection. Python bytecode compilation also succeeds.
+
+The refreshed local preview on `127.0.0.1:8765` returned health `ok`, 37 skills, 40 public quests, exactly 20 Precalculus skills and quests, the properties-of-exponents starting recommendation, and a live write-session token. The dashboard was handed off to the in-app browser. It remains local-only and was not published to a hosting service.
+
+### Next milestone
+
+- Bring local-model coaching conversation into the browser quest arena.
+- Add several difficulty tiers and validated variations per Precalculus subject.
+- Add course-specific achievements only after their learning meaning and anti-inflation rules are documented.
+
 ## 2026-08-21 - Milestone 5: review quests and local RPG dashboard
 
 ### Completed

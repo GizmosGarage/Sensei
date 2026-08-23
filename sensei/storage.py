@@ -16,7 +16,7 @@ from sensei.learning import LearningEvent, Outcome
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = REPOSITORY_ROOT / "data" / "sensei.db"
 DEFAULT_SKILLS_PATH = REPOSITORY_ROOT / "config" / "skills.json"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 MIGRATION_1 = """
@@ -111,6 +111,11 @@ UPDATE attempts SET reported_outcome = outcome WHERE reported_outcome IS NULL;
 
 MIGRATION_3 = """
 ALTER TABLE attempts ADD COLUMN quest_id TEXT;
+"""
+
+MIGRATION_4 = """
+ALTER TABLE skills ADD COLUMN course TEXT NOT NULL DEFAULT 'calculus'
+    CHECK (course IN ('precalculus', 'calculus'));
 """
 
 
@@ -253,6 +258,14 @@ class LearningStore:
                 (3, utc_now().isoformat()),
             )
             self.connection.commit()
+            applied.add(3)
+        if 4 not in applied:
+            self.connection.executescript(MIGRATION_4)
+            self.connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (4, utc_now().isoformat()),
+            )
+            self.connection.commit()
         current = self.connection.execute(
             "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations"
         ).fetchone()["version"]
@@ -263,7 +276,7 @@ class LearningStore:
 
     def _load_skills(self) -> list[dict[str, Any]]:
         document = json.loads(self.skills_path.read_text(encoding="utf-8"))
-        if document.get("schema_version") != 1:
+        if document.get("schema_version") != 2:
             raise ValueError("Unsupported skill-catalog schema version.")
         skills = document.get("skills")
         if not isinstance(skills, list) or not skills:
@@ -272,6 +285,10 @@ class LearningStore:
         if len(ids) != len(skills):
             raise ValueError("Skill IDs must be unique.")
         for skill in skills:
+            if skill.get("course") not in {"precalculus", "calculus"}:
+                raise ValueError(
+                    f"Skill {skill.get('id')!r} has an invalid course."
+                )
             unknown = set(skill["prerequisites"]) - ids
             if unknown:
                 raise ValueError(
@@ -284,9 +301,11 @@ class LearningStore:
             for sort_order, skill in enumerate(self._load_skills()):
                 self.connection.execute(
                     """INSERT INTO skills(
-                           id, name, unit, description, prerequisites_json, sort_order
-                       ) VALUES (?, ?, ?, ?, ?, ?)
+                           id, course, name, unit, description,
+                           prerequisites_json, sort_order
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(id) DO UPDATE SET
+                           course = excluded.course,
                            name = excluded.name,
                            unit = excluded.unit,
                            description = excluded.description,
@@ -294,6 +313,7 @@ class LearningStore:
                            sort_order = excluded.sort_order""",
                     (
                         skill["id"],
+                        skill["course"],
                         skill["name"],
                         skill["unit"],
                         skill["description"],
@@ -512,7 +532,7 @@ class LearningStore:
 
     def skill_progress(self) -> list[dict[str, Any]]:
         rows = self.connection.execute(
-            """SELECT s.id, s.name, s.unit, s.sort_order,
+            """SELECT s.id, s.course, s.name, s.unit, s.sort_order,
                       COALESCE(m.mastery_score, 0) AS mastery_score,
                       COALESCE(m.attempts_count, 0) AS attempts_count,
                       COALESCE(m.correct_count, 0) AS correct_count,
@@ -534,7 +554,8 @@ class LearningStore:
     def _practiced_skill_rows(self) -> list[sqlite3.Row]:
         return list(
             self.connection.execute(
-                """SELECT s.id, s.name, m.mastery_score, m.attempts_count,
+                """SELECT s.id, s.course, s.name,
+                          m.mastery_score, m.attempts_count,
                           m.correct_count, m.next_review_at,
                           (SELECT mc.description
                              FROM misconceptions mc
@@ -599,7 +620,8 @@ class LearningStore:
         rows = self.connection.execute(
             """SELECT a.id, a.problem, a.outcome, a.reported_outcome,
                       a.effective_outcome_source, a.verification_status,
-                      a.quest_id, a.created_at, s.id AS skill_id, s.name AS skill_name
+                      a.quest_id, a.created_at, s.id AS skill_id, s.course AS course,
+                      s.name AS skill_name
                  FROM attempts a
                  JOIN skills s ON s.id = a.skill_id
                 ORDER BY a.created_at DESC, a.id DESC

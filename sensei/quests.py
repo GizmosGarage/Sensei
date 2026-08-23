@@ -96,13 +96,14 @@ class QuestTemplate:
             variable=variable,
         )
 
-    def public_dict(self, *, skill_name: str) -> dict[str, str]:
+    def public_dict(self, *, skill_name: str, course: str) -> dict[str, str]:
         """Return only fields safe to expose before a student answers."""
 
         return {
             "id": self.id,
             "skill_id": self.skill_id,
             "skill_name": skill_name,
+            "course": course,
             "title": self.title,
             "prompt": self.prompt,
             "check_kind": self.kind.value,
@@ -114,6 +115,7 @@ class QuestTemplate:
 class QuestRecommendation:
     quest: QuestTemplate
     skill_name: str
+    course: str
     due: bool
     reason: str
     mastery_score: float
@@ -122,7 +124,10 @@ class QuestRecommendation:
 
     def public_dict(self) -> dict[str, Any]:
         return {
-            **self.quest.public_dict(skill_name=self.skill_name),
+            **self.quest.public_dict(
+                skill_name=self.skill_name,
+                course=self.course,
+            ),
             "due": self.due,
             "reason": self.reason,
             "mastery_score": self.mastery_score,
@@ -141,11 +146,13 @@ def _nonempty_text(document: Mapping[str, object], field: str, limit: int) -> st
     return value
 
 
-def _load_skill_catalog(path: Path) -> dict[str, str]:
+def _load_skill_catalog(path: Path) -> tuple[dict[str, str], dict[str, str]]:
     document = json.loads(path.read_text(encoding="utf-8"))
-    if document.get("schema_version") != 1:
+    if document.get("schema_version") != 2:
         raise QuestCatalogError("Unsupported skill-catalog schema version.")
-    return {skill["id"]: skill["name"] for skill in document["skills"]}
+    names = {skill["id"]: skill["name"] for skill in document["skills"]}
+    courses = {skill["id"]: skill["course"] for skill in document["skills"]}
+    return names, courses
 
 
 def _parse_quest(
@@ -206,6 +213,7 @@ class QuestDeck:
         self,
         quests: list[QuestTemplate],
         skill_names: Mapping[str, str],
+        skill_courses: Mapping[str, str],
     ) -> None:
         if not quests:
             raise QuestCatalogError("The quest catalog must contain at least one quest.")
@@ -214,6 +222,8 @@ class QuestDeck:
             raise QuestCatalogError("Quest IDs must be unique.")
         self.quests = tuple(quests)
         self.skill_names = dict(skill_names)
+        self.skill_courses = dict(skill_courses)
+        self.by_id = {quest.id: quest for quest in self.quests}
         self.by_skill: dict[str, tuple[QuestTemplate, ...]] = {}
         for skill_id in self.skill_names:
             matching = tuple(quest for quest in self.quests if quest.skill_id == skill_id)
@@ -227,7 +237,7 @@ class QuestDeck:
         *,
         skills_path: Path = DEFAULT_SKILLS_PATH,
     ) -> "QuestDeck":
-        skill_names = _load_skill_catalog(skills_path.resolve())
+        skill_names, skill_courses = _load_skill_catalog(skills_path.resolve())
         document = json.loads(path.resolve().read_text(encoding="utf-8"))
         if not isinstance(document, dict) or set(document) != {
             "schema_version",
@@ -242,7 +252,7 @@ class QuestDeck:
         quests = [
             _parse_quest(item, skill_names=skill_names) for item in raw_quests
         ]
-        return cls(quests, skill_names)
+        return cls(quests, skill_names, skill_courses)
 
     @property
     def eligible_skill_ids(self) -> frozenset[str]:
@@ -253,16 +263,30 @@ class QuestDeck:
         store: LearningStore,
         *,
         now: datetime | None = None,
+        course: str | None = None,
     ) -> QuestRecommendation:
+        if course not in {None, "precalculus", "calculus"}:
+            raise ValueError("Course must be precalculus or calculus.")
+        eligible = {
+            skill_id
+            for skill_id in self.eligible_skill_ids
+            if course is None or self.skill_courses[skill_id] == course
+        }
         review = store.review_recommendation(
             now=now,
-            skill_ids=self.eligible_skill_ids,
+            skill_ids=eligible,
         )
         if review is None:
-            quest = self.by_skill.get("calculus_foundations", self.quests)[0]
+            starting_skill = (
+                "precalc_exponent_properties"
+                if course == "precalculus"
+                else "calculus_foundations"
+            )
+            quest = self.by_skill.get(starting_skill, self.quests)[0]
             return QuestRecommendation(
                 quest=quest,
                 skill_name=self.skill_names[quest.skill_id],
+                course=self.skill_courses[quest.skill_id],
                 due=True,
                 reason="Begin your path with a foundation quest.",
                 mastery_score=0.0,
@@ -281,9 +305,25 @@ class QuestDeck:
         return QuestRecommendation(
             quest=quest,
             skill_name=str(review["name"]),
+            course=str(review["course"]),
             due=due,
             reason=reason,
             mastery_score=float(review["mastery_score"]),
             mastery_label=str(review["mastery_label"]),
             next_review_at=str(review["next_review_at"]),
         )
+
+    def public_quests(self) -> list[dict[str, str]]:
+        return [
+            quest.public_dict(
+                skill_name=self.skill_names[quest.skill_id],
+                course=self.skill_courses[quest.skill_id],
+            )
+            for quest in self.quests
+        ]
+
+    def get(self, quest_id: str) -> QuestTemplate:
+        try:
+            return self.by_id[quest_id]
+        except KeyError as error:
+            raise ValueError(f"Unknown quest ID: {quest_id!r}.") from error

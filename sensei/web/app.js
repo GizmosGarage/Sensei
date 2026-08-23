@@ -4,7 +4,10 @@ const byId = (id) => document.getElementById(id);
 const skillTemplate = byId("skill-template");
 const historyTemplate = byId("history-template");
 let dashboardState = null;
+let activeCourse = "precalculus";
 let activeUnit = "All";
+let activeQuest = null;
+let attemptToken = null;
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, Number(value) || 0));
@@ -12,6 +15,8 @@ function clamp(value, minimum, maximum) {
 
 function shortUnit(unit) {
   const names = {
+    "Precalculus algebra": "Algebra",
+    "Exponential and logarithmic functions": "Exp & logs",
     "Limits and continuity": "Limits",
     "Applications of derivatives": "Applications",
     "Integration techniques": "Techniques",
@@ -53,13 +58,22 @@ function renderQuest(quest) {
   byId("quest-reason").textContent = `${quest.reason} ${Math.round(quest.mastery_score)}/100 mastery.`;
 }
 
+function questsForCourse() {
+  return dashboardState.quests.filter((quest) => quest.course === activeCourse);
+}
+
+function questForSkill(skillId) {
+  return questsForCourse().find((quest) => quest.skill_id === skillId);
+}
+
 function filterSkills() {
   document.querySelectorAll(".skill-card").forEach((card) => {
     card.classList.toggle("hidden", activeUnit !== "All" && card.dataset.unit !== activeUnit);
   });
   document.querySelectorAll("#unit-filters button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.unit === activeUnit);
-    button.setAttribute("aria-pressed", String(button.dataset.unit === activeUnit));
+    const selected = button.dataset.unit === activeUnit;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", String(selected));
   });
 }
 
@@ -93,6 +107,10 @@ function renderSkills(skills) {
     card.querySelector(".skill-track i").style.width = `${clamp(skill.mastery_score, 0, 100)}%`;
     card.querySelector(".skill-attempts").textContent = `${skill.attempts_count} attempt${skill.attempts_count === 1 ? "" : "s"}`;
     card.querySelector(".skill-review").textContent = relativeDate(skill.next_review_at);
+    const practiceButton = card.querySelector(".practice-button");
+    const quest = questForSkill(skill.id);
+    practiceButton.disabled = !quest;
+    practiceButton.addEventListener("click", () => openArena(quest));
     grid.append(card);
   });
   renderFilters(skills);
@@ -100,16 +118,19 @@ function renderSkills(skills) {
 }
 
 function renderHistory(attempts) {
+  const relevant = attempts
+    .filter((attempt) => attempt.course === activeCourse)
+    .slice(0, 6);
   const list = byId("history-list");
   list.replaceChildren();
-  if (!attempts.length) {
+  if (!relevant.length) {
     const empty = document.createElement("p");
     empty.className = "empty-history";
-    empty.textContent = "No attempts yet. Enter /quest in the tutor to begin your training log.";
+    empty.textContent = `No ${activeCourse} attempts yet. Start a quest above to begin your training log.`;
     list.append(empty);
     return;
   }
-  attempts.forEach((attempt) => {
+  relevant.forEach((attempt) => {
     const row = historyTemplate.content.firstElementChild.cloneNode(true);
     row.dataset.outcome = attempt.outcome;
     row.querySelector(".history-skill").textContent = attempt.quest_id
@@ -125,15 +146,138 @@ function renderHistory(attempts) {
   });
 }
 
+function resetArenaFeedback() {
+  attemptToken = null;
+  const feedback = byId("answer-feedback");
+  feedback.hidden = true;
+  feedback.className = "answer-feedback";
+  byId("feedback-status").textContent = "";
+  byId("feedback-detail").textContent = "";
+  byId("feedback-expected").textContent = "";
+  byId("record-attempt").hidden = true;
+}
+
+function openArena(quest) {
+  if (!quest) return;
+  activeQuest = quest;
+  resetArenaFeedback();
+  byId("arena-skill").textContent = quest.skill_name;
+  byId("arena-title").textContent = quest.title;
+  byId("arena-prompt").textContent = quest.prompt;
+  byId("quest-answer").value = "";
+  const arena = byId("quest-arena");
+  arena.hidden = false;
+  arena.scrollIntoView({ behavior: "smooth", block: "center" });
+  byId("quest-answer").focus({ preventScroll: true });
+}
+
+function closeArena() {
+  activeQuest = null;
+  resetArenaFeedback();
+  byId("quest-arena").hidden = true;
+}
+
+function renderCourse() {
+  activeUnit = "All";
+  document.querySelectorAll(".course-switch button").forEach((button) => {
+    const selected = button.dataset.course === activeCourse;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+  const courseName = activeCourse === "precalculus" ? "Precalculus" : "Calculus";
+  const skills = dashboardState.skills.filter((skill) => skill.course === activeCourse);
+  renderQuest(dashboardState.next_quests[activeCourse]);
+  renderSkills(skills);
+  renderHistory(dashboardState.recent_attempts);
+  byId("course-label").textContent = `${courseName} path`;
+  byId("mastery-heading").textContent = `${courseName} subjects`;
+  byId("catalog-quests").textContent = questsForCourse().length;
+  byId("catalog-skills").textContent = dashboardState.catalog.courses[activeCourse];
+}
+
 function render(state) {
   dashboardState = state;
   renderProfile(state.profile);
-  renderQuest(state.next_quest);
-  renderSkills(state.skills);
-  renderHistory(state.recent_attempts);
-  byId("catalog-quests").textContent = state.catalog.quest_count;
-  byId("catalog-skills").textContent = state.catalog.quest_skill_count;
+  renderCourse();
   byId("updated-at").textContent = `Local memory synced ${new Date(state.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+async function postJson(path, document) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Sensei-CSRF": dashboardState.csrf_token,
+    },
+    body: JSON.stringify(document),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || `Request failed: ${response.status}`);
+  return result;
+}
+
+async function checkAnswer() {
+  if (!activeQuest) return;
+  const answer = byId("quest-answer").value.trim();
+  if (!answer) {
+    byId("quest-answer").focus();
+    return;
+  }
+  const button = byId("check-answer");
+  button.disabled = true;
+  resetArenaFeedback();
+  try {
+    const response = await postJson("/api/quest/check", {
+      quest_id: activeQuest.id,
+      answer,
+    });
+    const result = response.result;
+    attemptToken = response.attempt_token;
+    const feedback = byId("answer-feedback");
+    const statusNames = {
+      verified_correct: "Correct — well struck.",
+      verified_incorrect: "Not quite — study the comparison.",
+      inconclusive: "Sensei could not verify that form.",
+    };
+    const statusClass = result.status === "verified_correct"
+      ? "correct"
+      : result.status === "verified_incorrect" ? "incorrect" : "inconclusive";
+    feedback.classList.add(statusClass);
+    byId("feedback-status").textContent = statusNames[result.status] || result.status;
+    byId("feedback-detail").textContent = result.detail;
+    byId("feedback-expected").textContent = result.status === "verified_incorrect"
+      ? `Reference form: ${result.expected}`
+      : "";
+    byId("record-attempt").hidden = !attemptToken;
+    feedback.hidden = false;
+  } catch (error) {
+    const feedback = byId("answer-feedback");
+    feedback.classList.add("inconclusive");
+    byId("feedback-status").textContent = "The local verifier could not check this answer.";
+    byId("feedback-detail").textContent = error.message;
+    feedback.hidden = false;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function recordAttempt() {
+  if (!attemptToken) return;
+  const button = byId("record-attempt");
+  button.disabled = true;
+  try {
+    const response = await postJson("/api/quest/record", {
+      attempt_token: attemptToken,
+    });
+    attemptToken = null;
+    byId("feedback-expected").textContent = `Recorded: +${response.progress.xp_awarded} XP · ${Math.round(response.progress.mastery_score)}/100 mastery.`;
+    button.hidden = true;
+    await loadDashboard();
+  } catch (error) {
+    byId("feedback-detail").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function loadDashboard() {
@@ -151,6 +295,22 @@ async function loadDashboard() {
   }
 }
 
+document.querySelectorAll(".course-switch button").forEach((button) => {
+  button.addEventListener("click", () => {
+    activeCourse = button.dataset.course;
+    closeArena();
+    if (dashboardState) renderCourse();
+  });
+});
+byId("start-next-quest").addEventListener("click", () => {
+  if (dashboardState) openArena(dashboardState.next_quests[activeCourse]);
+});
+byId("close-arena").addEventListener("click", closeArena);
+byId("check-answer").addEventListener("click", checkAnswer);
+byId("record-attempt").addEventListener("click", recordAttempt);
+byId("quest-answer").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") checkAnswer();
+});
 byId("refresh-button").addEventListener("click", loadDashboard);
 loadDashboard();
 setInterval(() => {
