@@ -201,6 +201,7 @@ class DashboardTests(unittest.TestCase):
                 ],
                 "hint": "Read the integers before each formula.",
                 "solution": "Balanced coefficients define the reaction's mole ratios.",
+                "graph": None,
             }
         )
         fresh_draft = json.dumps(
@@ -215,6 +216,7 @@ class DashboardTests(unittest.TestCase):
                 "options": ["1", "2", "3", "6"],
                 "hint": "Compare the coefficients before N2 and H2.",
                 "solution": "The equation has a 1:3 mole ratio, so C is correct.",
+                "graph": None,
             }
         )
 
@@ -278,6 +280,7 @@ class DashboardTests(unittest.TestCase):
             )
             self.assertEqual("Chemistry", generated["quest"]["subject"])
             self.assertEqual("beginner", generated["quest"]["difficulty"])
+            self.assertIsNone(generated["quest"]["graph"])
             self.assertNotIn("answer", generated["quest"])
             generated_again = post(
                 "/api/study/generate",
@@ -340,6 +343,56 @@ class DashboardTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as rejected:
                 urlopen(request, timeout=5)
             self.assertEqual(403, rejected.exception.code)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_invalid_adaptive_generation_returns_a_retryable_status(self) -> None:
+        skill = self.service.create_study_topic(
+            subject="Mathematics",
+            topic="Limits",
+            context="Practice direct substitution.",
+            difficulty="beginner",
+        )
+
+        class InvalidProvider:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def complete(self, messages, on_token=None):
+                self.calls += 1
+                return CompletionResult("{}", "stop")
+
+        provider = InvalidProvider()
+        server = create_server(
+            self.service,
+            port=0,
+            adaptive_factory=AdaptiveQuestFactory(provider),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://{LOOPBACK_HOST}:{server.server_address[1]}"
+        try:
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                csrf_token = json.load(response)["csrf_token"]
+            request = Request(
+                f"{base_url}/api/study/generate",
+                data=json.dumps(
+                    {"skill_id": skill["id"], "difficulty": "beginner"}
+                ).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Origin": base_url,
+                    "X-Sensei-CSRF": csrf_token,
+                },
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as rejected:
+                urlopen(request, timeout=5)
+            self.assertEqual(503, rejected.exception.code)
+            self.assertIn("Please try again", json.load(rejected.exception)["error"])
+            self.assertEqual(3, provider.calls)
         finally:
             server.shutdown()
             server.server_close()

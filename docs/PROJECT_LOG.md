@@ -12,12 +12,15 @@
 - Pinned dashboard assets to the server version that loaded them, preventing a running older API from serving newer incompatible JavaScript after a code update.
 - Added action-local generation status so topic-card, recommendation, and New encounter failures are visible beside the button that initiated them.
 - Added an explicit concise-output budget plus a bounded walkthrough margin so slightly verbose local-model solutions do not consume every generation retry.
+- Added validated coordinate-graph data and an accessible SVG renderer so graphical topics require a real graph instead of a prose-only graph description.
+- Removed redundant adaptive-answer comparison text and tightened generation instructions so prompts, hints, and walkthroughs do not restate the same facts.
+- Retried transient local-model and HTTP generation failures once, while returning generation-specific errors that keep the current encounter usable.
 - Migrated schema version 5 difficulty values safely into schema version 6: Foundation to Beginner, Adaptive to Intermediate, and Challenge to Advanced.
 - Released the application metadata as version 0.8.0.
 
 ### Verification
 
-All 81 automated tests pass. New coverage verifies the four difficulty contracts, selected-level propagation through draft and review requests, per-request HTTP overrides, saved topic defaults, bounded walkthrough verbosity, and foreign-key-safe migration of existing difficulty data.
+All 86 automated tests pass. Coverage includes the four difficulty contracts, selected-level propagation, real graph requirements and validation, concise graph-reading prompts, transient generation recovery, per-request HTTP overrides, saved topic defaults, bounded walkthrough verbosity, and foreign-key-safe migration of existing difficulty data.
 
 ### Next milestone
 

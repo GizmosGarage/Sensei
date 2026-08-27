@@ -10,6 +10,7 @@ let attemptToken = null;
 let generatingQuestion = false;
 const difficultySelections = new Map();
 const generationStatuses = new Map();
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
 const DIFFICULTIES = Object.freeze({
   beginner: {
@@ -96,6 +97,81 @@ function restoreGenerationStatus(target, statusKey) {
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, Number(value) || 0));
+}
+
+function svgElement(name, attributes = {}, copy = "") {
+  const element = document.createElementNS(SVG_NAMESPACE, name);
+  Object.entries(attributes).forEach(([key, value]) => element.setAttribute(key, String(value)));
+  if (copy) element.textContent = copy;
+  return element;
+}
+
+function graphTicks(minimum, maximum, targetCount = 9) {
+  const roughStep = (maximum - minimum) / targetCount;
+  const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+  const normalized = roughStep / magnitude;
+  const step = (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * magnitude;
+  const ticks = [];
+  for (let value = Math.ceil(minimum / step) * step; value <= maximum + step * 0.001; value += step) {
+    ticks.push(Math.abs(value) < step * 0.001 ? 0 : Number(value.toPrecision(12)));
+  }
+  return ticks;
+}
+
+function formatGraphTick(value) {
+  return Number(value.toPrecision(4)).toString();
+}
+
+function renderGraph(graph) {
+  const figure = byId("arena-graph");
+  const svg = byId("arena-graph-svg");
+  svg.replaceChildren();
+  figure.hidden = !graph;
+  if (!graph) {
+    byId("arena-graph-description").textContent = "";
+    return;
+  }
+
+  const width = 720;
+  const height = 400;
+  const margin = { top: 24, right: 28, bottom: 48, left: 60 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const xPosition = (value) => margin.left + ((value - graph.x_min) / (graph.x_max - graph.x_min)) * plotWidth;
+  const yPosition = (value) => margin.top + ((graph.y_max - value) / (graph.y_max - graph.y_min)) * plotHeight;
+
+  graphTicks(graph.x_min, graph.x_max).forEach((tick) => {
+    const x = xPosition(tick);
+    svg.append(
+      svgElement("line", { x1: x, y1: margin.top, x2: x, y2: height - margin.bottom, class: tick === 0 ? "graph-axis" : "graph-grid" }),
+      svgElement("text", { x, y: height - margin.bottom + 22, class: "graph-tick", "text-anchor": "middle" }, formatGraphTick(tick)),
+    );
+  });
+  graphTicks(graph.y_min, graph.y_max).forEach((tick) => {
+    const y = yPosition(tick);
+    svg.append(
+      svgElement("line", { x1: margin.left, y1: y, x2: width - margin.right, y2: y, class: tick === 0 ? "graph-axis" : "graph-grid" }),
+      svgElement("text", { x: margin.left - 12, y: y + 4, class: "graph-tick", "text-anchor": "end" }, formatGraphTick(tick)),
+    );
+  });
+  svg.append(
+    svgElement("text", { x: width - margin.right, y: height - 13, class: "graph-axis-label", "text-anchor": "end" }, "x"),
+    svgElement("text", { x: 23, y: margin.top + 3, class: "graph-axis-label" }, "y"),
+  );
+
+  graph.curves.forEach((curve) => {
+    const coordinates = curve.map(([x, y]) => `${xPosition(x)},${yPosition(y)}`).join(" ");
+    svg.append(svgElement("polyline", { points: coordinates, class: "graph-curve" }));
+  });
+  graph.points.forEach((point) => {
+    svg.append(svgElement("circle", {
+      cx: xPosition(point.x),
+      cy: yPosition(point.y),
+      r: 6,
+      class: `graph-point ${point.type}`,
+    }));
+  });
+  byId("arena-graph-description").textContent = graph.description;
 }
 
 function relativeDate(value) {
@@ -232,6 +308,7 @@ function resetArenaFeedback() {
   feedback.className = "answer-feedback";
   byId("feedback-status").textContent = "";
   byId("feedback-detail").textContent = "";
+  byId("feedback-detail").hidden = false;
   byId("feedback-expected").textContent = "";
   byId("solution-copy").hidden = true;
   byId("solution-text").textContent = "";
@@ -271,6 +348,7 @@ function openArena(quest) {
   byId("arena-difficulty").textContent = `${DIFFICULTIES[difficulty].label} difficulty`;
   configureDifficultySelect(byId("arena-difficulty-select"), difficulty, quest.skill_id);
   byId("arena-prompt").textContent = quest.prompt;
+  renderGraph(quest.graph);
   byId("quest-answer").value = "";
   byId("quest-answer").placeholder = quest.answer_type === "multiple_choice" ? "Choose A, B, C, or D" : "Enter only the requested value";
   byId("notation-help").hidden = quest.answer_type !== "expression";
@@ -304,7 +382,19 @@ async function startAdaptiveQuest(skillId, difficulty, statusTarget = byId("form
   byId("start-next-quest").disabled = true;
   byId("new-question").disabled = true;
   try {
-    const response = await postJson("/api/study/generate", { skill_id: skillId, difficulty });
+    const response = await postJson(
+      "/api/study/generate",
+      { skill_id: skillId, difficulty },
+      {
+        retries: 1,
+        onRetry: () => setGenerationStatus(
+          statusTarget,
+          "The first draft did not finish cleanly. Sensei is trying once more…",
+          "working",
+          skillId,
+        ),
+      },
+    );
     openArena({ ...response.quest, challenge_token: response.challenge_token });
     setGenerationStatus(statusTarget, "Quest validated. Enter the arena.", "success", skillId);
   } catch (error) {
@@ -346,18 +436,36 @@ async function createFocus(event) {
 function closeArena() {
   activeQuest = null;
   resetArenaFeedback();
+  renderGraph(null);
   byId("quest-arena").hidden = true;
 }
 
-async function postJson(path, document) {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Sensei-CSRF": dashboardState.csrf_token },
-    body: JSON.stringify(document),
-  });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || `Request failed: ${response.status}`);
-  return result;
+async function postJson(path, document, { retries = 0, onRetry = null } = {}) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Sensei-CSRF": dashboardState.csrf_token },
+        body: JSON.stringify(document),
+      });
+      let result = {};
+      try {
+        result = await response.json();
+      } catch {
+        // Preserve the HTTP status below when a local connection returns no JSON.
+      }
+      if (!response.ok) {
+        const error = new Error(result.error || `Request failed: ${response.status}`);
+        error.retryable = response.status >= 500;
+        throw error;
+      }
+      return result;
+    } catch (error) {
+      const retryable = error.retryable || error instanceof TypeError;
+      if (!retryable || attempt >= retries) throw error;
+      if (onRetry) onRetry(attempt + 1);
+    }
+  }
 }
 
 async function checkAnswer() {
@@ -377,7 +485,10 @@ async function checkAnswer() {
     const correct = result.status === "verified_correct";
     feedback.classList.add(correct ? "correct" : "incorrect");
     byId("feedback-status").textContent = correct ? "Victory — your answer holds." : "Not yet — this encounter has another opening.";
-    byId("feedback-detail").textContent = result.detail;
+    const detail = byId("feedback-detail");
+    const showTechnicalDetail = activeQuest.source !== "adaptive";
+    detail.textContent = showTechnicalDetail ? result.detail : "";
+    detail.hidden = !showTechnicalDetail;
     byId("feedback-expected").textContent = correct ? "" : `Validated answer: ${result.expected}`;
     if (response.solution) {
       byId("solution-text").textContent = response.solution;
@@ -390,6 +501,7 @@ async function checkAnswer() {
     feedback.classList.add("inconclusive");
     byId("feedback-status").textContent = "Sensei could not check that answer form.";
     byId("feedback-detail").textContent = error.message;
+    byId("feedback-detail").hidden = false;
     feedback.hidden = false;
   } finally {
     button.disabled = false;
@@ -408,6 +520,7 @@ async function recordAttempt() {
     await loadDashboard();
   } catch (error) {
     byId("feedback-detail").textContent = error.message;
+    byId("feedback-detail").hidden = false;
   } finally {
     button.disabled = false;
   }

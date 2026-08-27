@@ -28,7 +28,12 @@ from sensei.models import (
     ModelCatalog,
     model_path,
 )
-from sensei.practice import AdaptiveQuest, AdaptiveQuestFactory, problem_fingerprint
+from sensei.practice import (
+    AdaptiveQuest,
+    AdaptiveQuestFactory,
+    PracticeGenerationError,
+    adaptive_quest_fingerprint,
+)
 from sensei.providers import LlamaCppProvider
 from sensei.quests import DEFAULT_QUESTS_PATH, QuestDeck, QuestTemplate
 from sensei.runtime import DEFAULT_RUNTIME_DIRECTORY, LocalLlamaRuntime, RuntimeSettings
@@ -198,6 +203,7 @@ class ChallengeStore:
         self._challenges: dict[str, PendingChallenge] = {}
         self._last_prompts: dict[str, str] = {}
         self._adaptive_prompts: dict[str, deque[str]] = {}
+        self._adaptive_fingerprints: dict[str, deque[str]] = {}
         self._lock = threading.Lock()
 
     def issue(self, skill_id: str) -> tuple[str, QuestTemplate]:
@@ -232,12 +238,16 @@ class ChallengeStore:
         for _ in range(ADAPTIVE_DISTINCT_ATTEMPTS):
             with self._lock:
                 session_recent = tuple(self._adaptive_prompts.get(skill_id, ()))
+                session_fingerprints = tuple(
+                    self._adaptive_fingerprints.get(skill_id, ())
+                )
             recent = tuple(dict.fromkeys((*avoid_prompts, *session_recent)))[
                 -ADAPTIVE_PROMPT_HISTORY:
             ]
             quest = self.adaptive_factory.generate(
                 skill,
                 avoid_prompts=recent,
+                avoid_fingerprints=session_fingerprints,
             )
             now = time.monotonic()
             with self._lock:
@@ -246,13 +256,18 @@ class ChallengeStore:
                     skill_id,
                     deque(maxlen=ADAPTIVE_PROMPT_HISTORY),
                 )
-                fingerprints = {problem_fingerprint(prompt) for prompt in history}
-                if problem_fingerprint(quest.prompt) in fingerprints:
+                fingerprint_history = self._adaptive_fingerprints.setdefault(
+                    skill_id,
+                    deque(maxlen=ADAPTIVE_PROMPT_HISTORY),
+                )
+                fingerprint = adaptive_quest_fingerprint(quest)
+                if fingerprint in fingerprint_history:
                     continue
                 token = secrets.token_urlsafe(32)
                 self._challenges[token] = PendingChallenge(quest, now)
                 self._last_prompts[skill_id] = quest.prompt
                 history.append(quest.prompt)
+                fingerprint_history.append(fingerprint)
                 return token, quest
         raise RuntimeError(
             "Sensei could not produce a distinct new encounter for this topic."
@@ -667,12 +682,29 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     self.server.service.record_attempt(attempt),
                 )
                 return
+        except PracticeGenerationError as error:
+            self.log_error("Adaptive generation failed validation: %s", error)
+            self._send_json(
+                503,
+                {
+                    "error": (
+                        "Sensei could not finish a valid new encounter. "
+                        "Please try again."
+                    )
+                },
+            )
+            return
         except (MathInputError, ValueError) as error:
             self._send_json(400, {"error": str(error)})
             return
         except (OSError, RuntimeError, sqlite3.Error) as error:
             self.log_error("Dashboard write failed: %s", error)
-            self._send_json(500, {"error": "The local attempt could not be recorded."})
+            message = (
+                "Sensei could not generate a new encounter. Please try again."
+                if path in {"/api/study/generate", "/api/quest/generate"}
+                else "The local attempt could not be recorded."
+            )
+            self._send_json(500, {"error": message})
             return
         self._send_json(404, {"error": "Not found."})
 
@@ -791,7 +823,9 @@ def _adaptive_factory(
             )
         )
         base_url = stack.enter_context(runtime).base_url
-    return AdaptiveQuestFactory(LlamaCppProvider(base_url, selected_id, seed=-1))
+    return AdaptiveQuestFactory(
+        LlamaCppProvider(base_url, selected_id, seed=-1, max_tokens=1_024)
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
