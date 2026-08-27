@@ -334,6 +334,7 @@ class DashboardService:
                     "host": LOOPBACK_HOST,
                     "storage": "Local SQLite",
                     "model_access": "Local dashboard process",
+                    "practice_api_version": 2,
                 },
             }
 
@@ -356,6 +357,14 @@ class DashboardService:
     def study_topic(self, skill_id: str) -> dict[str, Any]:
         with LearningStore(self.database_path, self.skills_path) as store:
             return store.study_topic(skill_id)
+
+    def study_topic_for_generation(
+        self,
+        skill_id: str,
+        difficulty: str,
+    ) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.set_study_topic_difficulty(skill_id, difficulty)
 
     def recent_topic_prompts(self, skill_id: str) -> tuple[str, ...]:
         with LearningStore(self.database_path, self.skills_path) as store:
@@ -450,6 +459,10 @@ class SenseiDashboardServer(ThreadingHTTPServer):
         self.challenges = ChallengeStore(quest_factory, adaptive_factory)
         self.adaptive_available = adaptive_factory is not None
         self.pending_attempts = PendingAttemptStore()
+        self.assets = {
+            path: (asset_path.read_bytes(), content_type)
+            for path, (asset_path, content_type) in ASSETS.items()
+        }
         super().__init__(server_address, DashboardRequestHandler)
 
 
@@ -540,17 +553,11 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             )
             self._send_json(200, document)
             return
-        asset = ASSETS.get(path)
+        asset = self.server.assets.get(path)
         if asset is None:
             self._send_json(404, {"error": "Not found."})
             return
-        asset_path, content_type = asset
-        try:
-            body = asset_path.read_bytes()
-        except OSError as error:
-            self.log_error("Dashboard asset failed: %s", error)
-            self._send_json(500, {"error": "Dashboard asset is unavailable."})
-            return
+        body, content_type = asset
         self._send_bytes(
             200,
             body,
@@ -579,11 +586,22 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"study_topic": skill})
                 return
             if path == "/api/study/generate":
-                document = self._read_json({"skill_id"})
+                document = self._read_json({"skill_id", "difficulty"})
                 skill_id = document["skill_id"]
-                if not isinstance(skill_id, str) or len(skill_id) > 80:
-                    raise ValueError("Study topic ID must be valid text.")
-                skill = self.server.service.study_topic(skill_id)
+                difficulty = document["difficulty"]
+                if (
+                    not isinstance(skill_id, str)
+                    or len(skill_id) > 80
+                    or not isinstance(difficulty, str)
+                    or len(difficulty) > 20
+                ):
+                    raise ValueError(
+                        "Study topic ID and problem difficulty must be valid text."
+                    )
+                skill = self.server.service.study_topic_for_generation(
+                    skill_id,
+                    difficulty,
+                )
                 challenge_token, quest = self.server.challenges.issue_adaptive(
                     skill,
                     avoid_prompts=self.server.service.recent_topic_prompts(skill_id),

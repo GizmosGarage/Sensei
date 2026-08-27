@@ -43,6 +43,7 @@ class DashboardTests(unittest.TestCase):
             self.assertNotIn("sample_answer", quest)
             self.assertNotIn("verification", quest)
         self.assertEqual("Local SQLite", state["runtime"]["storage"])
+        self.assertEqual(2, state["runtime"]["practice_api_version"])
         self.assertEqual(40, state["catalog"]["quest_count"])
         self.assertEqual(20, state["catalog"]["courses"]["precalculus"])
         self.assertEqual(37, state["catalog"]["generated_skill_count"])
@@ -76,6 +77,7 @@ class DashboardTests(unittest.TestCase):
     def test_loopback_server_serves_health_api_and_dashboard_assets(self) -> None:
         server = create_server(self.service, port=0)
         self.assertEqual(LOOPBACK_HOST, server.server_address[0])
+        self.assertIn(b"Sensei // Adaptive Dojo", server.assets["/"][0])
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base_url = f"http://{LOOPBACK_HOST}:{server.server_address[1]}"
@@ -218,6 +220,7 @@ class DashboardTests(unittest.TestCase):
 
         class Provider:
             def __init__(self) -> None:
+                self.requests = []
                 self.responses = [
                     draft,
                     json.dumps({"approved": True, "reason": "Checked."}),
@@ -227,12 +230,14 @@ class DashboardTests(unittest.TestCase):
                 ]
 
             def complete(self, messages, on_token=None):
+                self.requests.append(list(messages))
                 return CompletionResult(self.responses.pop(0), "stop")
 
+        provider = Provider()
         server = create_server(
             self.service,
             port=0,
-            adaptive_factory=AdaptiveQuestFactory(Provider()),
+            adaptive_factory=AdaptiveQuestFactory(provider),
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -261,19 +266,25 @@ class DashboardTests(unittest.TestCase):
                     "subject": "Chemistry",
                     "topic": "Stoichiometry",
                     "context": "Mole ratios",
-                    "difficulty": "foundation",
+                    "difficulty": "beginner",
                 },
                 csrf_token,
             )
             skill_id = focus["study_topic"]["id"]
             generated = post(
-                "/api/study/generate", {"skill_id": skill_id}, csrf_token
+                "/api/study/generate",
+                {"skill_id": skill_id, "difficulty": "beginner"},
+                csrf_token,
             )
             self.assertEqual("Chemistry", generated["quest"]["subject"])
+            self.assertEqual("beginner", generated["quest"]["difficulty"])
             self.assertNotIn("answer", generated["quest"])
             generated_again = post(
-                "/api/study/generate", {"skill_id": skill_id}, csrf_token
+                "/api/study/generate",
+                {"skill_id": skill_id, "difficulty": "expert"},
+                csrf_token,
             )
+            self.assertEqual("expert", generated_again["quest"]["difficulty"])
             self.assertNotEqual(
                 generated["quest"]["prompt"],
                 generated_again["quest"]["prompt"],
@@ -297,7 +308,16 @@ class DashboardTests(unittest.TestCase):
             with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
                 state = json.load(response)
             self.assertEqual("Stoichiometry", state["study_topics"][0]["name"])
+            self.assertEqual("expert", state["study_topics"][0]["difficulty"])
             self.assertEqual(1, state["study_topics"][0]["attempts_count"])
+            self.assertIn(
+                "Beginner (level 1 of 4)",
+                provider.requests[0][-1]["content"],
+            )
+            self.assertIn(
+                "Expert (level 4 of 4)",
+                provider.requests[2][-1]["content"],
+            )
         finally:
             server.shutdown()
             server.server_close()

@@ -6,9 +6,9 @@ Repository: [GizmosGarage/Sensei](https://github.com/GizmosGarage/Sensei)
 
 ## Project status
 
-**Phase 8 complete: learner-directed adaptive questlines**
+**Phase 9 complete: explicit four-level problem difficulty**
 
-Sensei no longer requires a premade course path. Its loopback-only dashboard accepts a subject, a topic, an optional learning objective or source excerpt, and a starting intensity. The local model drafts a confined problem, a separate review pass recomputes and approves it, and a deterministic answer contract checks the learner's response. Each learner-created topic joins the same student-owned SQLite memory, XP economy, mastery scoring, and spaced-review queue as the original verifier-backed math foundation. No hosted inference or cloud storage is involved. The local stack is:
+Sensei no longer requires a premade course path. Its loopback-only dashboard accepts a subject, a topic, an optional learning objective or source excerpt, and an explicit Beginner, Intermediate, Advanced, or Expert problem difficulty. Difficulty is chosen per encounter from every generation action and remembered as that topic's next default. The local model drafts a confined problem at that level, a separate review pass recomputes and approves both its answer and difficulty fit, and a deterministic answer contract checks the learner's response. Each learner-created topic joins the same student-owned SQLite memory, XP economy, mastery scoring, and spaced-review queue as the original verifier-backed math foundation. No hosted inference or cloud storage is involved. The local stack is:
 
 - `llama.cpp` b10549 with its Vulkan backend
 - Qwen 3.5 9B Q4_K_M as the default tutor model
@@ -90,4 +90,5 @@ Enter a subject such as **Chemistry**, a focus such as **Stoichiometry**, and an
 6. ~~Add an interactive dashboard practice loop and a complete Precalculus topic path.~~
 7. ~~Generate fresh, deterministically validated questions inside every subject.~~
 8. ~~Replace fixed course selection with learner-created, locally generated questlines.~~
-9. **Bring multi-turn coaching conversation into each dashboard encounter.**
+9. ~~Add explicit per-problem Beginner, Intermediate, Advanced, and Expert difficulty.~~
+10. **Bring multi-turn coaching conversation into each dashboard encounter.**

@@ -17,12 +17,19 @@ Use `--fast` for the lighter Qwen 3.5 4B model. An editable installation also pr
 1. Enter a broad subject, such as **Mathematics** or **Chemistry**.
 2. Enter the topic or skill to practice.
 3. Optionally paste an objective, notes excerpt, formula emphasis, or test scope.
-4. Choose foundation, adaptive, or challenge intensity and forge a quest.
+4. Choose the problem difficulty: **Beginner**, **Intermediate**, **Advanced**, or **Expert**.
 5. Solve the expression question or select one of four conceptual answers.
 6. Ask for the stored hint if needed, check the response, and study the walkthrough.
 7. Claim XP to record mastery and place the topic into spaced review.
 
-The topic remains in the learner's atlas. Later encounters can start from its card or from Sensei's review recommendation. Re-entering the same subject and topic refreshes its emphasis and difficulty without fragmenting its history.
+The topic remains in the learner's atlas. Later encounters can start from its card or from Sensei's review recommendation. Every generation action has its own difficulty selector, including **New encounter** in the open arena. The most recent choice becomes that topic's default without fragmenting its history.
+
+The four levels have fixed generation contracts:
+
+- **Beginner:** one direct step using the topic's essential concepts, familiar values, and clear guidance.
+- **Intermediate:** a standard application with two or three connected steps.
+- **Advanced:** multi-step reasoning, less obvious setup, and less scaffolding.
+- **Expert:** the topic's most demanding reasonable work, including synthesis or subtle constraints with minimal scaffolding.
 
 ## Validation boundary
 
@@ -68,7 +75,7 @@ Loopback isolation is not multi-user authentication; software already running as
 | --- | --- |
 | `/api/dashboard` | Profile, growing atlas, review data, recent attempts, runtime state, and write-session token. |
 | `POST /api/study/focus` | Creates or refreshes one learner-owned subject/topic focus. |
-| `POST /api/study/generate` | Drafts, reviews, and issues a fresh adaptive quest for that focus. |
+| `POST /api/study/generate` | Drafts, reviews, and issues a fresh quest for a focus at the required `difficulty`. |
 | `POST /api/quest/check` | Checks one server-held quest and reveals its walkthrough after submission. |
 | `POST /api/quest/record` | Consumes a one-time token and records XP, mastery, and review state. |
 | `POST /api/quest/generate` | Preserved legacy route for deterministic catalog generators. |

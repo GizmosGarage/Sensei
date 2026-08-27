@@ -8,6 +8,91 @@ let activeQuest = null;
 let recommendedTopic = null;
 let attemptToken = null;
 let generatingQuestion = false;
+const difficultySelections = new Map();
+const generationStatuses = new Map();
+
+const DIFFICULTIES = Object.freeze({
+  beginner: {
+    label: "Beginner",
+    description: "Core concepts, familiar values, and one direct step with clear guidance.",
+  },
+  intermediate: {
+    label: "Intermediate",
+    description: "A standard application with two or three connected steps.",
+  },
+  advanced: {
+    label: "Advanced",
+    description: "Multi-step reasoning, a less obvious setup, and less scaffolding.",
+  },
+  expert: {
+    label: "Expert",
+    description: "The topic’s most demanding problems, with synthesis, edge cases, and minimal scaffolding.",
+  },
+});
+
+const LEGACY_DIFFICULTIES = Object.freeze({ foundation: "beginner", adaptive: "intermediate", challenge: "advanced" });
+
+function canonicalDifficulty(value) {
+  const normalized = LEGACY_DIFFICULTIES[value] || value;
+  return DIFFICULTIES[normalized] ? normalized : "intermediate";
+}
+
+function updateDifficultyHelp(select) {
+  const difficulty = canonicalDifficulty(select.value);
+  select.value = difficulty;
+  select.title = DIFFICULTIES[difficulty].description;
+  const help = select.closest(".difficulty-control")?.querySelector(".difficulty-help");
+  if (help) help.textContent = DIFFICULTIES[difficulty].description;
+}
+
+function syncDifficultyControls(skillId, difficulty) {
+  difficulty = canonicalDifficulty(difficulty);
+  difficultySelections.set(skillId, difficulty);
+  document.querySelectorAll("[data-difficulty-select][data-skill-id]").forEach((select) => {
+    if (select.dataset.skillId === skillId) {
+      select.value = difficulty;
+      updateDifficultyHelp(select);
+      const cardLabel = select.closest(".skill-card")?.querySelector(".skill-difficulty");
+      if (cardLabel) cardLabel.textContent = `Selected · ${DIFFICULTIES[difficulty].label}`;
+    }
+  });
+  if (recommendedTopic?.id === skillId) {
+    byId("quest-prompt").textContent = `Forge a fresh ${recommendedTopic.name.toLowerCase()} encounter at ${DIFFICULTIES[difficulty].label.toLowerCase()} difficulty.`;
+  }
+}
+
+function configureDifficultySelect(select, difficulty, skillId = "") {
+  difficulty = canonicalDifficulty(difficulty);
+  select.value = difficulty;
+  if (skillId) select.dataset.skillId = skillId;
+  else delete select.dataset.skillId;
+  select.onchange = () => {
+    updateDifficultyHelp(select);
+    if (select.dataset.skillId) syncDifficultyControls(select.dataset.skillId, select.value);
+  };
+  updateDifficultyHelp(select);
+}
+
+function selectedDifficulty(topic) {
+  return difficultySelections.get(topic.id) || canonicalDifficulty(topic.difficulty);
+}
+
+function setGenerationStatus(target, message, kind = "", statusKey = "") {
+  if (statusKey) generationStatuses.set(statusKey, { message, kind });
+  if (!target) return;
+  target.textContent = message;
+  target.dataset.kind = kind;
+}
+
+function restoreGenerationStatus(target, statusKey) {
+  const status = generationStatuses.get(statusKey);
+  if (status) {
+    setGenerationStatus(target, status.message, status.kind);
+  } else if (target) {
+    target.textContent = "";
+    target.dataset.kind = "";
+  }
+}
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, Number(value) || 0));
@@ -62,6 +147,9 @@ function renderRecommendation(topics) {
     byId("quest-prompt").textContent = "Add any math or chemistry topic and Sensei will begin building your personal practice path.";
     byId("quest-reason").textContent = "No premade curriculum stands between you and the thing you want to learn.";
     byId("quest-action-label").textContent = "Ready when you are";
+    const difficultySelect = byId("recommendation-difficulty");
+    configureDifficultySelect(difficultySelect, "intermediate");
+    difficultySelect.disabled = true;
     button.disabled = true;
     return;
   }
@@ -70,10 +158,15 @@ function renderRecommendation(topics) {
     return dateDifference || left.mastery_score - right.mastery_score;
   })[0];
   const due = !recommendedTopic.next_review_at || topicPriority(recommendedTopic) <= 0;
+  const difficulty = selectedDifficulty(recommendedTopic);
+  const difficultySelect = byId("recommendation-difficulty");
+  configureDifficultySelect(difficultySelect, difficulty, recommendedTopic.id);
+  difficultySelect.disabled = false;
+  restoreGenerationStatus(byId("recommendation-status"), recommendedTopic.id);
   byId("quest-timing").textContent = due ? "Review ready" : "Suggested next";
-  byId("quest-skill").textContent = `${recommendedTopic.course} · ${recommendedTopic.difficulty}`;
+  byId("quest-skill").textContent = `${recommendedTopic.course} · ${DIFFICULTIES[difficulty].label}`;
   byId("quest-title").textContent = recommendedTopic.name;
-  byId("quest-prompt").textContent = `Forge a fresh ${recommendedTopic.name.toLowerCase()} encounter at your ${recommendedTopic.difficulty} intensity.`;
+  byId("quest-prompt").textContent = `Forge a fresh ${recommendedTopic.name.toLowerCase()} encounter at ${DIFFICULTIES[difficulty].label.toLowerCase()} difficulty.`;
   byId("quest-reason").textContent = recommendedTopic.attempts_count
     ? `${Math.round(recommendedTopic.mastery_score)}/100 mastery · ${relativeDate(recommendedTopic.next_review_at)}.`
     : "This newly mapped topic is ready for its first encounter.";
@@ -90,15 +183,20 @@ function renderTopics(topics) {
     : "No fixed curriculum. Add only what matters to you.";
   topics.forEach((topic) => {
     const card = skillTemplate.content.firstElementChild.cloneNode(true);
+    const difficulty = selectedDifficulty(topic);
     card.querySelector(".skill-subject").textContent = topic.course;
     card.querySelector(".skill-score").textContent = `${Math.round(topic.mastery_score)} / 100`;
-    card.querySelector(".skill-difficulty").textContent = `${topic.difficulty} questline`;
+    card.querySelector(".skill-difficulty").textContent = `Selected · ${DIFFICULTIES[difficulty].label}`;
     card.querySelector(".skill-name").textContent = topic.name;
     card.querySelector(".skill-label").textContent = topic.mastery_label;
     card.querySelector(".skill-track i").style.width = `${clamp(topic.mastery_score, 0, 100)}%`;
     card.querySelector(".skill-attempts").textContent = `${topic.attempts_count} encounter${topic.attempts_count === 1 ? "" : "s"}`;
     card.querySelector(".skill-review").textContent = relativeDate(topic.next_review_at);
-    card.querySelector(".practice-button").addEventListener("click", () => startAdaptiveQuest(topic.id));
+    const difficultySelect = card.querySelector(".topic-difficulty");
+    configureDifficultySelect(difficultySelect, difficulty, topic.id);
+    const generationStatus = card.querySelector(".card-generation-status");
+    restoreGenerationStatus(generationStatus, topic.id);
+    card.querySelector(".practice-button").addEventListener("click", () => startAdaptiveQuest(topic.id, difficultySelect.value, generationStatus));
     grid.append(card);
   });
 }
@@ -164,11 +262,14 @@ function renderOptions(quest) {
 
 function openArena(quest) {
   activeQuest = quest;
+  const difficulty = canonicalDifficulty(quest.difficulty);
+  syncDifficultyControls(quest.skill_id, difficulty);
   resetArenaFeedback();
   byId("arena-skill").textContent = quest.skill_name;
   byId("arena-title").textContent = quest.title;
   byId("arena-subject").textContent = quest.subject;
-  byId("arena-difficulty").textContent = quest.difficulty;
+  byId("arena-difficulty").textContent = `${DIFFICULTIES[difficulty].label} difficulty`;
+  configureDifficultySelect(byId("arena-difficulty-select"), difficulty, quest.skill_id);
   byId("arena-prompt").textContent = quest.prompt;
   byId("quest-answer").value = "";
   byId("quest-answer").placeholder = quest.answer_type === "multiple_choice" ? "Choose A, B, C, or D" : "Enter only the requested value";
@@ -183,20 +284,31 @@ function openArena(quest) {
   if (quest.answer_type === "expression") byId("quest-answer").focus({ preventScroll: true });
 }
 
-async function startAdaptiveQuest(skillId) {
+async function startAdaptiveQuest(skillId, difficulty, statusTarget = byId("form-status")) {
   if (!dashboardState || generatingQuestion) return;
+  if (dashboardState.runtime.practice_api_version !== 2) {
+    setGenerationStatus(
+      statusTarget,
+      "Sensei was updated while this dashboard was running. Restart Sensei, then try again.",
+      "error",
+      skillId,
+    );
+    return;
+  }
+  difficulty = canonicalDifficulty(difficulty || difficultySelections.get(skillId));
+  syncDifficultyControls(skillId, difficulty);
   generatingQuestion = true;
   document.body.classList.add("generating");
-  byId("form-status").textContent = "Sensei is drafting and independently checking your encounter…";
+  setGenerationStatus(statusTarget, "Sensei is drafting and independently checking your encounter…", "working", skillId);
   byId("forge-button").disabled = true;
   byId("start-next-quest").disabled = true;
   byId("new-question").disabled = true;
   try {
-    const response = await postJson("/api/study/generate", { skill_id: skillId });
+    const response = await postJson("/api/study/generate", { skill_id: skillId, difficulty });
     openArena({ ...response.quest, challenge_token: response.challenge_token });
-    byId("form-status").textContent = "Quest validated. Enter the arena.";
+    setGenerationStatus(statusTarget, "Quest validated. Enter the arena.", "success", skillId);
   } catch (error) {
-    byId("form-status").textContent = error.message;
+    setGenerationStatus(statusTarget, error.message, "error", skillId);
   } finally {
     generatingQuestion = false;
     document.body.classList.remove("generating");
@@ -214,15 +326,16 @@ async function createFocus(event) {
   if (!subject || !topic) return;
   byId("form-status").textContent = "Adding this focus to your atlas…";
   byId("forge-button").disabled = true;
+  const difficulty = canonicalDifficulty(byId("difficulty-input").value);
   try {
     const response = await postJson("/api/study/focus", {
       subject,
       topic,
       context: byId("context-input").value.trim(),
-      difficulty: byId("difficulty-input").value,
+      difficulty,
     });
     await loadDashboard();
-    await startAdaptiveQuest(response.study_topic.id);
+    await startAdaptiveQuest(response.study_topic.id, difficulty);
   } catch (error) {
     byId("form-status").textContent = error.message;
   } finally {
@@ -334,10 +447,10 @@ document.querySelectorAll(".prompt-examples button").forEach((button) => {
   });
 });
 byId("start-next-quest").addEventListener("click", () => {
-  if (recommendedTopic) startAdaptiveQuest(recommendedTopic.id);
+  if (recommendedTopic) startAdaptiveQuest(recommendedTopic.id, byId("recommendation-difficulty").value, byId("recommendation-status"));
 });
 byId("new-question").addEventListener("click", () => {
-  if (activeQuest) startAdaptiveQuest(activeQuest.skill_id);
+  if (activeQuest) startAdaptiveQuest(activeQuest.skill_id, byId("arena-difficulty-select").value, byId("arena-generation-status"));
 });
 byId("close-arena").addEventListener("click", closeArena);
 byId("show-hint").addEventListener("click", () => {
@@ -349,5 +462,6 @@ byId("check-answer").addEventListener("click", checkAnswer);
 byId("record-attempt").addEventListener("click", recordAttempt);
 byId("quest-answer").addEventListener("keydown", (event) => { if (event.key === "Enter") checkAnswer(); });
 byId("refresh-button").addEventListener("click", loadDashboard);
+configureDifficultySelect(byId("difficulty-input"), byId("difficulty-input").value);
 loadDashboard();
 setInterval(() => { if (!document.hidden && !generatingQuestion) loadDashboard(); }, 30000);

@@ -1,7 +1,12 @@
 import json
 import unittest
 
-from sensei.practice import AdaptiveQuestFactory, parse_adaptive_quest
+from sensei.practice import (
+    MAX_SOLUTION_CHARACTERS,
+    AdaptiveQuestFactory,
+    PracticeGenerationError,
+    parse_adaptive_quest,
+)
 from sensei.providers import CompletionResult
 from sensei.verification import VerificationStatus
 
@@ -11,7 +16,7 @@ SKILL = {
     "course": "Chemistry",
     "name": "Stoichiometry",
     "description": "Practice mole ratios.",
-    "difficulty": "foundation",
+    "difficulty": "beginner",
 }
 
 
@@ -46,12 +51,40 @@ class AdaptivePracticeTests(unittest.TestCase):
         )
         quest = AdaptiveQuestFactory(provider).generate(SKILL)
         self.assertEqual("Stoichiometry", quest.topic)
+        self.assertEqual("beginner", quest.difficulty)
         self.assertEqual(VerificationStatus.VERIFIED_CORRECT, quest.check("3").status)
         self.assertEqual(VerificationStatus.VERIFIED_INCORRECT, quest.check("6").status)
         public = quest.public_dict()
         self.assertNotIn("answer", public)
         self.assertNotIn("solution", public)
         self.assertEqual(2, len(provider.requests))
+        self.assertIn(
+            "Beginner (level 1 of 4)",
+            provider.requests[0][-1]["content"],
+        )
+        self.assertIn(
+            "Requested problem difficulty: Beginner (level 1 of 4)",
+            provider.requests[1][-1]["content"],
+        )
+
+    def test_all_four_difficulties_have_specific_generation_contracts(self) -> None:
+        expected = {
+            "beginner": ("Beginner (level 1 of 4)", "one direct step"),
+            "intermediate": ("Intermediate (level 2 of 4)", "two or three connected steps"),
+            "advanced": ("Advanced (level 3 of 4)", "multi-step reasoning"),
+            "expert": ("Expert (level 4 of 4)", "subtle edge case or constraint"),
+        }
+        for difficulty, phrases in expected.items():
+            with self.subTest(difficulty=difficulty):
+                messages = AdaptiveQuestFactory._request(
+                    {**SKILL, "difficulty": difficulty},
+                    "",
+                    variation_key="test-variation",
+                    avoid_prompts=(),
+                )
+                request = messages[-1]["content"]
+                for phrase in phrases:
+                    self.assertIn(phrase, request)
 
     def test_repeated_graphical_limit_is_rejected_and_replaced(self) -> None:
         skill = {
@@ -140,6 +173,26 @@ class AdaptivePracticeTests(unittest.TestCase):
             quest.check("Limiting reagent").status,
         )
         self.assertEqual(VerificationStatus.VERIFIED_INCORRECT, quest.check("D").status)
+
+    def test_walkthrough_allows_bounded_local_model_verbosity(self) -> None:
+        document = {
+            "title": "Verbose but bounded walkthrough",
+            "prompt": "Evaluate 1 + 1. Enter only the number.",
+            "answer_type": "expression",
+            "answer": "2",
+            "options": [],
+            "hint": "Add the two values.",
+            "solution": "Reason carefully. " * 100,
+        }
+        quest = parse_adaptive_quest(json.dumps(document), skill=SKILL)
+        self.assertGreater(len(quest.solution), 1_200)
+
+        document["solution"] = "x" * (MAX_SOLUTION_CHARACTERS + 1)
+        with self.assertRaisesRegex(
+            PracticeGenerationError,
+            f"solution exceeds {MAX_SOLUTION_CHARACTERS} characters",
+        ):
+            parse_adaptive_quest(json.dumps(document), skill=SKILL)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,30 @@
 # Project log
 
+## 2026-08-27 - Milestone 9: explicit per-problem difficulty
+
+### Completed
+
+- Replaced the ambiguous Foundation/Adaptive/Challenge starting-intensity control with Beginner, Intermediate, Advanced, and Expert problem difficulty.
+- Defined concrete generation requirements for all four levels, from one-step essential concepts through synthesis, edge cases, and minimal scaffolding.
+- Added a difficulty selector beside every dashboard generation action: first quest, review recommendation, topic card training, and New encounter.
+- Made difficulty an encounter-level request while remembering each topic's most recent selection as its next default.
+- Required the independent review pass to reject drafts whose setup, step count, scaffolding, or conceptual depth do not fit the selected level.
+- Pinned dashboard assets to the server version that loaded them, preventing a running older API from serving newer incompatible JavaScript after a code update.
+- Added action-local generation status so topic-card, recommendation, and New encounter failures are visible beside the button that initiated them.
+- Added an explicit concise-output budget plus a bounded walkthrough margin so slightly verbose local-model solutions do not consume every generation retry.
+- Migrated schema version 5 difficulty values safely into schema version 6: Foundation to Beginner, Adaptive to Intermediate, and Challenge to Advanced.
+- Released the application metadata as version 0.8.0.
+
+### Verification
+
+All 81 automated tests pass. New coverage verifies the four difficulty contracts, selected-level propagation through draft and review requests, per-request HTTP overrides, saved topic defaults, bounded walkthrough verbosity, and foreign-key-safe migration of existing difficulty data.
+
+### Next milestone
+
+- Add multi-turn Socratic conversation inside each browser encounter.
+- Offer a mastery-informed suggested difficulty while preserving the learner's explicit override.
+- Accept larger source materials through an explicit local ingestion and chunking boundary.
+
 ## 2026-08-27 - Milestone 8: learner-directed adaptive questlines
 
 ### Completed

@@ -8,6 +8,7 @@ import secrets
 from dataclasses import dataclass
 from typing import Any, Collection, Mapping
 
+from sensei.difficulty import difficulty_instruction, normalize_difficulty
 from sensei.providers import ChatProvider
 from sensei.verification import (
     CalculusVerifier,
@@ -19,7 +20,7 @@ from sensei.verification import (
 
 EXACT_VERIFIER_VERSION = "sensei-answer-key-1"
 ANSWER_TYPES = {"expression", "multiple_choice"}
-DIFFICULTIES = {"foundation", "adaptive", "challenge"}
+MAX_SOLUTION_CHARACTERS = 4_000
 PRACTICE_FIELDS = {
     "title",
     "prompt",
@@ -176,14 +177,18 @@ def parse_adaptive_quest(
         skill_id=str(skill["id"]),
         subject=str(skill["course"]),
         topic=str(skill["name"]),
-        difficulty=str(skill["difficulty"]),
+        difficulty=normalize_difficulty(str(skill["difficulty"])),
         title=_text(document, "title", maximum=100),
         prompt=_text(document, "prompt", maximum=1_000),
         answer_type=answer_type,
         answer=answer,
         options=options,
         hint=_text(document, "hint", maximum=500),
-        solution=_text(document, "solution", maximum=1_200),
+        solution=_text(
+            document,
+            "solution",
+            maximum=MAX_SOLUTION_CHARACTERS,
+        ),
     )
     if answer_type == "expression":
         result = quest.check(answer)
@@ -215,6 +220,7 @@ class AdaptiveQuestFactory:
         avoid_prompts: Collection[str],
     ) -> list[dict[str, str]]:
         context = str(skill.get("description") or "No additional source material.")
+        difficulty = difficulty_instruction(str(skill["difficulty"]))
         recent = "\n".join(
             f"{index}. {prompt}"
             for index, prompt in enumerate(tuple(avoid_prompts)[-8:], start=1)
@@ -236,13 +242,17 @@ class AdaptiveQuestFactory:
                     "Use answer_type=multiple_choice for conceptual, formula-name, or "
                     "chemistry-notation questions; provide exactly four plain options "
                     "and make answer exactly A, B, C, or D. Include one useful hint and "
-                    "a concise worked solution. Do not use trick questions, ambiguous "
-                    "rounding, or facts that require current events. Every encounter "
+                    "a concise worked solution. Keep the title under 80 characters, "
+                    "the problem under 700 characters, the hint under 250 characters, "
+                    "and the solution under 1,200 characters. Do not use trick "
+                    "questions, ambiguous rounding, or facts that require current "
+                    "events. Every encounter "
                     "must be materially new: vary the underlying function, graph "
                     "features, given values, requested direction, or reasoning task, "
                     "not merely the title or wording. For a graphical topic, give an "
                     "unambiguous textual description of the graph or a compact value "
-                    "table because no image is attached."
+                    "table because no image is attached. Match the requested problem "
+                    "difficulty exactly; do not silently make it easier or harder."
                 ),
             },
             {
@@ -250,7 +260,7 @@ class AdaptiveQuestFactory:
                 "content": (
                     f"Subject: {skill['course']}\n"
                     f"Topic: {skill['name']}\n"
-                    f"Difficulty: {skill['difficulty']}\n"
+                    f"Problem difficulty: {difficulty}\n"
                     f"Learner material or emphasis: {context}\n"
                     f"Internal variation key (never mention this): {variation_key}\n"
                     "Do not repeat or paraphrase any recently issued problem below.\n"
@@ -278,9 +288,11 @@ class AdaptiveQuestFactory:
                         "Act as a strict independent teacher reviewing a generated "
                         "practice problem. Recompute the answer. Check that the prompt "
                         "is unambiguous, the keyed answer and solution agree, and the "
-                        "problem stays inside the requested subject and topic. Return "
-                        "only JSON with exactly two fields: approved (boolean) and "
-                        "reason (a short string)."
+                        "problem stays inside the requested subject and topic. Confirm "
+                        "that its number of steps, setup, scaffolding, and conceptual "
+                        "depth match the requested difficulty. Return only JSON with "
+                        "exactly two fields: approved (boolean) and reason (a short "
+                        "string)."
                     ),
                 },
                 {
@@ -288,6 +300,8 @@ class AdaptiveQuestFactory:
                     "content": (
                         f"Requested subject: {skill['course']}\n"
                         f"Requested topic: {skill['name']}\n"
+                        "Requested problem difficulty: "
+                        f"{difficulty_instruction(str(skill['difficulty']))}\n"
                         f"Draft: {json.dumps(draft, ensure_ascii=False)}"
                     ),
                 },

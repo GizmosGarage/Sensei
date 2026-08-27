@@ -9,9 +9,9 @@ Sensei's first complete practice surface exposed a fixed 20-topic Precalculus pa
 
 ## Decision
 
-The dashboard begins with a learner-created study focus: subject, topic, optional material or emphasis, and starting intensity. Each unique subject/topic pair becomes a durable skill row with `source=learner` and participates in the existing mastery and progression model.
+The dashboard begins with a learner-created study focus: subject, topic, optional material or emphasis, and a four-level problem difficulty. Beginner, Intermediate, Advanced, and Expert have explicit generation contracts rather than ambiguous intensity labels. Difficulty is chosen for each encounter from every dashboard generation action, while the most recent choice is remembered as the topic's default. Each unique subject/topic pair becomes a durable skill row with `source=learner` and participates in the existing mastery and progression model.
 
-Fresh practice uses a local model under a constrained contract. One pass drafts a standalone expression or multiple-choice problem; a separate pass recomputes and reviews it. Strict parsing rejects malformed drafts. Quantitative answers are checked through the restricted symbolic verifier, and conceptual answers use an exact four-option key. Hidden answers stay server-side until submission.
+Fresh practice uses a local model under a constrained contract. One pass drafts a standalone expression or multiple-choice problem at the selected level; a separate pass recomputes the answer and reviews both correctness and difficulty fit. Strict parsing rejects malformed drafts. Quantitative answers are checked through the restricted symbolic verifier, and conceptual answers use an exact four-option key. Hidden answers stay server-side until submission.
 
 The original catalog and deterministic generators remain as a compatibility and stronger-verification foundation, but the primary interface no longer displays them as a required curriculum.
 
