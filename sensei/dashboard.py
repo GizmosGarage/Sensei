@@ -10,12 +10,13 @@ import sys
 import threading
 import time
 import webbrowser
+from collections import deque
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from datetime import timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Collection
 from urllib.parse import urlsplit
 
 from sensei.generation import GENERATED_SKILL_IDS, GeneratedQuestFactory
@@ -27,7 +28,7 @@ from sensei.models import (
     ModelCatalog,
     model_path,
 )
-from sensei.practice import AdaptiveQuest, AdaptiveQuestFactory
+from sensei.practice import AdaptiveQuest, AdaptiveQuestFactory, problem_fingerprint
 from sensei.providers import LlamaCppProvider
 from sensei.quests import DEFAULT_QUESTS_PATH, QuestDeck, QuestTemplate
 from sensei.runtime import DEFAULT_RUNTIME_DIRECTORY, LocalLlamaRuntime, RuntimeSettings
@@ -45,6 +46,8 @@ DEFAULT_DASHBOARD_PORT = 8765
 MAX_REQUEST_BYTES = 4_096
 ATTEMPT_TOKEN_LIFETIME_SECONDS = 15 * 60
 CHALLENGE_TOKEN_LIFETIME_SECONDS = 60 * 60
+ADAPTIVE_PROMPT_HISTORY = 8
+ADAPTIVE_DISTINCT_ATTEMPTS = 3
 WEB_DIRECTORY = Path(__file__).resolve().parent / "web"
 PracticeQuest = QuestTemplate | AdaptiveQuest
 ASSETS = {
@@ -194,6 +197,7 @@ class ChallengeStore:
         self.adaptive_factory = adaptive_factory
         self._challenges: dict[str, PendingChallenge] = {}
         self._last_prompts: dict[str, str] = {}
+        self._adaptive_prompts: dict[str, deque[str]] = {}
         self._lock = threading.Lock()
 
     def issue(self, skill_id: str) -> tuple[str, QuestTemplate]:
@@ -214,21 +218,45 @@ class ChallengeStore:
             return token, quest
 
     def issue_adaptive(
-        self, skill: dict[str, Any]
+        self,
+        skill: dict[str, Any],
+        *,
+        avoid_prompts: Collection[str] = (),
     ) -> tuple[str, AdaptiveQuest]:
         if self.adaptive_factory is None:
             raise RuntimeError(
                 "Adaptive generation is unavailable. Restart the dashboard with its "
                 "local model enabled."
             )
-        quest = self.adaptive_factory.generate(skill)
-        now = time.monotonic()
-        with self._lock:
-            self._prune(now)
-            token = secrets.token_urlsafe(32)
-            self._challenges[token] = PendingChallenge(quest, now)
-            self._last_prompts[quest.skill_id] = quest.prompt
-        return token, quest
+        skill_id = str(skill["id"])
+        for _ in range(ADAPTIVE_DISTINCT_ATTEMPTS):
+            with self._lock:
+                session_recent = tuple(self._adaptive_prompts.get(skill_id, ()))
+            recent = tuple(dict.fromkeys((*avoid_prompts, *session_recent)))[
+                -ADAPTIVE_PROMPT_HISTORY:
+            ]
+            quest = self.adaptive_factory.generate(
+                skill,
+                avoid_prompts=recent,
+            )
+            now = time.monotonic()
+            with self._lock:
+                self._prune(now)
+                history = self._adaptive_prompts.setdefault(
+                    skill_id,
+                    deque(maxlen=ADAPTIVE_PROMPT_HISTORY),
+                )
+                fingerprints = {problem_fingerprint(prompt) for prompt in history}
+                if problem_fingerprint(quest.prompt) in fingerprints:
+                    continue
+                token = secrets.token_urlsafe(32)
+                self._challenges[token] = PendingChallenge(quest, now)
+                self._last_prompts[skill_id] = quest.prompt
+                history.append(quest.prompt)
+                return token, quest
+        raise RuntimeError(
+            "Sensei could not produce a distinct new encounter for this topic."
+        )
 
     def get(self, token: str) -> PracticeQuest:
         now = time.monotonic()
@@ -328,6 +356,10 @@ class DashboardService:
     def study_topic(self, skill_id: str) -> dict[str, Any]:
         with LearningStore(self.database_path, self.skills_path) as store:
             return store.study_topic(skill_id)
+
+    def recent_topic_prompts(self, skill_id: str) -> tuple[str, ...]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.recent_problems(skill_id, limit=ADAPTIVE_PROMPT_HISTORY)
 
     def public_generated_quest(self, quest: QuestTemplate) -> dict[str, str]:
         deck = QuestDeck.load(
@@ -552,7 +584,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 if not isinstance(skill_id, str) or len(skill_id) > 80:
                     raise ValueError("Study topic ID must be valid text.")
                 skill = self.server.service.study_topic(skill_id)
-                challenge_token, quest = self.server.challenges.issue_adaptive(skill)
+                challenge_token, quest = self.server.challenges.issue_adaptive(
+                    skill,
+                    avoid_prompts=self.server.service.recent_topic_prompts(skill_id),
+                )
                 self._send_json(
                     200,
                     {
@@ -738,7 +773,7 @@ def _adaptive_factory(
             )
         )
         base_url = stack.enter_context(runtime).base_url
-    return AdaptiveQuestFactory(LlamaCppProvider(base_url, selected_id))
+    return AdaptiveQuestFactory(LlamaCppProvider(base_url, selected_id, seed=-1))
 
 
 def main(argv: list[str] | None = None) -> int:

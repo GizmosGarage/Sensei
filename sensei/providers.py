@@ -104,6 +104,7 @@ class LlamaCppProvider:
         max_retries: int = 2,
         temperature: float = 0.2,
         max_tokens: int = 768,
+        seed: int = 42,
     ) -> None:
         self.endpoint = f"{base_url.rstrip('/')}/v1/chat/completions"
         self.model = model
@@ -111,6 +112,7 @@ class LlamaCppProvider:
         self.max_retries = max_retries
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.seed = seed
         if max_retries < 0:
             raise ValueError("max_retries cannot be negative.")
 
@@ -120,7 +122,7 @@ class LlamaCppProvider:
             "messages": list(messages),
             "temperature": self.temperature,
             "top_p": 0.9,
-            "seed": 42,
+            "seed": self.seed,
             "max_tokens": self.max_tokens,
             "stream": stream,
         }

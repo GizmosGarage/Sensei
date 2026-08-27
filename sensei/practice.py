@@ -6,7 +6,7 @@ import json
 import re
 import secrets
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Collection, Mapping
 
 from sensei.providers import ChatProvider
 from sensei.verification import (
@@ -33,6 +33,12 @@ PRACTICE_FIELDS = {
 
 class PracticeGenerationError(ValueError):
     """Raised when model output cannot satisfy the safe practice contract."""
+
+
+def problem_fingerprint(prompt: str) -> str:
+    """Normalize superficial formatting so recent problem repeats are detectable."""
+
+    return re.sub(r"[^a-z0-9]+", " ", prompt.casefold()).strip()
 
 
 def _json_object(text: str) -> dict[str, object]:
@@ -201,8 +207,20 @@ class AdaptiveQuestFactory:
         self.validation_attempts = validation_attempts
 
     @staticmethod
-    def _request(skill: Mapping[str, object], repair: str) -> list[dict[str, str]]:
+    def _request(
+        skill: Mapping[str, object],
+        repair: str,
+        *,
+        variation_key: str,
+        avoid_prompts: Collection[str],
+    ) -> list[dict[str, str]]:
         context = str(skill.get("description") or "No additional source material.")
+        recent = "\n".join(
+            f"{index}. {prompt}"
+            for index, prompt in enumerate(tuple(avoid_prompts)[-8:], start=1)
+        )
+        if not recent:
+            recent = "None yet."
         return [
             {
                 "role": "system",
@@ -219,7 +237,12 @@ class AdaptiveQuestFactory:
                     "chemistry-notation questions; provide exactly four plain options "
                     "and make answer exactly A, B, C, or D. Include one useful hint and "
                     "a concise worked solution. Do not use trick questions, ambiguous "
-                    "rounding, or facts that require current events."
+                    "rounding, or facts that require current events. Every encounter "
+                    "must be materially new: vary the underlying function, graph "
+                    "features, given values, requested direction, or reasoning task, "
+                    "not merely the title or wording. For a graphical topic, give an "
+                    "unambiguous textual description of the graph or a compact value "
+                    "table because no image is attached."
                 ),
             },
             {
@@ -229,6 +252,9 @@ class AdaptiveQuestFactory:
                     f"Topic: {skill['name']}\n"
                     f"Difficulty: {skill['difficulty']}\n"
                     f"Learner material or emphasis: {context}\n"
+                    f"Internal variation key (never mention this): {variation_key}\n"
+                    "Do not repeat or paraphrase any recently issued problem below.\n"
+                    f"Recently issued problems:\n{recent}\n"
                     f"{repair}"
                 ),
             },
@@ -278,13 +304,35 @@ class AdaptiveQuestFactory:
             raise PracticeGenerationError("review approval has an invalid shape")
         return None if approved else reason.strip() or "The draft was not approved."
 
-    def generate(self, skill: Mapping[str, object]) -> AdaptiveQuest:
+    def generate(
+        self,
+        skill: Mapping[str, object],
+        *,
+        avoid_prompts: Collection[str] = (),
+    ) -> AdaptiveQuest:
         repair = ""
         last_error = "The local model did not return a usable quest."
+        avoided = {
+            fingerprint
+            for prompt in avoid_prompts
+            if (fingerprint := problem_fingerprint(prompt))
+        }
         for _ in range(self.validation_attempts):
             try:
-                result = self.provider.complete(self._request(skill, repair))
+                result = self.provider.complete(
+                    self._request(
+                        skill,
+                        repair,
+                        variation_key=secrets.token_hex(12),
+                        avoid_prompts=avoid_prompts,
+                    )
+                )
                 quest = parse_adaptive_quest(result.text, skill=skill)
+                if problem_fingerprint(quest.prompt) in avoided:
+                    raise PracticeGenerationError(
+                        "the problem repeats a recent encounter; change its underlying "
+                        "function, values, graph features, or requested reasoning"
+                    )
                 review_issue = self._review(skill, quest)
                 if review_issue is None:
                     return quest

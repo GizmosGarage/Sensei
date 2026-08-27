@@ -8,6 +8,7 @@
 - Migrated learning memory to schema version 5 so learner-created subjects coexist with the original catalog and use the same attempts, XP, mastery, misconceptions, and review schedule.
 - Added stable subject/topic identities so revisiting the same focus grows one history instead of fragmenting progress.
 - Added local-model practice drafting with strict schemas, bounded retries, and a separate recomputation/review pass before issuance.
+- Added fresh per-request variation, nondeterministic adaptive seeds, an eight-problem recent history per topic, persisted-attempt exclusions, and hard duplicate rejection before a new encounter can be issued.
 - Restricted adaptive encounters to locally checkable expression or four-option answer contracts; hidden answers remain in the server's expiring challenge store.
 - Added hints, post-submission walkthroughs, RPG encounter language, a growing mastery atlas, and cross-subject review recommendations to the browser surface.
 - Preserved the stronger deterministic Precalculus and Calculus generators and their existing protected API route.
@@ -17,7 +18,7 @@
 
 ### Verification
 
-All 76 automated tests pass. Coverage includes schema upgrades from versions 1-4, foreign-key integrity after the flexible-subject migration, learner-topic identity and retrieval, adaptive draft parsing, independent approval, expression and multiple-choice checks, answer-key-free public documents, full protected HTTP focus/generate/check/record flow, one-time persistence, and every original deterministic generator.
+All 78 automated tests pass. Coverage includes schema upgrades from versions 1-4, foreign-key integrity after the flexible-subject migration, learner-topic identity and retrieval, adaptive draft parsing, independent approval, forced-repeat rejection for graphical limits, expression and multiple-choice checks, answer-key-free public documents, full protected HTTP focus/generate/check/record flow, one-time persistence, and every original deterministic generator.
 
 ### Next milestone
 

@@ -244,6 +244,10 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual("chain-sine-cubic", recent[0]["quest_id"])
         self.assertEqual("Chain rule", recent[0]["skill_name"])
         self.assertEqual("calculus", recent[0]["course"])
+        self.assertEqual(
+            ("Differentiate sin(x^2)",),
+            self.store.recent_problems("chain_rule"),
+        )
 
     def test_misconceptions_are_counted_without_duplicate_rows(self) -> None:
         mistaken = event(

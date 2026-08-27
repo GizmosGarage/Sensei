@@ -201,11 +201,28 @@ class DashboardTests(unittest.TestCase):
                 "solution": "Balanced coefficients define the reaction's mole ratios.",
             }
         )
+        fresh_draft = json.dumps(
+            {
+                "title": "Reaction Ratio Gate",
+                "prompt": (
+                    "In N2 + 3 H2 -> 2 NH3, which coefficient gives the moles "
+                    "of H2 consumed per mole of N2?"
+                ),
+                "answer_type": "multiple_choice",
+                "answer": "C",
+                "options": ["1", "2", "3", "6"],
+                "hint": "Compare the coefficients before N2 and H2.",
+                "solution": "The equation has a 1:3 mole ratio, so C is correct.",
+            }
+        )
 
         class Provider:
             def __init__(self) -> None:
                 self.responses = [
                     draft,
+                    json.dumps({"approved": True, "reason": "Checked."}),
+                    draft,
+                    fresh_draft,
                     json.dumps({"approved": True, "reason": "Checked."}),
                 ]
 
@@ -254,16 +271,23 @@ class DashboardTests(unittest.TestCase):
             )
             self.assertEqual("Chemistry", generated["quest"]["subject"])
             self.assertNotIn("answer", generated["quest"])
+            generated_again = post(
+                "/api/study/generate", {"skill_id": skill_id}, csrf_token
+            )
+            self.assertNotEqual(
+                generated["quest"]["prompt"],
+                generated_again["quest"]["prompt"],
+            )
             checked = post(
                 "/api/quest/check",
                 {
-                    "challenge_token": generated["challenge_token"],
+                    "challenge_token": generated_again["challenge_token"],
                     "answer": "C",
                 },
                 csrf_token,
             )
             self.assertEqual("verified_correct", checked["result"]["status"])
-            self.assertIn("mole ratios", checked["solution"])
+            self.assertIn("mole ratio", checked["solution"])
             recorded = post(
                 "/api/quest/record",
                 {"attempt_token": checked["attempt_token"]},

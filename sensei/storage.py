@@ -753,6 +753,21 @@ class LearningStore:
         )
         return [dict(row) for row in rows]
 
+    def recent_problems(self, skill_id: str, limit: int = 8) -> tuple[str, ...]:
+        """Return recent issued-and-recorded problems for duplicate avoidance."""
+
+        if not 1 <= limit <= 50:
+            raise ValueError("Recent-problem limit must be from 1 to 50.")
+        rows = self.connection.execute(
+            """SELECT problem
+                 FROM attempts
+                WHERE skill_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?""",
+            (skill_id, limit),
+        )
+        return tuple(str(row["problem"]) for row in rows)
+
     def export_json(self, path: Path) -> Path:
         destination = path.resolve()
         destination.parent.mkdir(parents=True, exist_ok=True)

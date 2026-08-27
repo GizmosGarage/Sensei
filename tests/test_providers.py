@@ -60,6 +60,13 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(["Chain ", "rule"], tokens)
         self.assertEqual(12, result.prompt_tokens)
 
+    def test_seed_can_be_randomized_for_fresh_generation(self) -> None:
+        provider = LlamaCppProvider("http://127.0.0.1:9999", "test", seed=-1)
+        payload = json.loads(
+            provider._payload([{"role": "user", "content": "new problem"}], False)
+        )
+        self.assertEqual(-1, payload["seed"])
+
 
 if __name__ == "__main__":
     unittest.main()
