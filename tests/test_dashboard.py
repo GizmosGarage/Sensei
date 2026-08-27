@@ -15,6 +15,8 @@ from sensei.dashboard import (
 )
 from sensei.generation import GeneratedQuestFactory
 from sensei.learning import LearningEvent, Outcome
+from sensei.practice import AdaptiveQuestFactory
+from sensei.providers import CompletionResult
 from sensei.storage import LearningStore
 
 
@@ -48,10 +50,10 @@ class DashboardTests(unittest.TestCase):
 
     def test_rank_names_advance_at_documented_thresholds(self) -> None:
         self.assertEqual("Dojo Novice", rank_name(1))
-        self.assertEqual("Foundation Initiate", rank_name(2))
-        self.assertEqual("Algebra Adept", rank_name(4))
-        self.assertEqual("Function Scholar", rank_name(7))
-        self.assertEqual("Math Master", rank_name(10))
+        self.assertEqual("Quest Initiate", rank_name(2))
+        self.assertEqual("Dojo Adept", rank_name(4))
+        self.assertEqual("Realm Scholar", rank_name(7))
+        self.assertEqual("Grand Sensei", rank_name(10))
 
     def test_recommendation_can_select_a_generated_only_calculus_subject(self) -> None:
         with LearningStore(self.database) as store:
@@ -89,8 +91,8 @@ class DashboardTests(unittest.TestCase):
                 self.assertTrue(state["csrf_token"])
             with urlopen(f"{base_url}/", timeout=5) as response:
                 html = response.read().decode("utf-8")
-                self.assertIn("Sensei // Math Dojo", html)
-                self.assertIn("Precalculus subjects", html)
+                self.assertIn("Sensei // Adaptive Dojo", html)
+                self.assertIn("What do you want to master?", html)
                 self.assertIn("/assets/app.js", html)
         finally:
             server.shutdown()
@@ -177,6 +179,101 @@ class DashboardTests(unittest.TestCase):
                     "generated-precalc-linear-equations-"
                 )
             )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_dashboard_builds_checks_and_records_a_learner_created_topic(self) -> None:
+        draft = json.dumps(
+            {
+                "title": "Mole Ratio Gate",
+                "prompt": "Which tool converts between substances in a reaction?",
+                "answer_type": "multiple_choice",
+                "answer": "C",
+                "options": [
+                    "Atomic number",
+                    "Temperature scale",
+                    "Balanced-equation coefficients",
+                    "Density alone",
+                ],
+                "hint": "Read the integers before each formula.",
+                "solution": "Balanced coefficients define the reaction's mole ratios.",
+            }
+        )
+
+        class Provider:
+            def __init__(self) -> None:
+                self.responses = [
+                    draft,
+                    json.dumps({"approved": True, "reason": "Checked."}),
+                ]
+
+            def complete(self, messages, on_token=None):
+                return CompletionResult(self.responses.pop(0), "stop")
+
+        server = create_server(
+            self.service,
+            port=0,
+            adaptive_factory=AdaptiveQuestFactory(Provider()),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://{LOOPBACK_HOST}:{server.server_address[1]}"
+
+        def post(path: str, document: dict[str, str], token: str):
+            request = Request(
+                f"{base_url}{path}",
+                data=json.dumps(document).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Origin": base_url,
+                    "X-Sensei-CSRF": token,
+                },
+                method="POST",
+            )
+            with urlopen(request, timeout=5) as response:
+                return json.load(response)
+
+        try:
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                csrf_token = json.load(response)["csrf_token"]
+            focus = post(
+                "/api/study/focus",
+                {
+                    "subject": "Chemistry",
+                    "topic": "Stoichiometry",
+                    "context": "Mole ratios",
+                    "difficulty": "foundation",
+                },
+                csrf_token,
+            )
+            skill_id = focus["study_topic"]["id"]
+            generated = post(
+                "/api/study/generate", {"skill_id": skill_id}, csrf_token
+            )
+            self.assertEqual("Chemistry", generated["quest"]["subject"])
+            self.assertNotIn("answer", generated["quest"])
+            checked = post(
+                "/api/quest/check",
+                {
+                    "challenge_token": generated["challenge_token"],
+                    "answer": "C",
+                },
+                csrf_token,
+            )
+            self.assertEqual("verified_correct", checked["result"]["status"])
+            self.assertIn("mole ratios", checked["solution"])
+            recorded = post(
+                "/api/quest/record",
+                {"attempt_token": checked["attempt_token"]},
+                csrf_token,
+            )
+            self.assertEqual(25, recorded["progress"]["xp_awarded"])
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                state = json.load(response)
+            self.assertEqual("Stoichiometry", state["study_topics"][0]["name"])
+            self.assertEqual(1, state["study_topics"][0]["attempts_count"])
         finally:
             server.shutdown()
             server.server_close()

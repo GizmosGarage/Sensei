@@ -16,6 +16,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUNTIME_DIRECTORY = REPOSITORY_ROOT / ".local" / "llama.cpp" / "b10549"
 DEFAULT_LOG_PATH = REPOSITORY_ROOT / "data" / "runtime" / "llama-server.log"
+WINDOWS_APPLICATION_CONTROL_BLOCKED = 0xC0E90002
 
 
 def reserve_local_port() -> int:
@@ -119,9 +120,20 @@ class LocalLlamaRuntime:
         url = f"{self.base_url}/health"
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
+                return_code = int(self.process.returncode or 0)
+                if (
+                    os.name == "nt"
+                    and return_code & 0xFFFFFFFF
+                    == WINDOWS_APPLICATION_CONTROL_BLOCKED
+                ):
+                    raise RuntimeError(
+                        "Windows Application Control blocked llama-server.exe. "
+                        "Have a trusted administrator allow the pinned local runtime, "
+                        "or start an approved llama.cpp server and pass --server-url."
+                    )
                 raise RuntimeError(
                     f"llama-server exited during startup with code "
-                    f"{self.process.returncode}. See {self.settings.log_path}."
+                    f"{return_code}. See {self.settings.log_path}."
                 )
             try:
                 with urllib.request.urlopen(url, timeout=3) as response:

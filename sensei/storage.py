@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ from sensei.learning import LearningEvent, Outcome
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = REPOSITORY_ROOT / "data" / "sensei.db"
 DEFAULT_SKILLS_PATH = REPOSITORY_ROOT / "config" / "skills.json"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 MIGRATION_1 = """
@@ -116,6 +117,32 @@ ALTER TABLE attempts ADD COLUMN quest_id TEXT;
 MIGRATION_4 = """
 ALTER TABLE skills ADD COLUMN course TEXT NOT NULL DEFAULT 'calculus'
     CHECK (course IN ('precalculus', 'calculus'));
+"""
+
+MIGRATION_5 = """
+CREATE TABLE skills_v5 (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    unit TEXT NOT NULL,
+    description TEXT NOT NULL,
+    prerequisites_json TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    course TEXT NOT NULL CHECK (length(trim(course)) > 0),
+    source TEXT NOT NULL DEFAULT 'catalog'
+        CHECK (source IN ('catalog', 'learner')),
+    difficulty TEXT NOT NULL DEFAULT 'adaptive'
+        CHECK (difficulty IN ('foundation', 'adaptive', 'challenge')),
+    created_at TEXT
+);
+INSERT INTO skills_v5(
+    id, name, unit, description, prerequisites_json, sort_order, course,
+    source, difficulty, created_at
+)
+SELECT id, name, unit, description, prerequisites_json, sort_order, course,
+       'catalog', 'adaptive', NULL
+FROM skills;
+DROP TABLE skills;
+ALTER TABLE skills_v5 RENAME TO skills;
 """
 
 
@@ -266,6 +293,19 @@ class LearningStore:
                 (4, utc_now().isoformat()),
             )
             self.connection.commit()
+            applied.add(4)
+        if 5 not in applied:
+            self.connection.commit()
+            self.connection.execute("PRAGMA foreign_keys = OFF")
+            try:
+                self.connection.executescript(MIGRATION_5)
+                self.connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (5, utc_now().isoformat()),
+                )
+                self.connection.commit()
+            finally:
+                self.connection.execute("PRAGMA foreign_keys = ON")
         current = self.connection.execute(
             "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations"
         ).fetchone()["version"]
@@ -302,8 +342,8 @@ class LearningStore:
                 self.connection.execute(
                     """INSERT INTO skills(
                            id, course, name, unit, description,
-                           prerequisites_json, sort_order
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                           prerequisites_json, sort_order, source, difficulty
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'catalog', 'adaptive')
                        ON CONFLICT(id) DO UPDATE SET
                            course = excluded.course,
                            name = excluded.name,
@@ -327,6 +367,79 @@ class LearningStore:
             "SELECT id, name FROM skills ORDER BY sort_order"
         )
         return {row["id"]: row["name"] for row in rows}
+
+    @staticmethod
+    def _study_text(value: str, field: str, maximum: int) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError(f"{field} is required.")
+        if len(cleaned) > maximum:
+            raise ValueError(f"{field} must be {maximum} characters or fewer.")
+        return cleaned
+
+    def create_study_topic(
+        self,
+        *,
+        subject: str,
+        topic: str,
+        context: str = "",
+        difficulty: str = "adaptive",
+    ) -> dict[str, Any]:
+        """Create or refresh one learner-owned topic in the growing skill atlas."""
+
+        subject = self._study_text(subject, "Subject", 80)
+        topic = self._study_text(topic, "Topic", 120)
+        context = " ".join(context.split())
+        if len(context) > 2_000:
+            raise ValueError("Study material must be 2,000 characters or fewer.")
+        if difficulty not in {"foundation", "adaptive", "challenge"}:
+            raise ValueError("Difficulty must be foundation, adaptive, or challenge.")
+        identity = f"{subject.casefold()}\0{topic.casefold()}"
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+        slug = re.sub(r"[^a-z0-9]+", "-", topic.casefold()).strip("-")[:40]
+        skill_id = f"focus-{slug or 'topic'}-{digest}"
+        timestamp = utc_now().isoformat()
+        description = context or "Learner-created practice focus."
+        sort_order = int(
+            self.connection.execute(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM skills"
+            ).fetchone()["next_order"]
+        )
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO skills(
+                       id, course, name, unit, description, prerequisites_json,
+                       sort_order, source, difficulty, created_at
+                   ) VALUES (?, ?, ?, ?, ?, '[]', ?, 'learner', ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       course = excluded.course,
+                       name = excluded.name,
+                       description = excluded.description,
+                       difficulty = excluded.difficulty""",
+                (
+                    skill_id,
+                    subject,
+                    topic,
+                    f"{subject} questline",
+                    description,
+                    sort_order,
+                    difficulty,
+                    timestamp,
+                ),
+            )
+        return self.study_topic(skill_id)
+
+    def study_topic(self, skill_id: str) -> dict[str, Any]:
+        row = self.connection.execute(
+            """SELECT id, course, name, unit, description, source, difficulty,
+                      created_at
+                 FROM skills
+                WHERE id = ?""",
+            (skill_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("That study topic does not exist.")
+        return dict(row)
 
     def _upsert_misconception(
         self, event: LearningEvent, timestamp: str
@@ -532,7 +645,8 @@ class LearningStore:
 
     def skill_progress(self) -> list[dict[str, Any]]:
         rows = self.connection.execute(
-            """SELECT s.id, s.course, s.name, s.unit, s.sort_order,
+            """SELECT s.id, s.course, s.name, s.unit, s.description,
+                      s.source, s.difficulty, s.created_at, s.sort_order,
                       COALESCE(m.mastery_score, 0) AS mastery_score,
                       COALESCE(m.attempts_count, 0) AS attempts_count,
                       COALESCE(m.correct_count, 0) AS correct_count,
@@ -549,6 +663,15 @@ class LearningStore:
                 ),
             }
             for row in rows
+        ]
+
+    def study_topics(self) -> list[dict[str, Any]]:
+        """Return the learner-built atlas plus any legacy skill already practiced."""
+
+        return [
+            skill
+            for skill in self.skill_progress()
+            if skill["source"] == "learner" or skill["attempts_count"] > 0
         ]
 
     def _practiced_skill_rows(self) -> list[sqlite3.Row]:

@@ -1,3 +1,3 @@
-"""Sensei local calculus tutor."""
+"""Sensei local learner-directed practice tutor."""
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"

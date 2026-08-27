@@ -1,5 +1,30 @@
 # Project log
 
+## 2026-08-27 - Milestone 8: learner-directed adaptive questlines
+
+### Completed
+
+- Replaced the dashboard's fixed course-first entry point with subject, topic, optional study material, and difficulty inputs.
+- Migrated learning memory to schema version 5 so learner-created subjects coexist with the original catalog and use the same attempts, XP, mastery, misconceptions, and review schedule.
+- Added stable subject/topic identities so revisiting the same focus grows one history instead of fragmenting progress.
+- Added local-model practice drafting with strict schemas, bounded retries, and a separate recomputation/review pass before issuance.
+- Restricted adaptive encounters to locally checkable expression or four-option answer contracts; hidden answers remain in the server's expiring challenge store.
+- Added hints, post-submission walkthroughs, RPG encounter language, a growing mastery atlas, and cross-subject review recommendations to the browser surface.
+- Preserved the stronger deterministic Precalculus and Calculus generators and their existing protected API route.
+- Integrated local model startup into the dashboard command, with fast-model, existing-server, custom-path, and diagnostic no-model options.
+- Generalized the tutor identity and RPG ranks beyond Calculus-only language.
+- Released the application metadata as version 0.7.0 and recorded the architecture in ADR 0009.
+
+### Verification
+
+All 76 automated tests pass. Coverage includes schema upgrades from versions 1-4, foreign-key integrity after the flexible-subject migration, learner-topic identity and retrieval, adaptive draft parsing, independent approval, expression and multiple-choice checks, answer-key-free public documents, full protected HTTP focus/generate/check/record flow, one-time persistence, and every original deterministic generator.
+
+### Next milestone
+
+- Add multi-turn Socratic conversation inside each browser encounter.
+- Use recent mastery and misconceptions to tune adaptive difficulty automatically.
+- Accept larger source materials through an explicit local ingestion and chunking boundary.
+
 ## 2026-08-22 - Milestone 7: subject-confined procedural questions
 
 ### Completed

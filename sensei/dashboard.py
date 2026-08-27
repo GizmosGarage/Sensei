@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import webbrowser
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from datetime import timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,7 +20,17 @@ from urllib.parse import urlsplit
 
 from sensei.generation import GENERATED_SKILL_IDS, GeneratedQuestFactory
 from sensei.learning import LearningEvent, Outcome
+from sensei.models import (
+    DEFAULT_MODEL_ID,
+    DEFAULT_MODELS_DIRECTORY,
+    FAST_MODEL_ID,
+    ModelCatalog,
+    model_path,
+)
+from sensei.practice import AdaptiveQuest, AdaptiveQuestFactory
+from sensei.providers import LlamaCppProvider
 from sensei.quests import DEFAULT_QUESTS_PATH, QuestDeck, QuestTemplate
+from sensei.runtime import DEFAULT_RUNTIME_DIRECTORY, LocalLlamaRuntime, RuntimeSettings
 from sensei.storage import DEFAULT_DATABASE_PATH, DEFAULT_SKILLS_PATH, LearningStore, utc_now
 from sensei.verification import (
     CalculusVerifier,
@@ -35,6 +46,7 @@ MAX_REQUEST_BYTES = 4_096
 ATTEMPT_TOKEN_LIFETIME_SECONDS = 15 * 60
 CHALLENGE_TOKEN_LIFETIME_SECONDS = 60 * 60
 WEB_DIRECTORY = Path(__file__).resolve().parent / "web"
+PracticeQuest = QuestTemplate | AdaptiveQuest
 ASSETS = {
     "/": (WEB_DIRECTORY / "index.html", "text/html; charset=utf-8"),
     "/assets/app.js": (
@@ -50,13 +62,13 @@ ASSETS = {
 
 def rank_name(level: int) -> str:
     if level >= 10:
-        return "Math Master"
+        return "Grand Sensei"
     if level >= 7:
-        return "Function Scholar"
+        return "Realm Scholar"
     if level >= 4:
-        return "Algebra Adept"
+        return "Dojo Adept"
     if level >= 2:
-        return "Foundation Initiate"
+        return "Quest Initiate"
     return "Dojo Novice"
 
 
@@ -123,7 +135,7 @@ def verification_document(result: VerificationResult) -> dict[str, str | None]:
 
 @dataclass(frozen=True)
 class PendingAttempt:
-    quest: QuestTemplate
+    quest: PracticeQuest
     result: VerificationResult
     issued_at: float
 
@@ -135,7 +147,7 @@ class PendingAttemptStore:
         self._attempts: dict[str, PendingAttempt] = {}
         self._lock = threading.Lock()
 
-    def issue(self, quest: QuestTemplate, result: VerificationResult) -> str:
+    def issue(self, quest: PracticeQuest, result: VerificationResult) -> str:
         token = secrets.token_urlsafe(32)
         now = time.monotonic()
         with self._lock:
@@ -166,15 +178,20 @@ class PendingAttemptStore:
 
 @dataclass(frozen=True)
 class PendingChallenge:
-    quest: QuestTemplate
+    quest: PracticeQuest
     issued_at: float
 
 
 class ChallengeStore:
     """Keeps generated answer targets server-side and avoids immediate repeats."""
 
-    def __init__(self, factory: GeneratedQuestFactory | None = None) -> None:
+    def __init__(
+        self,
+        factory: GeneratedQuestFactory | None = None,
+        adaptive_factory: AdaptiveQuestFactory | None = None,
+    ) -> None:
         self.factory = factory or GeneratedQuestFactory()
+        self.adaptive_factory = adaptive_factory
         self._challenges: dict[str, PendingChallenge] = {}
         self._last_prompts: dict[str, str] = {}
         self._lock = threading.Lock()
@@ -196,7 +213,24 @@ class ChallengeStore:
             self._last_prompts[skill_id] = quest.prompt
             return token, quest
 
-    def get(self, token: str) -> QuestTemplate:
+    def issue_adaptive(
+        self, skill: dict[str, Any]
+    ) -> tuple[str, AdaptiveQuest]:
+        if self.adaptive_factory is None:
+            raise RuntimeError(
+                "Adaptive generation is unavailable. Restart the dashboard with its "
+                "local model enabled."
+            )
+        quest = self.adaptive_factory.generate(skill)
+        now = time.monotonic()
+        with self._lock:
+            self._prune(now)
+            token = secrets.token_urlsafe(32)
+            self._challenges[token] = PendingChallenge(quest, now)
+            self._last_prompts[quest.skill_id] = quest.prompt
+        return token, quest
+
+    def get(self, token: str) -> PracticeQuest:
         now = time.monotonic()
         with self._lock:
             self._prune(now)
@@ -240,6 +274,7 @@ class DashboardService:
             profile = store.profile()
             profile["rank_name"] = rank_name(int(profile["level"]))
             skills = store.skill_progress()
+            study_topics = store.study_topics()
             recommendations = {
                 course: generated_recommendation(store, skills, course)
                 for course in ("precalculus", "calculus")
@@ -253,6 +288,7 @@ class DashboardService:
                 "quests": deck.public_quests(),
                 "review": review,
                 "skills": skills,
+                "study_topics": study_topics,
                 "recent_attempts": store.recent_attempts(limit=50),
                 "catalog": {
                     "quest_count": len(deck.quests),
@@ -269,9 +305,29 @@ class DashboardService:
                 "runtime": {
                     "host": LOOPBACK_HOST,
                     "storage": "Local SQLite",
-                    "model_access": "Tutor process only",
+                    "model_access": "Local dashboard process",
                 },
             }
+
+    def create_study_topic(
+        self,
+        *,
+        subject: str,
+        topic: str,
+        context: str,
+        difficulty: str,
+    ) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.create_study_topic(
+                subject=subject,
+                topic=topic,
+                context=context,
+                difficulty=difficulty,
+            )
+
+    def study_topic(self, skill_id: str) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.study_topic(skill_id)
 
     def public_generated_quest(self, quest: QuestTemplate) -> dict[str, str]:
         deck = QuestDeck.load(
@@ -288,11 +344,17 @@ class DashboardService:
                 f"Generated question has unknown skill {quest.skill_id!r}."
             ) from error
 
+    @staticmethod
+    def public_adaptive_quest(quest: AdaptiveQuest) -> dict[str, Any]:
+        return quest.public_dict()
+
     def check_quest(
         self,
-        quest: QuestTemplate,
+        quest: PracticeQuest,
         answer: str,
     ) -> VerificationResult:
+        if isinstance(quest, AdaptiveQuest):
+            return quest.check(answer)
         return quest.check(answer, CalculusVerifier())
 
     def record_attempt(
@@ -349,10 +411,12 @@ class SenseiDashboardServer(ThreadingHTTPServer):
         server_address: tuple[str, int],
         service: DashboardService,
         quest_factory: GeneratedQuestFactory | None = None,
+        adaptive_factory: AdaptiveQuestFactory | None = None,
     ) -> None:
         self.service = service
         self.csrf_token = secrets.token_urlsafe(32)
-        self.challenges = ChallengeStore(quest_factory)
+        self.challenges = ChallengeStore(quest_factory, adaptive_factory)
+        self.adaptive_available = adaptive_factory is not None
         self.pending_attempts = PendingAttemptStore()
         super().__init__(server_address, DashboardRequestHandler)
 
@@ -439,6 +503,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": "Dashboard data is unavailable."})
                 return
             document["csrf_token"] = self.server.csrf_token
+            document["runtime"]["adaptive_generation"] = (
+                "ready" if self.server.adaptive_available else "unavailable"
+            )
             self._send_json(200, document)
             return
         asset = ASSETS.get(path)
@@ -465,6 +532,35 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
+            if path == "/api/study/focus":
+                document = self._read_json(
+                    {"subject", "topic", "context", "difficulty"}
+                )
+                if not all(isinstance(value, str) for value in document.values()):
+                    raise ValueError("Study-focus fields must be text.")
+                skill = self.server.service.create_study_topic(
+                    subject=str(document["subject"]),
+                    topic=str(document["topic"]),
+                    context=str(document["context"]),
+                    difficulty=str(document["difficulty"]),
+                )
+                self._send_json(200, {"study_topic": skill})
+                return
+            if path == "/api/study/generate":
+                document = self._read_json({"skill_id"})
+                skill_id = document["skill_id"]
+                if not isinstance(skill_id, str) or len(skill_id) > 80:
+                    raise ValueError("Study topic ID must be valid text.")
+                skill = self.server.service.study_topic(skill_id)
+                challenge_token, quest = self.server.challenges.issue_adaptive(skill)
+                self._send_json(
+                    200,
+                    {
+                        "quest": self.server.service.public_adaptive_quest(quest),
+                        "challenge_token": challenge_token,
+                    },
+                )
+                return
             if path == "/api/quest/generate":
                 document = self._read_json({"skill_id"})
                 skill_id = document["skill_id"]
@@ -501,6 +597,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     {
                         "result": verification_document(result),
                         "attempt_token": attempt_token,
+                        "solution": (
+                            quest.solution if isinstance(quest, AdaptiveQuest) else None
+                        ),
                     },
                 )
                 return
@@ -536,6 +635,7 @@ def create_server(
     *,
     port: int = DEFAULT_DASHBOARD_PORT,
     quest_factory: GeneratedQuestFactory | None = None,
+    adaptive_factory: AdaptiveQuestFactory | None = None,
 ) -> SenseiDashboardServer:
     if not 0 <= port <= 65_535:
         raise ValueError("Dashboard port must be from 0 to 65535.")
@@ -543,6 +643,7 @@ def create_server(
         (LOOPBACK_HOST, port),
         service,
         quest_factory,
+        adaptive_factory,
     )
 
 
@@ -567,31 +668,107 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Start the dashboard without opening a browser.",
     )
+    model_group = parser.add_mutually_exclusive_group()
+    model_group.add_argument("--model-id", help="Pinned local model ID.")
+    model_group.add_argument(
+        "--fast",
+        action="store_true",
+        help=f"Use the lighter adaptive model ({FAST_MODEL_ID}).",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        help="Override the pinned model manifest path.",
+    )
+    parser.add_argument(
+        "--models-dir",
+        type=Path,
+        default=DEFAULT_MODELS_DIRECTORY,
+        help="Directory containing local GGUF weights.",
+    )
+    parser.add_argument(
+        "--runtime-dir",
+        type=Path,
+        default=DEFAULT_RUNTIME_DIRECTORY,
+        help="Directory containing llama-server.exe.",
+    )
+    parser.add_argument(
+        "--server-url",
+        help="Use an already-running llama.cpp server.",
+    )
+    parser.add_argument(
+        "--no-model",
+        action="store_true",
+        help="Run only the legacy deterministic practice generators.",
+    )
     return parser.parse_args(argv)
+
+
+def _adaptive_factory(
+    args: argparse.Namespace,
+    stack: ExitStack,
+) -> AdaptiveQuestFactory | None:
+    if args.no_model:
+        return None
+    catalog = (
+        ModelCatalog.load(args.manifest.resolve())
+        if args.manifest
+        else ModelCatalog.load()
+    )
+    selected_id = FAST_MODEL_ID if args.fast else args.model_id or DEFAULT_MODEL_ID
+    candidate = catalog.get(selected_id)
+    selected_path = model_path(candidate, args.models_dir)
+    if args.server_url:
+        base_url = args.server_url
+    else:
+        if not selected_path.is_file():
+            raise FileNotFoundError(
+                f"Model is missing: {selected_path}. Run scripts/download_models.py "
+                f"--model {selected_id}."
+            )
+        print(
+            f"Starting local practice architect {selected_id}; loading may take a moment...",
+            file=sys.stderr,
+        )
+        runtime = LocalLlamaRuntime(
+            RuntimeSettings(
+                executable=args.runtime_dir.resolve() / "llama-server.exe",
+                model_path=selected_path,
+                model_alias=selected_id,
+            )
+        )
+        base_url = stack.enter_context(runtime).base_url
+    return AdaptiveQuestFactory(LlamaCppProvider(base_url, selected_id))
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    try:
-        service = DashboardService(args.database)
-        service.state()
-        server = create_server(service, port=args.port)
-    except (OSError, ValueError, sqlite3.Error) as error:
-        print(f"Dashboard could not start: {error}", file=sys.stderr)
-        return 1
+    with ExitStack() as stack:
+        try:
+            service = DashboardService(args.database)
+            service.state()
+            adaptive_factory = _adaptive_factory(args, stack)
+            server = create_server(
+                service,
+                port=args.port,
+                adaptive_factory=adaptive_factory,
+            )
+        except (OSError, RuntimeError, ValueError, sqlite3.Error) as error:
+            print(f"Dashboard could not start: {error}", file=sys.stderr)
+            return 1
 
-    host, port = server.server_address
-    url = f"http://{host}:{port}/"
-    print(f"Sensei dashboard: {url}")
-    print("Learning data stays in the selected local SQLite database.")
-    if not args.no_open:
-        webbrowser.open(url)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nStopping dashboard.")
-    finally:
-        server.server_close()
+        host, port = server.server_address
+        url = f"http://{host}:{port}/"
+        print(f"Sensei dashboard: {url}")
+        print("Learning data and model inference stay on this machine.")
+        if not args.no_open:
+            webbrowser.open(url)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\nStopping dashboard.")
+        finally:
+            server.server_close()
     return 0
 
 

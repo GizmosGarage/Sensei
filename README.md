@@ -1,14 +1,14 @@
 # Sensei
 
-Sensei is a local-first, adaptive math tutor. It teaches through guided practice, remembers demonstrated skills and misconceptions, and turns progress into an RPG-style mastery system without requiring paid model inference.
+Sensei is a local-first, learner-directed math and chemistry tutor. Name a subject and topic, optionally supply your own material, and Sensei creates checked practice encounters while growing a persistent RPG-style mastery atlas around what you choose to study.
 
 Repository: [GizmosGarage/Sensei](https://github.com/GizmosGarage/Sensei)
 
 ## Project status
 
-**Phase 7 complete: fresh subject-confined question generation**
+**Phase 8 complete: learner-directed adaptive questlines**
 
-Sensei has a 20-subject Precalculus path alongside Calculus I. Its loopback-only dashboard now procedurally generates a new question for any of the 37 subjects, validates the hidden answer before issuance, checks the student's answer locally, and explicitly records XP and mastery into the same student-owned SQLite memory used by the terminal tutor. No hosted inference or cloud storage is involved. The provisional local stack is:
+Sensei no longer requires a premade course path. Its loopback-only dashboard accepts a subject, a topic, an optional learning objective or source excerpt, and a starting intensity. The local model drafts a confined problem, a separate review pass recomputes and approves it, and a deterministic answer contract checks the learner's response. Each learner-created topic joins the same student-owned SQLite memory, XP economy, mastery scoring, and spaced-review queue as the original verifier-backed math foundation. No hosted inference or cloud storage is involved. The local stack is:
 
 - `llama.cpp` b10549 with its Vulkan backend
 - Qwen 3.5 9B Q4_K_M as the default tutor model
@@ -43,7 +43,7 @@ Start a scheduled terminal challenge with `/quest`, submit it with `/answer`, an
 python -m sensei.dashboard
 ```
 
-Choose **Precalculus** or **Calculus**, select **Practice topic** on any subject, enter an expression, choose **Check answer**, and then **Record attempt** to save XP and mastery. Choose **New question** at any time for another randomly parameterized challenge in the same subject. See the [Precalculus path](docs/PRECALCULUS.md) and [dashboard guide](docs/LOCAL_DASHBOARD.md).
+Enter a subject such as **Chemistry**, a focus such as **Stoichiometry**, and any material or emphasis that should shape the encounter. Choose **Forge a practice quest**, answer it, and then claim XP to save the mastery evidence. The topic remains in your growing atlas for later practice and scheduled review. Use `python -m sensei.dashboard --fast` for the lighter local model. See the [dashboard guide](docs/LOCAL_DASHBOARD.md).
 
 ## Product principles
 
@@ -52,6 +52,8 @@ Choose **Precalculus** or **Calculus**, select **Practice topic** on any subject
 - Ask for a student attempt before revealing a solution.
 - Reward effort with XP while measuring mastery separately.
 - Verify mathematical answers with deterministic tools where possible.
+- Validate model-authored problems before presenting them to the learner.
+- Grow the study map from learner intent instead of assuming a universal syllabus.
 - Keep personal study history, model weights, and secrets out of Git.
 - Make architectural decisions and benchmark results reproducible.
 
@@ -75,6 +77,7 @@ Choose **Precalculus** or **Calculus**, select **Practice topic** on any subject
 - [Quest-and-dashboard decision](docs/decisions/0006-local-quests-and-dashboard.md)
 - [Interactive-course-dashboard decision](docs/decisions/0007-interactive-course-dashboard.md)
 - [Procedural-question-generation decision](docs/decisions/0008-procedural-question-generation.md)
+- [Learner-directed-practice decision](docs/decisions/0009-learner-directed-practice.md)
 - [Project log](docs/PROJECT_LOG.md)
 
 ## Planned phases
@@ -86,4 +89,5 @@ Choose **Precalculus** or **Calculus**, select **Practice topic** on any subject
 5. ~~Build guided review quests and a portfolio-ready interface.~~
 6. ~~Add an interactive dashboard practice loop and a complete Precalculus topic path.~~
 7. ~~Generate fresh, deterministically validated questions inside every subject.~~
-8. **Bring local-model coaching conversation into the dashboard and add difficulty progression.**
+8. ~~Replace fixed course selection with learner-created, locally generated questlines.~~
+9. **Bring multi-turn coaching conversation into each dashboard encounter.**

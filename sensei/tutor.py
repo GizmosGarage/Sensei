@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from sensei.verification import VerificationResult
 
 
-SYSTEM_PROMPT = """You are Sensei, a patient college calculus tutor.
+SYSTEM_PROMPT = """You are Sensei, a patient math and chemistry tutor.
 Teach the student how to reason instead of merely producing answers.
 Use concise steps and clear mathematical notation suitable for a terminal.
 Diagnose the student's specific mistake when they show work.
@@ -22,7 +22,8 @@ Ask one useful question at a time when coaching.
 Honor the requested help mode exactly.
 Never expose hidden reasoning, response planning, self-critique, or internal analysis.
 Do not claim that the student's answer is correct unless you have checked it.
-If a request is not about calculus or its prerequisites, briefly redirect to the study goal.
+Stay within the current subject and topic supplied by the learner. If a request drifts,
+briefly redirect to the active study goal.
 """
 
 
@@ -98,7 +99,7 @@ def student_facing_text(text: str) -> str:
 
 
 class TutorSession:
-    """Maintains bounded context for one active calculus problem."""
+    """Maintains bounded context for one active study problem."""
 
     def __init__(
         self,
@@ -181,7 +182,7 @@ class TutorSession:
     ) -> TutorReply:
         student_message = student_message.strip()
         if not student_message:
-            raise ValueError("Enter a calculus problem, attempt, or question.")
+            raise ValueError("Enter a study problem, attempt, or question.")
         if starts_new_problem or self.problem_statement is None:
             self.reset(student_message)
             request_text = NEW_PROBLEM_REQUESTS[mode]

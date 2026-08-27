@@ -1,6 +1,6 @@
-# Local RPG dashboard
+# Learner-directed RPG dashboard
 
-The dashboard is Sensei's local practice and progression interface. It shows rank, level progress, XP, course-specific recommendations, all 20 Precalculus and 17 Calculus disciplines, review timing, and recent attempts. A learner can generate, check, and record fresh verifier-backed quests without moving learning data into a browser account or hosted service.
+The dashboard is Sensei's local practice, tutoring, and progression interface. Instead of enrolling the learner in a fixed course, it asks what they want to practice and grows a personal mastery atlas from those requests.
 
 ## Start the dashboard
 
@@ -10,66 +10,66 @@ From the repository root:
 python -m sensei.dashboard
 ```
 
-An editable installation also provides:
-
-```powershell
-sensei-dashboard
-```
-
-The default address is `http://127.0.0.1:8765/`, and the system browser opens automatically. Use `--no-open` to suppress that behavior, `--port PORT` to select another loopback port, or `--database PATH` to view the same custom database passed to the tutor.
-
-The tutor and dashboard can run in separate terminals against the same SQLite file. The page refreshes its read model while visible, and the Refresh button requests an immediate snapshot.
+Use `--fast` for the lighter Qwen 3.5 4B model. An editable installation also provides `sensei-dashboard`. The default address is `http://127.0.0.1:8765/`, and the system browser opens automatically. `--no-open`, `--port PORT`, `--database PATH`, `--model-id ID`, `--models-dir PATH`, `--runtime-dir PATH`, and `--server-url URL` mirror the corresponding local runtime controls. `--no-model` keeps only the legacy deterministic generators available for diagnostics.
 
 ## Practice loop
 
-1. Choose **Precalculus** or **Calculus** at the top of the page.
-2. Use a unit chip to narrow the subject cards if desired.
-3. Select the recommended **Generate quest**, or **Practice topic** on a specific subject.
-4. Enter a mathematical expression and select **Check answer**.
-5. Review the local verifier's result, then select **Record attempt** to save it.
-6. Select **New question** for another randomized challenge in the same subject.
+1. Enter a broad subject, such as **Mathematics** or **Chemistry**.
+2. Enter the topic or skill to practice.
+3. Optionally paste an objective, notes excerpt, formula emphasis, or test scope.
+4. Choose foundation, adaptive, or challenge intensity and forge a quest.
+5. Solve the expression question or select one of four conceptual answers.
+6. Ask for the stored hint if needed, check the response, and study the walkthrough.
+7. Claim XP to record mastery and place the topic into spaced review.
 
-The generate, check, and record controls are deliberately separate. Generation selects parameters from a subject-specific rule and validates the hidden reference answer before issuance. Checking does not mutate learning memory. A conclusive check creates a short-lived, process-local, single-use attempt token; recording consumes it and writes exactly one progression event.
+The topic remains in the learner's atlas. Later encounters can start from its card or from Sensei's review recommendation. Re-entering the same subject and topic refreshes its emphasis and difficulty without fragmenting its history.
+
+## Validation boundary
+
+Adaptive generation has three gates:
+
+1. The local model must return an exact, size-bounded problem schema.
+2. A separate local-model review pass recomputes the answer and rejects ambiguous or off-topic drafts.
+3. The issued quest must use a locally checkable answer contract: restricted symbolic equivalence for quantitative work or an exact four-option key for conceptual work.
+
+This substantially reduces bad generated exercises, but it is not a formal proof that every natural-language premise is scientifically correct. The interface identifies answers as checked or validated rather than claiming universal certainty. Existing Calculus and Precalculus generators continue to use their stronger subject-specific symbolic validation.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    Tutor[Local terminal tutor] <--> DB[(SQLite learning memory)]
-    DB <--> API[Loopback dashboard API]
-    API <--> Page[Packaged dashboard assets]
-    Page <--> Browser[Local browser]
-    API --> Generate[Subject-specific generator]
-    Generate --> Verify[Restricted symbolic verifier]
+    Learner --> Page[Adaptive dojo]
+    Page --> API[Loopback dashboard API]
+    API --> Topics[(SQLite topic + mastery atlas)]
+    API --> Draft[Local problem draft]
+    Draft --> Review[Independent local review]
+    Review --> Check[Symbolic or exact-key check]
+    Check --> Topics
 ```
 
-`sensei/dashboard.py` owns the loopback server, public snapshot, protected write endpoints, temporary challenge store, and single-use checked-attempt store. `sensei/generation.py` contains one bounded generator per subject and validates every generated reference through the production verifier. `sensei/web/` contains dependency-free HTML, CSS, and JavaScript packaged with the Python application. SQLite remains the only durable source of truth.
+`sensei/practice.py` owns adaptive problem contracts, strict model-output parsing, review, and local answer checking. `sensei/dashboard.py` owns the loopback server, protected mutation endpoints, temporary hidden-answer challenge store, and model lifecycle. `sensei/storage.py` owns learner-created topics and unifies them with attempts, XP, mastery, and review scheduling. `sensei/web/` contains dependency-free HTML, CSS, and JavaScript.
 
 ## Privacy and safety boundary
 
-- The server address is fixed to `127.0.0.1`; there is no option to bind to the LAN.
-- The server serves a fixed route map rather than arbitrary filesystem paths.
-- The public JSON response excludes generated answers and symbolic target configuration.
-- Generated challenges expire after one hour and are addressed by opaque random tokens; their answer targets stay server-side.
-- Writes require a per-process CSRF token, reject cross-origin browser requests, enforce small exact-shape JSON bodies, and record only a server-issued one-time checked attempt.
-- Learning state is never copied into `localStorage`, cookies, or a cloud database.
-- Content Security Policy, frame denial, MIME sniffing protection, and a no-referrer policy are sent on responses.
-- The dashboard does not start or call the language model.
-- The selected SQLite database, exports, backups, and model files retain their existing ignored/local data rules.
+- The server is fixed to `127.0.0.1` and cannot bind to the LAN.
+- Model inference, source excerpts, hidden answers, learning history, and SQLite storage remain local.
+- Public quest JSON excludes answer keys and solutions until after submission.
+- Challenges expire after one hour and use opaque random tokens.
+- Conclusive checked attempts receive short-lived, single-use record tokens.
+- Writes require a per-process CSRF token and same-origin checks.
+- Request sizes, field sets, text lengths, answer grammar, and model-output shapes are bounded.
+- No learning state is copied into browser storage, cookies, or a hosted service.
 
-The dashboard is intended for the learner at the computer. Loopback isolation is not multi-user authentication; other software already running as the same local user may be able to contact local services.
+Loopback isolation is not multi-user authentication; software already running as the same operating-system user may be able to contact local services.
 
 ## HTTP surface
 
 | Route | Purpose |
 | --- | --- |
-| `/` | Packaged dashboard page. |
-| `/assets/styles.css` | Responsive visual system. |
-| `/assets/app.js` | Course navigation, safe DOM rendering, quest interaction, and refresh behavior. |
-| `/api/dashboard` | Profile, public quests, skills, review, recent attempts, and write-session token. |
-| `POST /api/quest/generate` | Generates and prevalidates a fresh question for one explicit skill ID. |
-| `POST /api/quest/check` | Checks an answer for one server-held challenge and issues a one-time token for a conclusive result. |
-| `POST /api/quest/record` | Consumes a checked-attempt token and records XP, mastery, and review state. |
+| `/api/dashboard` | Profile, growing atlas, review data, recent attempts, runtime state, and write-session token. |
+| `POST /api/study/focus` | Creates or refreshes one learner-owned subject/topic focus. |
+| `POST /api/study/generate` | Drafts, reviews, and issues a fresh adaptive quest for that focus. |
+| `POST /api/quest/check` | Checks one server-held quest and reveals its walkthrough after submission. |
+| `POST /api/quest/record` | Consumes a one-time token and records XP, mastery, and review state. |
+| `POST /api/quest/generate` | Preserved legacy route for deterministic catalog generators. |
 | `/healthz` | Minimal local health response. |
-
-Write requests use `application/json` and the per-process `X-Sensei-CSRF` value returned by `/api/dashboard`. Unknown routes return JSON `404`; rejected writes return `400` or `403`; server errors return a generic message rather than database details.

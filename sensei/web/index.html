@@ -3,133 +3,143 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Local RPG practice dashboard for the Sensei math tutor.">
-    <title>Sensei // Math Dojo</title>
+    <meta name="description" content="A local, learner-directed RPG practice tutor for math, chemistry, and beyond.">
+    <title>Sensei // Adaptive Dojo</title>
     <link rel="stylesheet" href="/assets/styles.css">
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
     <div class="ambient-grid" aria-hidden="true"></div>
     <header class="topbar">
-      <a class="brand" href="#top" aria-label="Sensei dashboard home">
+      <a class="brand" href="#top" aria-label="Sensei home">
         <span class="brand-mark" aria-hidden="true">道</span>
-        <span>
-          <strong>Sensei</strong>
-          <small>Math Dojo</small>
-        </span>
+        <span><strong>Sensei</strong><small>Adaptive Dojo</small></span>
       </a>
       <div class="topbar-actions">
-        <nav class="course-switch" aria-label="Choose course">
-          <button class="active" data-course="precalculus" type="button" aria-pressed="true">Precalculus</button>
-          <button data-course="calculus" type="button" aria-pressed="false">Calculus</button>
-        </nav>
-        <span class="local-badge"><i aria-hidden="true"></i> Local only</span>
-        <button class="icon-button" id="refresh-button" type="button">Refresh</button>
+        <span class="local-badge"><i aria-hidden="true"></i> Local model</span>
+        <button class="icon-button" id="refresh-button" type="button">Sync atlas</button>
       </div>
     </header>
 
     <main id="top">
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="eyebrow">Your training ground</p>
-          <h1 id="hero-title">Sharpen the<br><em>next step.</em></h1>
-          <p class="hero-lede">Practice earns experience. Verified work builds mastery. Choose a subject and train directly in this dashboard.</p>
-          <div class="system-strip" aria-label="Local system status">
-            <span><b id="catalog-quests">Fresh</b> generated quests</span>
-            <span><b id="catalog-skills">--</b> course subjects</span>
-            <span><b>0</b> cloud calls</span>
+          <p class="eyebrow">Your studies. Your adventure.</p>
+          <h1 id="hero-title">Name the quest.<br><em>Build the path.</em></h1>
+          <p class="hero-lede">Tell Sensei what you want to practice. It forges a fresh, checked challenge and grows a mastery map around the subjects you bring.</p>
+          <div class="system-strip" aria-label="System features">
+            <span><b>On demand</b> questlines</span>
+            <span><b>Checked</b> answer keys</span>
+            <span><b>Persistent</b> mastery</span>
           </div>
         </div>
 
         <article class="rank-card panel" aria-labelledby="rank-heading">
           <div class="rank-ring" id="rank-ring">
-            <div>
-              <span>LVL</span>
-              <strong id="level">1</strong>
-            </div>
+            <div><span>LVL</span><strong id="level">1</strong></div>
           </div>
           <div class="rank-copy">
             <p class="panel-kicker">Current rank</p>
             <h2 id="rank-heading"><span id="rank-name">Dojo Novice</span></h2>
-            <div class="xp-label">
-              <span id="xp-summary">0 / 100 XP</span>
-              <span id="total-xp">0 total</span>
-            </div>
-            <div class="progress-track" aria-label="Experience toward next level">
-              <i id="xp-progress"></i>
-            </div>
+            <div class="xp-label"><span id="xp-summary">0 / 100 XP</span><span id="total-xp">0 total</span></div>
+            <div class="progress-track" aria-label="Experience toward next level"><i id="xp-progress"></i></div>
             <dl class="mini-stats">
               <div><dt>Attempts</dt><dd id="attempts">0</dd></div>
-              <div><dt>Practiced</dt><dd id="practiced">0</dd></div>
+              <div><dt>Topics</dt><dd id="practiced">0</dd></div>
               <div><dt>Mastered</dt><dd id="mastered">0</dd></div>
             </dl>
           </div>
         </article>
       </section>
 
-      <section class="quest-section" aria-labelledby="quest-heading">
+      <section class="forge-section panel" aria-labelledby="forge-heading">
+        <div class="forge-intro">
+          <p class="eyebrow">Forge a questline</p>
+          <h2 id="forge-heading">What do you want to master?</h2>
+          <p>No enrollment and no fixed syllabus. A topic becomes part of your atlas the moment you train it.</p>
+          <div class="prompt-examples" aria-label="Example study requests">
+            <button type="button" data-subject="Mathematics" data-topic="Quadratic equations">Quadratic equations</button>
+            <button type="button" data-subject="Chemistry" data-topic="Stoichiometry">Stoichiometry</button>
+            <button type="button" data-subject="Chemistry" data-topic="Lewis structures">Lewis structures</button>
+          </div>
+        </div>
+        <form class="focus-form" id="focus-form">
+          <div class="field-pair">
+            <label>Subject<input id="subject-input" name="subject" maxlength="80" placeholder="Chemistry" autocomplete="off" required></label>
+            <label>Topic or skill<input id="topic-input" name="topic" maxlength="120" placeholder="Balancing chemical equations" autocomplete="off" required></label>
+          </div>
+          <div class="field-pair field-pair-wide">
+            <label>Material or emphasis <span>optional</span><textarea id="context-input" name="context" maxlength="2000" rows="3" placeholder="Paste a learning objective, formula sheet excerpt, or tell Sensei what the test covers."></textarea></label>
+            <label>Starting intensity<select id="difficulty-input" name="difficulty"><option value="foundation">Foundation</option><option value="adaptive" selected>Adaptive</option><option value="challenge">Challenge</option></select></label>
+          </div>
+          <div class="form-action-row">
+            <p id="form-status" role="status">Your material stays on this machine.</p>
+            <button class="primary-button forge-button" id="forge-button" type="submit">Forge a practice quest</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="quest-section" id="review-section" aria-labelledby="quest-heading">
         <article class="quest-card panel">
           <div class="quest-seal" aria-hidden="true"><span>次</span></div>
           <div class="quest-main">
-            <div class="quest-meta">
-              <span class="status-chip" id="quest-timing">Next quest</span>
-              <span id="quest-skill">Properties of exponents</span>
-            </div>
-            <h2 id="quest-heading"><span id="quest-title">Exponent Discipline</span></h2>
-            <p id="quest-prompt">Loading your next verifier-backed challenge...</p>
+            <div class="quest-meta"><span class="status-chip" id="quest-timing">Atlas empty</span><span id="quest-skill">Choose your first focus</span></div>
+            <h2 id="quest-heading"><span id="quest-title">Your next chapter starts above</span></h2>
+            <p id="quest-prompt">Add any math or chemistry topic and Sensei will begin building your personal practice path.</p>
             <p class="quest-reason" id="quest-reason"></p>
           </div>
           <div class="quest-action">
-            <span>Ready to train?</span>
-            <button class="primary-button" id="start-next-quest" type="button">Generate quest</button>
-            <small>Check and record it here</small>
+            <span id="quest-action-label">Ready when you are</span>
+            <button class="primary-button" id="start-next-quest" type="button" disabled>Start review quest</button>
+            <small>Fresh problem, same growing mastery</small>
           </div>
         </article>
       </section>
 
       <section class="arena-section panel" id="quest-arena" aria-labelledby="arena-title" hidden>
         <div class="arena-heading">
-          <div>
-            <p class="eyebrow" id="arena-skill">Selected discipline</p>
-            <h2 id="arena-title">Quest title</h2>
-          </div>
+          <div><p class="eyebrow" id="arena-skill">Selected discipline</p><h2 id="arena-title">Quest title</h2></div>
           <div class="arena-actions">
-            <button class="secondary-button" id="new-question" type="button">New question</button>
+            <button class="secondary-button" id="new-question" type="button">New encounter</button>
             <button class="icon-button" id="close-arena" type="button" aria-label="Close practice quest">Close</button>
           </div>
         </div>
+        <div class="difficulty-line"><span id="arena-subject">Subject</span><i aria-hidden="true"></i><span id="arena-difficulty">Adaptive</span></div>
         <p class="arena-prompt" id="arena-prompt"></p>
+        <div class="option-grid" id="option-grid"></div>
         <label class="answer-label" for="quest-answer">Your answer</label>
         <div class="answer-row">
-          <input id="quest-answer" type="text" maxlength="500" autocomplete="off" spellcheck="false" placeholder="Example: x^2 - 16">
+          <input id="quest-answer" type="text" maxlength="500" autocomplete="off" spellcheck="false" placeholder="Enter your answer">
           <button class="primary-button" id="check-answer" type="button">Check answer</button>
         </div>
-        <p class="notation-help">Use <code>^</code> for powers, <code>pi</code> for π, and function notation such as <code>sin(x)</code>.</p>
+        <div class="coach-row">
+          <button class="hint-button" id="show-hint" type="button">Ask Sensei for a hint</button>
+          <p class="notation-help" id="notation-help">For math, use <code>^</code> for powers and <code>pi</code> for π.</p>
+        </div>
+        <p class="hint-copy" id="hint-copy" hidden></p>
         <div class="answer-feedback" id="answer-feedback" role="status" hidden>
           <p class="feedback-status" id="feedback-status"></p>
           <p id="feedback-detail"></p>
           <p class="feedback-expected" id="feedback-expected"></p>
-          <button class="secondary-button" id="record-attempt" type="button" hidden>Record attempt</button>
+          <div class="solution-copy" id="solution-copy" hidden><strong>Sensei’s walkthrough</strong><p id="solution-text"></p></div>
+          <button class="secondary-button" id="record-attempt" type="button" hidden>Claim XP and record mastery</button>
         </div>
       </section>
 
       <section class="mastery-section" aria-labelledby="mastery-heading">
         <div class="section-heading">
-          <div>
-            <p class="eyebrow" id="course-label">Precalculus path</p>
-            <h2 id="mastery-heading">Precalculus subjects</h2>
-          </div>
-          <div class="unit-filters" id="unit-filters" aria-label="Filter skills by unit"></div>
+          <div><p class="eyebrow">Your growing atlas</p><h2 id="mastery-heading">Practiced realms</h2></div>
+          <p class="atlas-summary" id="atlas-summary">No fixed curriculum. Add only what matters to you.</p>
         </div>
         <div class="skill-grid" id="skill-grid" aria-live="polite"></div>
+        <div class="empty-atlas panel" id="empty-atlas">
+          <span aria-hidden="true">＋</span><p>Your first topic will appear here with its own mastery score, review schedule, and quest history.</p>
+        </div>
       </section>
 
       <section class="history-section" aria-labelledby="history-heading">
         <div class="section-heading compact">
-          <div>
-            <p class="eyebrow">Training log</p>
-            <h2 id="history-heading">Recent attempts</h2>
-          </div>
+          <div><p class="eyebrow">Adventure log</p><h2 id="history-heading">Recent encounters</h2></div>
           <p class="updated-at" id="updated-at" role="status">Connecting to local memory...</p>
         </div>
         <div class="history-list panel" id="history-list"></div>
@@ -138,37 +148,24 @@
 
     <footer>
       <p><span class="footer-mark">S</span> Sensei runs on your machine.</p>
-      <p>127.0.0.1 <span aria-hidden="true">•</span> Local SQLite <span aria-hidden="true">•</span> Student-owned data</p>
+      <p>Local model <span aria-hidden="true">•</span> Local SQLite <span aria-hidden="true">•</span> Learner-owned path</p>
     </footer>
 
     <template id="skill-template">
       <article class="skill-card panel">
-        <div class="skill-topline">
-          <span class="skill-unit"></span>
-          <span class="skill-score"></span>
-        </div>
-        <h3 class="skill-name"></h3>
-        <p class="skill-label"></p>
+        <div class="skill-topline"><span class="skill-subject"></span><span class="skill-score"></span></div>
+        <p class="skill-difficulty"></p><h3 class="skill-name"></h3><p class="skill-label"></p>
         <div class="progress-track skill-track"><i></i></div>
-        <div class="skill-footer">
-          <span class="skill-attempts"></span>
-          <span class="skill-review"></span>
-        </div>
-        <button class="practice-button" type="button">Practice topic</button>
+        <div class="skill-footer"><span class="skill-attempts"></span><span class="skill-review"></span></div>
+        <button class="practice-button" type="button">Train this topic</button>
       </article>
     </template>
 
     <template id="history-template">
       <article class="history-row">
         <span class="outcome-glyph" aria-hidden="true"></span>
-        <div>
-          <h3 class="history-skill"></h3>
-          <p class="history-problem"></p>
-        </div>
-        <div class="history-meta">
-          <span class="history-outcome"></span>
-          <time class="history-time"></time>
-        </div>
+        <div><h3 class="history-skill"></h3><p class="history-problem"></p></div>
+        <div class="history-meta"><span class="history-outcome"></span><time class="history-time"></time></div>
       </article>
     </template>
   </body>
