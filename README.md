@@ -69,6 +69,7 @@ Enter a subject such as **Chemistry**, a focus such as **Stoichiometry**, and an
 - [Review quests](docs/REVIEW_QUESTS.md)
 - [Precalculus path](docs/PRECALCULUS.md)
 - [Local RPG dashboard](docs/LOCAL_DASHBOARD.md)
+- [Local structured error log](docs/ERROR_LOG.md)
 - [Local-first architecture decision](docs/decisions/0001-local-first-architecture.md)
 - [Runtime and default-model decision](docs/decisions/0002-runtime-and-default-model.md)
 - [Terminal tutor architecture decision](docs/decisions/0003-terminal-tutor-architecture.md)

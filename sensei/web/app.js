@@ -11,6 +11,20 @@ let generatingQuestion = false;
 const difficultySelections = new Map();
 const generationStatuses = new Map();
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+const CLIENT_ERROR_STORAGE_KEY = "sensei.pending-client-errors.v1";
+const MAX_PENDING_CLIENT_ERRORS = 25;
+const reportedClientErrors = new WeakSet();
+
+window.addEventListener("error", (event) => {
+  void reportClientProblem(
+    event.error || new Error(event.message || "Unknown browser error"),
+    `window.error ${event.filename || "app"}:${event.lineno || 0}:${event.colno || 0}`,
+  );
+});
+window.addEventListener("unhandledrejection", (event) => {
+  const error = event.reason instanceof Error ? event.reason : new Error(String(event.reason));
+  void reportClientProblem(error, "window.unhandledrejection");
+});
 
 const DIFFICULTIES = Object.freeze({
   beginner: {
@@ -32,6 +46,81 @@ const DIFFICULTIES = Object.freeze({
 });
 
 const LEGACY_DIFFICULTIES = Object.freeze({ foundation: "beginner", adaptive: "intermediate", challenge: "advanced" });
+
+function clientProblemDocument(error, source) {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    message: (message || "Unknown browser error").slice(0, 1000),
+    stack: (error instanceof Error ? error.stack || "" : "").slice(0, 2000),
+    source: String(source || "dashboard browser").slice(0, 120),
+  };
+}
+
+function readPendingClientProblems() {
+  try {
+    const pending = JSON.parse(localStorage.getItem(CLIENT_ERROR_STORAGE_KEY) || "[]");
+    return Array.isArray(pending) ? pending.slice(-MAX_PENDING_CLIENT_ERRORS) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePendingClientProblems(problems) {
+  try {
+    if (problems.length) {
+      localStorage.setItem(
+        CLIENT_ERROR_STORAGE_KEY,
+        JSON.stringify(problems.slice(-MAX_PENDING_CLIENT_ERRORS)),
+      );
+    } else {
+      localStorage.removeItem(CLIENT_ERROR_STORAGE_KEY);
+    }
+  } catch {
+    // Error reporting must never interrupt the learner's current action.
+  }
+}
+
+async function sendClientProblem(document) {
+  if (!dashboardState?.csrf_token) throw new Error("Dashboard is not connected yet.");
+  const response = await fetch("/api/errors", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Sensei-CSRF": dashboardState.csrf_token },
+    body: JSON.stringify(document),
+  });
+  if (!response.ok) throw new Error(`Error-log request failed: ${response.status}`);
+}
+
+async function reportClientProblem(error, source) {
+  if (error?.errorId) return;
+  const trackable = error && typeof error === "object";
+  if (trackable && reportedClientErrors.has(error)) return;
+  if (trackable) reportedClientErrors.add(error);
+  const document = clientProblemDocument(error, source);
+  try {
+    await sendClientProblem(document);
+  } catch {
+    const pending = readPendingClientProblems();
+    pending.push(document);
+    writePendingClientProblems(pending);
+  }
+}
+
+async function flushPendingClientProblems() {
+  const pending = readPendingClientProblems();
+  if (!pending.length || !dashboardState?.csrf_token) return;
+  writePendingClientProblems([]);
+  for (let index = 0; index < pending.length; index += 1) {
+    try {
+      await sendClientProblem(pending[index]);
+    } catch {
+      writePendingClientProblems([
+        ...pending.slice(index),
+        ...readPendingClientProblems(),
+      ]);
+      return;
+    }
+  }
+}
 
 function canonicalDifficulty(value) {
   const normalized = LEGACY_DIFFICULTIES[value] || value;
@@ -398,6 +487,7 @@ async function startAdaptiveQuest(skillId, difficulty, statusTarget = byId("form
     openArena({ ...response.quest, challenge_token: response.challenge_token });
     setGenerationStatus(statusTarget, "Quest validated. Enter the arena.", "success", skillId);
   } catch (error) {
+    void reportClientProblem(error, "startAdaptiveQuest");
     setGenerationStatus(statusTarget, error.message, "error", skillId);
   } finally {
     generatingQuestion = false;
@@ -427,6 +517,7 @@ async function createFocus(event) {
     await loadDashboard();
     await startAdaptiveQuest(response.study_topic.id, difficulty);
   } catch (error) {
+    void reportClientProblem(error, "createFocus");
     byId("form-status").textContent = error.message;
   } finally {
     if (!generatingQuestion) byId("forge-button").disabled = false;
@@ -455,12 +546,16 @@ async function postJson(path, document, { retries = 0, onRetry = null } = {}) {
         // Preserve the HTTP status below when a local connection returns no JSON.
       }
       if (!response.ok) {
-        const error = new Error(result.error || `Request failed: ${response.status}`);
+        const message = result.error || `Request failed: ${response.status}`;
+        const suffix = result.error_id ? ` (Error ID: ${result.error_id})` : "";
+        const error = new Error(`${message}${suffix}`);
+        error.errorId = result.error_id || "";
         error.retryable = response.status >= 500;
         throw error;
       }
       return result;
     } catch (error) {
+      void reportClientProblem(error, `postJson ${path} attempt ${attempt + 1}`);
       const retryable = error.retryable || error instanceof TypeError;
       if (!retryable || attempt >= retries) throw error;
       if (onRetry) onRetry(attempt + 1);
@@ -497,6 +592,7 @@ async function checkAnswer() {
     byId("record-attempt").hidden = !attemptToken;
     feedback.hidden = false;
   } catch (error) {
+    void reportClientProblem(error, "checkAnswer");
     const feedback = byId("answer-feedback");
     feedback.classList.add("inconclusive");
     byId("feedback-status").textContent = "Sensei could not check that answer form.";
@@ -519,6 +615,7 @@ async function recordAttempt() {
     button.hidden = true;
     await loadDashboard();
   } catch (error) {
+    void reportClientProblem(error, "recordAttempt");
     byId("feedback-detail").textContent = error.message;
     byId("feedback-detail").hidden = false;
   } finally {
@@ -535,6 +632,7 @@ function render(state) {
   renderHistory(state.recent_attempts);
   const modelState = state.runtime.adaptive_generation === "ready" ? "Local practice architect ready" : "Adaptive model unavailable";
   byId("updated-at").textContent = `${modelState} · synced ${new Date(state.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  void flushPendingClientProblems();
 }
 
 async function loadDashboard() {
@@ -542,9 +640,16 @@ async function loadDashboard() {
   button.disabled = true;
   try {
     const response = await fetch("/api/dashboard", { cache: "no-store" });
-    if (!response.ok) throw new Error(`Dashboard request failed: ${response.status}`);
-    render(await response.json());
+    const result = await response.json();
+    if (!response.ok) {
+      const suffix = result.error_id ? ` (Error ID: ${result.error_id})` : "";
+      const error = new Error(`${result.error || `Dashboard request failed: ${response.status}`}${suffix}`);
+      error.errorId = result.error_id || "";
+      throw error;
+    }
+    render(result);
   } catch (error) {
+    void reportClientProblem(error, "loadDashboard");
     byId("updated-at").textContent = "Local memory unavailable — try syncing again";
   } finally {
     button.disabled = false;

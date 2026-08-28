@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Collection
 from urllib.parse import urlsplit
 
+from sensei.errorlog import DEFAULT_ERROR_LOG_PATH, ErrorRecorder, error_reference
 from sensei.generation import GENERATED_SKILL_IDS, GeneratedQuestFactory
 from sensei.learning import LearningEvent, Outcome
 from sensei.models import (
@@ -468,8 +469,10 @@ class SenseiDashboardServer(ThreadingHTTPServer):
         service: DashboardService,
         quest_factory: GeneratedQuestFactory | None = None,
         adaptive_factory: AdaptiveQuestFactory | None = None,
+        error_recorder: ErrorRecorder | None = None,
     ) -> None:
         self.service = service
+        self.error_recorder = error_recorder or ErrorRecorder()
         self.csrf_token = secrets.token_urlsafe(32)
         self.challenges = ChallengeStore(quest_factory, adaptive_factory)
         self.adaptive_available = adaptive_factory is not None
@@ -480,9 +483,78 @@ class SenseiDashboardServer(ThreadingHTTPServer):
         }
         super().__init__(server_address, DashboardRequestHandler)
 
+    def handle_error(
+        self,
+        request: object,
+        client_address: tuple[str, int],
+    ) -> None:
+        """Persist exceptions that escape a request-handler method."""
+
+        error = sys.exception()
+        if error is None:
+            error_id = self.error_recorder.record_problem(
+                "A dashboard request thread stopped without an exception object.",
+                component="dashboard.server",
+                operation="unhandled request failure",
+                context={"client": client_address[0]},
+            )
+        else:
+            error_id = self.error_recorder.record_exception(
+                error,
+                component="dashboard.server",
+                operation="unhandled request failure",
+                context={"client": client_address[0]},
+            )
+        print(
+            f"Dashboard request stopped unexpectedly ({error_reference(error_id)}).",
+            file=sys.stderr,
+        )
+
 
 class DashboardRequestHandler(BaseHTTPRequestHandler):
     server: SenseiDashboardServer
+
+    def _record_exception(
+        self,
+        error: BaseException,
+        operation: str,
+        *,
+        context: dict[str, object] | None = None,
+    ) -> str:
+        request_context: dict[str, object] = {
+            "method": self.command,
+            "path": urlsplit(self.path).path,
+            "client": self.client_address[0],
+        }
+        if context:
+            request_context.update(context)
+        return self.server.error_recorder.record_exception(
+            error,
+            component="dashboard.request",
+            operation=operation,
+            context=request_context,
+        )
+
+    def _record_problem(
+        self,
+        message: str,
+        operation: str,
+        *,
+        context: dict[str, object] | None = None,
+    ) -> str:
+        request_context: dict[str, object] = {
+            "method": self.command,
+            "path": urlsplit(self.path).path,
+            "client": self.client_address[0],
+        }
+        if context:
+            request_context.update(context)
+        return self.server.error_recorder.record_problem(
+            message,
+            component="dashboard.request",
+            operation=operation,
+            context=request_context,
+        )
 
     def _security_headers(self) -> None:
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -559,8 +631,22 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             try:
                 document = self.server.service.state()
             except Exception as error:  # keep request failures inside the server
-                self.log_error("Dashboard snapshot failed: %s", error)
-                self._send_json(500, {"error": "Dashboard data is unavailable."})
+                error_id = self._record_exception(
+                    error,
+                    "load dashboard snapshot",
+                )
+                self.log_error(
+                    "Dashboard snapshot failed (%s): %s",
+                    error_reference(error_id),
+                    error,
+                )
+                self._send_json(
+                    500,
+                    {
+                        "error": "Dashboard data is unavailable.",
+                        "error_id": error_id,
+                    },
+                )
                 return
             document["csrf_token"] = self.server.csrf_token
             document["runtime"]["adaptive_generation"] = (
@@ -582,10 +668,44 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         if not self._write_is_allowed():
-            self._send_json(403, {"error": "Local write authorization failed."})
+            error_id = self._record_problem(
+                "Local write authorization failed.",
+                "authorize local dashboard write",
+            )
+            self._send_json(
+                403,
+                {
+                    "error": "Local write authorization failed.",
+                    "error_id": error_id,
+                },
+            )
             return
         path = urlsplit(self.path).path
         try:
+            if path == "/api/errors":
+                document = self._read_json({"message", "stack", "source"})
+                message = document["message"]
+                stack = document["stack"]
+                source = document["source"]
+                if (
+                    not isinstance(message, str)
+                    or not message.strip()
+                    or len(message) > 1_000
+                    or not isinstance(stack, str)
+                    or len(stack) > 2_000
+                    or not isinstance(source, str)
+                    or not source.strip()
+                    or len(source) > 120
+                ):
+                    raise ValueError("Browser error details are invalid or too large.")
+                error_id = self.server.error_recorder.record_problem(
+                    message,
+                    component="dashboard.browser",
+                    operation=source,
+                    context={"stack": stack, "client": self.client_address[0]},
+                )
+                self._send_json(202, {"error_id": error_id})
+                return
             if path == "/api/study/focus":
                 document = self._read_json(
                     {"subject", "topic", "context", "difficulty"}
@@ -683,28 +803,73 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
         except PracticeGenerationError as error:
-            self.log_error("Adaptive generation failed validation: %s", error)
+            error_id = self._record_exception(
+                error,
+                "generate and validate adaptive encounter",
+            )
+            self.log_error(
+                "Adaptive generation failed validation (%s): %s",
+                error_reference(error_id),
+                error,
+            )
             self._send_json(
                 503,
                 {
                     "error": (
                         "Sensei could not finish a valid new encounter. "
                         "Please try again."
-                    )
+                    ),
+                    "error_id": error_id,
                 },
             )
             return
         except (MathInputError, ValueError) as error:
-            self._send_json(400, {"error": str(error)})
+            error_id = self._record_exception(
+                error,
+                "validate dashboard request",
+            )
+            self._send_json(
+                400,
+                {"error": str(error), "error_id": error_id},
+            )
             return
         except (OSError, RuntimeError, sqlite3.Error) as error:
-            self.log_error("Dashboard write failed: %s", error)
+            error_id = self._record_exception(
+                error,
+                "complete dashboard write",
+            )
+            self.log_error(
+                "Dashboard write failed (%s): %s",
+                error_reference(error_id),
+                error,
+            )
             message = (
                 "Sensei could not generate a new encounter. Please try again."
                 if path in {"/api/study/generate", "/api/quest/generate"}
                 else "The local attempt could not be recorded."
             )
-            self._send_json(500, {"error": message})
+            self._send_json(
+                500,
+                {"error": message, "error_id": error_id},
+            )
+            return
+        except Exception as error:
+            error_id = self._record_exception(
+                error,
+                "unexpected dashboard request failure",
+            )
+            self.log_error(
+                "Unexpected dashboard request failure (%s): %s",
+                error_reference(error_id),
+                error,
+            )
+            self._send_json(
+                500,
+                {
+                    "error": "The dashboard request failed unexpectedly.",
+                    "error_id": error_id,
+                },
+            )
             return
         self._send_json(404, {"error": "Not found."})
 
@@ -721,6 +886,7 @@ def create_server(
     port: int = DEFAULT_DASHBOARD_PORT,
     quest_factory: GeneratedQuestFactory | None = None,
     adaptive_factory: AdaptiveQuestFactory | None = None,
+    error_recorder: ErrorRecorder | None = None,
 ) -> SenseiDashboardServer:
     if not 0 <= port <= 65_535:
         raise ValueError("Dashboard port must be from 0 to 65535.")
@@ -729,6 +895,7 @@ def create_server(
         service,
         quest_factory,
         adaptive_factory,
+        error_recorder,
     )
 
 
@@ -786,6 +953,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Run only the legacy deterministic practice generators.",
     )
+    parser.add_argument(
+        "--error-log",
+        type=Path,
+        default=DEFAULT_ERROR_LOG_PATH,
+        help="Local structured error-log path.",
+    )
     return parser.parse_args(argv)
 
 
@@ -836,6 +1009,7 @@ def _adaptive_factory(
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    error_recorder = ErrorRecorder(args.error_log)
     with ExitStack() as stack:
         try:
             service = DashboardService(args.database)
@@ -845,21 +1019,54 @@ def main(argv: list[str] | None = None) -> int:
                 service,
                 port=args.port,
                 adaptive_factory=adaptive_factory,
+                error_recorder=error_recorder,
             )
         except (OSError, RuntimeError, ValueError, sqlite3.Error) as error:
-            print(f"Dashboard could not start: {error}", file=sys.stderr)
+            error_id = error_recorder.record_exception(
+                error,
+                component="dashboard",
+                operation="startup",
+            )
+            print(
+                f"Dashboard could not start: {error} "
+                f"({error_reference(error_id)})",
+                file=sys.stderr,
+            )
+            return 1
+        except Exception as error:
+            error_id = error_recorder.record_exception(
+                error,
+                component="dashboard",
+                operation="unexpected startup failure",
+            )
+            print(
+                f"Dashboard stopped during startup ({error_reference(error_id)}).",
+                file=sys.stderr,
+            )
             return 1
 
         host, port = server.server_address
         url = f"http://{host}:{port}/"
         print(f"Sensei dashboard: {url}")
         print("Learning data and model inference stay on this machine.")
+        print(f"Structured error log: {error_recorder.path}")
         if not args.no_open:
             webbrowser.open(url)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             print("\nStopping dashboard.")
+        except Exception as error:
+            error_id = error_recorder.record_exception(
+                error,
+                component="dashboard",
+                operation="serve dashboard",
+            )
+            print(
+                f"Dashboard stopped unexpectedly ({error_reference(error_id)}).",
+                file=sys.stderr,
+            )
+            return 1
         finally:
             server.server_close()
     return 0

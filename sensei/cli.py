@@ -8,6 +8,7 @@ import sys
 from contextlib import ExitStack
 from pathlib import Path
 
+from sensei.errorlog import DEFAULT_ERROR_LOG_PATH, ErrorRecorder, error_reference
 from sensei.models import (
     DEFAULT_MODEL_ID,
     DEFAULT_MODELS_DIRECTORY,
@@ -59,6 +60,7 @@ HELP = """Commands
   /review           Show the next skill scheduled for review.
   /new [problem]    Clear the problem context and optionally start another.
   /status           Show the active model and bounded-context usage.
+  /errors           Show the local structured error-log location.
   /export [path]    Export learning records to a new JSON file.
   /backup [path]    Back up the SQLite database to a new file.
   /delete-data      Permanently clear personal learning records after confirmation.
@@ -133,7 +135,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Wait for complete responses instead of printing tokens as they arrive.",
     )
+    parser.add_argument(
+        "--error-log",
+        type=Path,
+        default=DEFAULT_ERROR_LOG_PATH,
+        help="Local structured error-log path.",
+    )
     return parser.parse_args(argv)
+
+
+def _record_terminal_error(
+    recorder: ErrorRecorder,
+    error: BaseException,
+    operation: str,
+    *,
+    context: dict[str, object] | None = None,
+) -> str:
+    error_id = recorder.record_exception(
+        error,
+        component="terminal",
+        operation=operation,
+        context=context,
+    )
+    return error_reference(error_id)
 
 
 def _print_reply(
@@ -459,8 +483,10 @@ def run_interactive(
     verifier: CalculusVerifier | None = None,
     quest_deck: QuestDeck | None = None,
     stream: bool = True,
+    error_recorder: ErrorRecorder | None = None,
 ) -> int:
     verifier = verifier or CalculusVerifier()
+    error_recorder = error_recorder or ErrorRecorder()
     print(BANNER)
     while True:
         try:
@@ -483,6 +509,9 @@ def run_interactive(
         if command == "/status":
             print(_status(session))
             continue
+        if command == "/errors":
+            print(f"Structured error log: {error_recorder.path}")
+            continue
         if command == "/quest":
             if argument:
                 print("Use /quest without arguments.", file=sys.stderr)
@@ -494,13 +523,26 @@ def run_interactive(
                 recommendation = quest_deck.recommend(store)
                 _start_quest(session, recommendation, stream=stream)
             except (ProviderError, RuntimeError, ValueError) as error:
-                print(f"Quest could not start: {error}", file=sys.stderr)
+                reference = _record_terminal_error(
+                    error_recorder,
+                    error,
+                    "start review quest",
+                )
+                print(
+                    f"Quest could not start: {error} ({reference})",
+                    file=sys.stderr,
+                )
             continue
         if command == "/answer":
             try:
                 _answer_quest(session, verifier, argument)
             except (MathInputError, RuntimeError, ValueError) as error:
-                print(f"Answer check failed: {error}", file=sys.stderr)
+                reference = _record_terminal_error(
+                    error_recorder,
+                    error,
+                    "check quest answer",
+                )
+                print(f"Answer check failed: {error} ({reference})", file=sys.stderr)
             continue
         if command == "/check":
             if session.active_quest is not None:
@@ -512,7 +554,13 @@ def run_interactive(
             try:
                 _check_problem(session, verifier, argument)
             except (MathInputError, RuntimeError, ValueError) as error:
-                print(f"Verification failed: {error}", file=sys.stderr)
+                reference = _record_terminal_error(
+                    error_recorder,
+                    error,
+                    "verify answer",
+                    context={"verification_kind": argument or "missing"},
+                )
+                print(f"Verification failed: {error} ({reference})", file=sys.stderr)
             continue
         try:
             if _memory_command(command, argument, session, store, extractor):
@@ -526,7 +574,13 @@ def run_interactive(
             ValueError,
             sqlite3.Error,
         ) as error:
-            print(f"Memory operation failed: {error}", file=sys.stderr)
+            reference = _record_terminal_error(
+                error_recorder,
+                error,
+                "learning-memory command",
+                context={"command": command},
+            )
+            print(f"Memory operation failed: {error} ({reference})", file=sys.stderr)
             continue
         if command == "/new":
             session.reset()
@@ -568,7 +622,16 @@ def run_interactive(
                 stream=stream,
             )
         except (ProviderError, ValueError) as error:
-            print(f"\nSensei could not answer: {error}", file=sys.stderr)
+            reference = _record_terminal_error(
+                error_recorder,
+                error,
+                "tutor response",
+                context={"mode": mode.value, "starts_new_problem": starts_new},
+            )
+            print(
+                f"\nSensei could not answer: {error} ({reference})",
+                file=sys.stderr,
+            )
 
 
 def _runtime_context(
@@ -596,6 +659,7 @@ def _runtime_context(
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    error_recorder = ErrorRecorder(args.error_log)
     try:
         catalog = (
             ModelCatalog.load(args.manifest.resolve())
@@ -628,7 +692,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 0
             if args.no_memory:
-                return run_interactive(session, stream=not args.no_stream)
+                return run_interactive(
+                    session,
+                    stream=not args.no_stream,
+                    error_recorder=error_recorder,
+                )
             store = stack.enter_context(LearningStore(args.database))
             session.set_learner_context(store.tutor_context())
             extractor = LearningEventExtractor(provider, store.skill_names())
@@ -639,6 +707,7 @@ def main(argv: list[str] | None = None) -> int:
                 extractor=extractor,
                 quest_deck=quest_deck,
                 stream=not args.no_stream,
+                error_recorder=error_recorder,
             )
     except (
         FileNotFoundError,
@@ -648,7 +717,23 @@ def main(argv: list[str] | None = None) -> int:
         ValueError,
         sqlite3.Error,
     ) as error:
-        print(f"Sensei could not start: {error}", file=sys.stderr)
+        reference = _record_terminal_error(
+            error_recorder,
+            error,
+            "startup or one-shot request",
+        )
+        print(f"Sensei could not start: {error} ({reference})", file=sys.stderr)
+        return 1
+    except Exception as error:
+        reference = _record_terminal_error(
+            error_recorder,
+            error,
+            "unexpected application failure",
+        )
+        print(
+            f"Sensei stopped after an unexpected error ({reference}).",
+            file=sys.stderr,
+        )
         return 1
 
 

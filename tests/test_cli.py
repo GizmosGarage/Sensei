@@ -1,3 +1,4 @@
+import json
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
@@ -12,6 +13,7 @@ from sensei.cli import (
     _profile_text,
     _review_text,
     _skills_text,
+    main,
     parse_args,
 )
 from sensei.learning import LearningEvent, Outcome
@@ -30,6 +32,26 @@ class CliTests(unittest.TestCase):
         args = parse_args(["--prompt", "Differentiate x^2", "--mode", "hint"])
         self.assertEqual("Differentiate x^2", args.prompt)
         self.assertEqual("hint", args.mode)
+
+    def test_startup_failure_is_recorded_with_the_visible_error_id(self) -> None:
+        with TemporaryDirectory() as directory:
+            error_log = Path(directory) / "errors.jsonl"
+            stderr = StringIO()
+            with redirect_stderr(stderr):
+                status = main(
+                    [
+                        "--models-dir",
+                        directory,
+                        "--error-log",
+                        str(error_log),
+                    ]
+                )
+
+            self.assertEqual(1, status)
+            record = json.loads(error_log.read_text(encoding="utf-8"))
+            self.assertEqual("terminal", record["component"])
+            self.assertEqual("startup or one-shot request", record["operation"])
+            self.assertIn(record["error_id"], stderr.getvalue())
 
     def test_derivative_check_wizard_attaches_authoritative_result(self) -> None:
         session = TutorSession(object(), "test-model")

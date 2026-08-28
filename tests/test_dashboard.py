@@ -13,6 +13,7 @@ from sensei.dashboard import (
     create_server,
     rank_name,
 )
+from sensei.errorlog import ErrorRecorder
 from sensei.generation import GeneratedQuestFactory
 from sensei.learning import LearningEvent, Outcome
 from sensei.practice import AdaptiveQuestFactory
@@ -24,6 +25,8 @@ class DashboardTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.database = Path(self.temporary.name) / "sensei.db"
+        self.error_log = Path(self.temporary.name) / "errors.jsonl"
+        self.error_recorder = ErrorRecorder(self.error_log)
         self.service = DashboardService(self.database)
 
     def tearDown(self) -> None:
@@ -75,7 +78,11 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual("continuity", state["next_quests"]["calculus"]["skill_id"])
 
     def test_loopback_server_serves_health_api_and_dashboard_assets(self) -> None:
-        server = create_server(self.service, port=0)
+        server = create_server(
+            self.service,
+            port=0,
+            error_recorder=self.error_recorder,
+        )
         self.assertEqual(LOOPBACK_HOST, server.server_address[0])
         self.assertIn(b"Sensei // Adaptive Dojo", server.assets["/"][0])
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -110,6 +117,7 @@ class DashboardTests(unittest.TestCase):
             self.service,
             port=0,
             quest_factory=GeneratedQuestFactory(random.Random(seed)),
+            error_recorder=self.error_recorder,
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -240,6 +248,7 @@ class DashboardTests(unittest.TestCase):
             self.service,
             port=0,
             adaptive_factory=AdaptiveQuestFactory(provider),
+            error_recorder=self.error_recorder,
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -327,7 +336,11 @@ class DashboardTests(unittest.TestCase):
             thread.join(timeout=5)
 
     def test_dashboard_rejects_a_write_without_csrf_token(self) -> None:
-        server = create_server(self.service, port=0)
+        server = create_server(
+            self.service,
+            port=0,
+            error_recorder=self.error_recorder,
+        )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base_url = f"http://{LOOPBACK_HOST}:{server.server_address[1]}"
@@ -347,6 +360,73 @@ class DashboardTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+    def test_dashboard_records_browser_and_request_failures_with_error_ids(self) -> None:
+        server = create_server(
+            self.service,
+            port=0,
+            error_recorder=self.error_recorder,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://{LOOPBACK_HOST}:{server.server_address[1]}"
+
+        def request(path: str, document: dict[str, str], token: str) -> Request:
+            return Request(
+                f"{base_url}{path}",
+                data=json.dumps(document).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Origin": base_url,
+                    "X-Sensei-CSRF": token,
+                },
+                method="POST",
+            )
+
+        try:
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                csrf_token = json.load(response)["csrf_token"]
+            with urlopen(
+                request(
+                    "/api/errors",
+                    {
+                        "message": "Render failed",
+                        "stack": "at render (app.js:1)",
+                        "source": "window.error app.js:1:1",
+                    },
+                    csrf_token,
+                ),
+                timeout=5,
+            ) as response:
+                browser_error_id = json.load(response)["error_id"]
+                self.assertEqual(202, response.status)
+
+            with self.assertRaises(HTTPError) as rejected:
+                urlopen(
+                    request(
+                        "/api/quest/record",
+                        {"attempt_token": "missing"},
+                        csrf_token,
+                    ),
+                    timeout=5,
+                )
+            request_error = json.load(rejected.exception)
+            self.assertEqual(400, rejected.exception.code)
+            self.assertTrue(request_error["error_id"].startswith("SEN-"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        records = [
+            json.loads(line)
+            for line in self.error_log.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(2, len(records))
+        self.assertEqual(browser_error_id, records[0]["error_id"])
+        self.assertEqual("dashboard.browser", records[0]["component"])
+        self.assertEqual("dashboard.request", records[1]["component"])
+        self.assertEqual("validate dashboard request", records[1]["operation"])
 
     def test_invalid_adaptive_generation_returns_a_retryable_status(self) -> None:
         skill = self.service.create_study_topic(
@@ -369,6 +449,7 @@ class DashboardTests(unittest.TestCase):
             self.service,
             port=0,
             adaptive_factory=AdaptiveQuestFactory(provider),
+            error_recorder=self.error_recorder,
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -403,6 +484,7 @@ class DashboardTests(unittest.TestCase):
             self.service,
             port=0,
             quest_factory=GeneratedQuestFactory(random.Random(99)),
+            error_recorder=self.error_recorder,
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()

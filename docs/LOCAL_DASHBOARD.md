@@ -12,6 +12,10 @@ python -m sensei.dashboard
 
 Use `--fast` for the lighter Qwen 3.5 4B model. An editable installation also provides `sensei-dashboard`. The default address is `http://127.0.0.1:8765/`, and the system browser opens automatically. `--no-open`, `--port PORT`, `--database PATH`, `--model-id ID`, `--models-dir PATH`, `--runtime-dir PATH`, and `--server-url URL` mirror the corresponding local runtime controls. `--no-model` keeps only the legacy deterministic generators available for diagnostics.
 
+Use `--error-log PATH` to change the structured diagnostic-log location. Startup,
+API, generation, persistence, and browser JavaScript failures receive correlation
+IDs and are recorded locally; see the [local error log](ERROR_LOG.md).
+
 ## Practice loop
 
 1. Enter a broad subject, such as **Mathematics** or **Chemistry**.
@@ -78,5 +82,6 @@ Loopback isolation is not multi-user authentication; software already running as
 | `POST /api/study/generate` | Drafts, reviews, and issues a fresh quest for a focus at the required `difficulty`. |
 | `POST /api/quest/check` | Checks one server-held quest and reveals its walkthrough after submission. |
 | `POST /api/quest/record` | Consumes a one-time token and records XP, mastery, and review state. |
+| `POST /api/errors` | Accepts bounded same-origin browser diagnostics for the local error log. |
 | `POST /api/quest/generate` | Preserved legacy route for deterministic catalog generators. |
 | `/healthz` | Minimal local health response. |

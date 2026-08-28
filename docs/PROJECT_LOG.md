@@ -1,5 +1,23 @@
 # Project log
 
+## 2026-08-28 - Cross-surface structured error history
+
+### Completed
+
+- Added a local JSON-lines error recorder with UTC timestamps, unique correlation IDs, component and operation metadata, exception chains, and full Python tracebacks.
+- Wired terminal startup, provider, verification, quest, memory, and unexpected failures into the record while exposing the active path through `/errors`.
+- Wired dashboard startup, API validation, generation, persistence, request-thread, and unexpected failures into the same record.
+- Added bounded browser JavaScript error and unhandled-promise reporting, including a 25-entry reconnect queue for failures that happen while the loopback server is unavailable.
+- Returned error IDs with dashboard failures and displayed them with browser and terminal error messages so visible symptoms can be matched to exact records.
+- Kept raw answers and request bodies out of diagnostic context, retained the log under ignored local `data/`, added configurable paths, and documented bounded rotation.
+
+### Verification
+
+All 99 automated tests pass. Coverage validates exception chains and tracebacks,
+non-exception browser problems, log rotation, browser diagnostic ingestion, API
+failure correlation, and terminal startup-failure correlation. Python compilation
+and JavaScript syntax checks also pass.
+
 ## 2026-08-27 - Milestone 9: explicit per-problem difficulty
 
 ### Completed

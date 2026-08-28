@@ -41,6 +41,7 @@ Model weights are not downloaded implicitly. If the selected artifact is missing
 | `/review` | Recommends the next scheduled skill and shows an unresolved misconception when present. |
 | `/new [problem]` | Clears the current context and optionally starts another problem. |
 | `/status` | Shows the model, active problem, tutor-turn count, and recent-context usage. |
+| `/errors` | Shows the active local structured error-log path. |
 | `/export [path]` | Exports personal learning records to a new JSON file. |
 | `/backup [path]` | Creates a new SQLite backup without overwriting an existing file. |
 | `/delete-data` | Clears learning records after an exact `DELETE` confirmation. |
@@ -66,6 +67,10 @@ python -m sensei `
 ```
 
 Add `--no-stream` to wait for one complete response. Use `--server-url http://127.0.0.1:8080` to connect to an already-running compatible server rather than starting one.
+
+Failures include a correlation ID and are recorded locally with their traceback and
+operation. See the [local error log](ERROR_LOG.md). Use `--error-log PATH` to choose
+a different diagnostic file.
 
 ## Context policy
 
