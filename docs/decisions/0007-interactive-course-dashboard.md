@@ -9,7 +9,7 @@ The first dashboard was a read-only Calculus progress view. The learner needs a 
 
 ## Decision
 
-Add `course` to the versioned skill catalog and SQLite schema. Represent Precalculus and Calculus as filtered views over one progression database, with independent next-quest recommendations. Seed the requested 20 Precalculus subjects and one deterministic starter quest for each.
+Add `course` to the versioned skill catalog and SQLite schema. Represent Precalculus and Calculus as filtered views over one progression database. Seed the requested 20 Precalculus subjects and one deterministic starter quest for each.
 
 Allow the loopback dashboard to check and record curated quest attempts. Keep checking non-durable. After a conclusive verifier result, hold the result in process memory behind a cryptographically random token that expires after 15 minutes and can be consumed once. Require the dashboard's per-process CSRF token for writes, validate browser origin metadata, accept only small exact-shape JSON documents, and construct the durable learning event from server-owned quest and verifier data.
 

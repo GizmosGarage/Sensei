@@ -2,7 +2,6 @@ import json
 import unittest
 
 from sensei.practice import (
-    MAX_EXPERT_SOLUTION_CHARACTERS,
     MAX_SOLUTION_CHARACTERS,
     AdaptiveQuestFactory,
     PracticeGenerationError,
@@ -18,7 +17,6 @@ SKILL = {
     "course": "Chemistry",
     "name": "Stoichiometry",
     "description": "Practice mole ratios.",
-    "difficulty": "beginner",
 }
 
 
@@ -54,43 +52,16 @@ class AdaptivePracticeTests(unittest.TestCase):
         )
         quest = AdaptiveQuestFactory(provider).generate(SKILL)
         self.assertEqual("Stoichiometry", quest.topic)
-        self.assertEqual("beginner", quest.difficulty)
         self.assertEqual(VerificationStatus.VERIFIED_CORRECT, quest.check("3").status)
         self.assertEqual(VerificationStatus.VERIFIED_INCORRECT, quest.check("6").status)
         public = quest.public_dict()
         self.assertNotIn("answer", public)
         self.assertNotIn("solution", public)
         self.assertEqual(2, len(provider.requests))
-        self.assertIn(
-            "Beginner (level 1 of 4)",
-            provider.requests[0][-1]["content"],
-        )
-        self.assertIn(
-            "Requested problem difficulty: Beginner (level 1 of 4)",
-            provider.requests[1][-1]["content"],
-        )
-
-    def test_all_four_difficulties_have_specific_generation_contracts(self) -> None:
-        expected = {
-            "beginner": ("Beginner (level 1 of 4)", "one direct step"),
-            "intermediate": ("Intermediate (level 2 of 4)", "two or three connected steps"),
-            "advanced": ("Advanced (level 3 of 4)", "multi-step reasoning"),
-            "expert": ("Expert (level 4 of 4)", "subtle edge case or constraint"),
-        }
-        for difficulty, phrases in expected.items():
-            with self.subTest(difficulty=difficulty):
-                messages = AdaptiveQuestFactory._request(
-                    {**SKILL, "difficulty": difficulty},
-                    "",
-                    variation_key="test-variation",
-                    avoid_prompts=(),
-                )
-                request = messages[-1]["content"]
-                for phrase in phrases:
-                    self.assertIn(phrase, request)
-                self.assertIn("Required difficulty construction:", request)
-                self.assertIn("Mandatory problem pattern:", request)
-                self.assertIn("graph", messages[0]["content"])
+        self.assertIn("Subject: Chemistry", provider.requests[0][-1]["content"])
+        self.assertIn("Topic: Stoichiometry", provider.requests[0][-1]["content"])
+        self.assertIn("Requested subject: Chemistry", provider.requests[1][-1]["content"])
+        self.assertIn("Requested topic: Stoichiometry", provider.requests[1][-1]["content"])
 
     def test_fixable_draft_is_revised_with_feedback_instead_of_discarded(self) -> None:
         incorrect_key = json.dumps(
@@ -131,7 +102,7 @@ class AdaptivePracticeTests(unittest.TestCase):
             ]
         )
         quest = AdaptiveQuestFactory(provider).generate(
-            {**SKILL, "name": "Unit conversions", "difficulty": "intermediate"}
+            {**SKILL, "name": "Unit conversions"}
         )
 
         self.assertEqual("1", quest.answer)
@@ -140,92 +111,6 @@ class AdaptivePracticeTests(unittest.TestCase):
         self.assertIn("keyed answer is wrong", revision_request)
         self.assertIn("Convert 100 centimeters to meters", revision_request)
         self.assertIn("Return one clean, self-contained replacement", revision_request)
-
-    def test_difficulty_failure_forces_a_new_problem_design(self) -> None:
-        too_easy = json.dumps(
-            {
-                "title": "Direct Conversion",
-                "prompt": "Convert 100 centimeters to meters. Enter only the value.",
-                "answer_type": "expression",
-                "answer": "1",
-                "options": [],
-                "hint": "Use the metric prefix.",
-                "solution": "Divide 100 by 100 to get 1.",
-                "graph": None,
-            }
-        )
-        harder = json.dumps(
-            {
-                "title": "Travel Conversion",
-                "prompt": (
-                    "A car travels 1500 meters in 2 minutes. Convert both quantities "
-                    "and find its speed in km/h. Enter only the value."
-                ),
-                "answer_type": "expression",
-                "answer": "45",
-                "options": [],
-                "hint": "Convert distance and time before dividing.",
-                "solution": "1500 m is 1.5 km; 2 min is 1/30 h; 1.5/(1/30)=45.",
-                "graph": None,
-            }
-        )
-        provider = StubProvider(
-            [
-                too_easy,
-                json.dumps(
-                    {
-                        "approved": False,
-                        "reason": "The problem is too simple for this difficulty.",
-                    }
-                ),
-                harder,
-                json.dumps({"approved": True, "reason": "Checked."}),
-            ]
-        )
-        quest = AdaptiveQuestFactory(provider).generate(
-            {**SKILL, "name": "Unit conversions", "difficulty": "intermediate"}
-        )
-
-        self.assertEqual("45", quest.answer)
-        replacement_request = provider.requests[2][-1]["content"]
-        self.assertIn("Start over with a clean problem", replacement_request)
-        self.assertIn("too simple for this difficulty", replacement_request)
-        self.assertNotIn("Prior draft:", replacement_request)
-
-    def test_dimensional_analysis_uses_a_topic_specific_tier_pattern(self) -> None:
-        messages = AdaptiveQuestFactory._request(
-            {
-                **SKILL,
-                "course": "Chemistry",
-                "name": "Dimensional Analysis",
-                "difficulty": "intermediate",
-            },
-            "",
-            variation_key="test-variation",
-            avoid_prompts=(),
-        )
-
-        request = messages[-1]["content"]
-        self.assertIn("Dual-unit rate pattern", request)
-        self.assertIn("do not introduce molar mass", request)
-
-    def test_expert_limits_require_a_decisive_sided_edge_case(self) -> None:
-        messages = AdaptiveQuestFactory._request(
-            {
-                **SKILL,
-                "course": "Mathematics",
-                "name": "Numerical Limits",
-                "difficulty": "expert",
-            },
-            "",
-            variation_key="test-variation",
-            avoid_prompts=(),
-        )
-
-        request = messages[-1]["content"]
-        self.assertIn("Compound-sided-limit pattern", request)
-        self.assertIn("left/right behavior", request)
-        self.assertIn("Use DNE as the answer key", request)
 
     def test_repeated_graphical_limit_is_rejected_and_replaced(self) -> None:
         skill = {
@@ -409,23 +294,6 @@ class AdaptivePracticeTests(unittest.TestCase):
             f"solution exceeds {MAX_SOLUTION_CHARACTERS} characters",
         ):
             parse_adaptive_quest(json.dumps(document), skill=SKILL)
-
-        document["solution"] = "x" * 2_000
-        expert = parse_adaptive_quest(
-            json.dumps(document),
-            skill={**SKILL, "difficulty": "expert"},
-        )
-        self.assertEqual(2_000, len(expert.solution))
-
-        document["solution"] = "x" * (MAX_EXPERT_SOLUTION_CHARACTERS + 1)
-        with self.assertRaisesRegex(
-            PracticeGenerationError,
-            f"solution exceeds {MAX_EXPERT_SOLUTION_CHARACTERS} characters",
-        ):
-            parse_adaptive_quest(
-                json.dumps(document),
-                skill={**SKILL, "difficulty": "expert"},
-            )
 
     def test_prompt_discards_stray_show_your_work_instruction(self) -> None:
         document = {

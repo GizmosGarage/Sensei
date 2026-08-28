@@ -11,14 +11,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Collection
 
-from sensei.difficulty import normalize_difficulty
 from sensei.learning import LearningEvent, Outcome
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = REPOSITORY_ROOT / "data" / "sensei.db"
 DEFAULT_SKILLS_PATH = REPOSITORY_ROOT / "config" / "skills.json"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 MIGRATION_1 = """
@@ -131,23 +130,21 @@ CREATE TABLE skills_v5 (
     course TEXT NOT NULL CHECK (length(trim(course)) > 0),
     source TEXT NOT NULL DEFAULT 'catalog'
         CHECK (source IN ('catalog', 'learner')),
-    difficulty TEXT NOT NULL DEFAULT 'adaptive'
-        CHECK (difficulty IN ('foundation', 'adaptive', 'challenge')),
     created_at TEXT
 );
 INSERT INTO skills_v5(
     id, name, unit, description, prerequisites_json, sort_order, course,
-    source, difficulty, created_at
+    source, created_at
 )
 SELECT id, name, unit, description, prerequisites_json, sort_order, course,
-       'catalog', 'adaptive', NULL
+       'catalog', NULL
 FROM skills;
 DROP TABLE skills;
 ALTER TABLE skills_v5 RENAME TO skills;
 """
 
-MIGRATION_6 = """
-CREATE TABLE skills_v6 (
+MIGRATION_7 = """
+CREATE TABLE skills_v7 (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     unit TEXT NOT NULL,
@@ -157,25 +154,17 @@ CREATE TABLE skills_v6 (
     course TEXT NOT NULL CHECK (length(trim(course)) > 0),
     source TEXT NOT NULL DEFAULT 'catalog'
         CHECK (source IN ('catalog', 'learner')),
-    difficulty TEXT NOT NULL DEFAULT 'intermediate'
-        CHECK (difficulty IN ('beginner', 'intermediate', 'advanced', 'expert')),
     created_at TEXT
 );
-INSERT INTO skills_v6(
+INSERT INTO skills_v7(
     id, name, unit, description, prerequisites_json, sort_order, course,
-    source, difficulty, created_at
+    source, created_at
 )
 SELECT id, name, unit, description, prerequisites_json, sort_order, course,
-       source,
-       CASE difficulty
-           WHEN 'foundation' THEN 'beginner'
-           WHEN 'challenge' THEN 'advanced'
-           ELSE 'intermediate'
-       END,
-       created_at
+       source, created_at
 FROM skills;
 DROP TABLE skills;
-ALTER TABLE skills_v6 RENAME TO skills;
+ALTER TABLE skills_v7 RENAME TO skills;
 """
 
 
@@ -341,13 +330,20 @@ class LearningStore:
                 self.connection.execute("PRAGMA foreign_keys = ON")
             applied.add(5)
         if 6 not in applied:
+            self.connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (6, utc_now().isoformat()),
+            )
+            self.connection.commit()
+            applied.add(6)
+        if 7 not in applied:
             self.connection.commit()
             self.connection.execute("PRAGMA foreign_keys = OFF")
             try:
-                self.connection.executescript(MIGRATION_6)
+                self.connection.executescript(MIGRATION_7)
                 self.connection.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-                    (6, utc_now().isoformat()),
+                    (7, utc_now().isoformat()),
                 )
                 self.connection.commit()
             finally:
@@ -388,8 +384,8 @@ class LearningStore:
                 self.connection.execute(
                     """INSERT INTO skills(
                            id, course, name, unit, description,
-                           prerequisites_json, sort_order, source, difficulty
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'catalog', 'intermediate')
+                           prerequisites_json, sort_order, source
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'catalog')
                        ON CONFLICT(id) DO UPDATE SET
                            course = excluded.course,
                            name = excluded.name,
@@ -429,7 +425,6 @@ class LearningStore:
         subject: str,
         topic: str,
         context: str = "",
-        difficulty: str = "intermediate",
     ) -> dict[str, Any]:
         """Create or refresh one learner-owned topic in the growing skill atlas."""
 
@@ -438,7 +433,6 @@ class LearningStore:
         context = " ".join(context.split())
         if len(context) > 2_000:
             raise ValueError("Study material must be 2,000 characters or fewer.")
-        difficulty = normalize_difficulty(difficulty)
         identity = f"{subject.casefold()}\0{topic.casefold()}"
         digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
         slug = re.sub(r"[^a-z0-9]+", "-", topic.casefold()).strip("-")[:40]
@@ -454,13 +448,12 @@ class LearningStore:
             self.connection.execute(
                 """INSERT INTO skills(
                        id, course, name, unit, description, prerequisites_json,
-                       sort_order, source, difficulty, created_at
-                   ) VALUES (?, ?, ?, ?, ?, '[]', ?, 'learner', ?, ?)
+                       sort_order, source, created_at
+                   ) VALUES (?, ?, ?, ?, ?, '[]', ?, 'learner', ?)
                    ON CONFLICT(id) DO UPDATE SET
                        course = excluded.course,
                        name = excluded.name,
-                       description = excluded.description,
-                       difficulty = excluded.difficulty""",
+                       description = excluded.description""",
                 (
                     skill_id,
                     subject,
@@ -468,35 +461,14 @@ class LearningStore:
                     f"{subject} questline",
                     description,
                     sort_order,
-                    difficulty,
                     timestamp,
                 ),
             )
         return self.study_topic(skill_id)
 
-    def set_study_topic_difficulty(
-        self,
-        skill_id: str,
-        difficulty: str,
-    ) -> dict[str, Any]:
-        """Remember the difficulty most recently chosen for a learner topic."""
-
-        difficulty = normalize_difficulty(difficulty)
-        with self.connection:
-            cursor = self.connection.execute(
-                """UPDATE skills
-                      SET difficulty = ?
-                    WHERE id = ? AND source = 'learner'""",
-                (difficulty, skill_id),
-            )
-        if cursor.rowcount != 1:
-            raise ValueError("That study topic does not exist.")
-        return self.study_topic(skill_id)
-
     def study_topic(self, skill_id: str) -> dict[str, Any]:
         row = self.connection.execute(
-            """SELECT id, course, name, unit, description, source, difficulty,
-                      created_at
+            """SELECT id, course, name, unit, description, source, created_at
                  FROM skills
                 WHERE id = ?""",
             (skill_id,),
@@ -710,7 +682,7 @@ class LearningStore:
     def skill_progress(self) -> list[dict[str, Any]]:
         rows = self.connection.execute(
             """SELECT s.id, s.course, s.name, s.unit, s.description,
-                      s.source, s.difficulty, s.created_at, s.sort_order,
+                      s.source, s.created_at, s.sort_order,
                       COALESCE(m.mastery_score, 0) AS mastery_score,
                       COALESCE(m.attempts_count, 0) AS attempts_count,
                       COALESCE(m.correct_count, 0) AS correct_count,

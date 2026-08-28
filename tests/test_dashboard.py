@@ -15,10 +15,8 @@ from sensei.dashboard import (
 )
 from sensei.errorlog import ErrorRecorder
 from sensei.generation import GeneratedQuestFactory
-from sensei.learning import LearningEvent, Outcome
 from sensei.practice import AdaptiveQuestFactory
 from sensei.providers import CompletionResult
-from sensei.storage import LearningStore
 
 
 class DashboardTests(unittest.TestCase):
@@ -35,18 +33,11 @@ class DashboardTests(unittest.TestCase):
     def test_state_is_local_and_does_not_expose_quest_answers(self) -> None:
         state = self.service.state()
         self.assertEqual("Dojo Novice", state["profile"]["rank_name"])
-        self.assertEqual("calculus_foundations", state["next_quest"]["skill_id"])
-        self.assertEqual(
-            "precalc_exponent_properties",
-            state["next_quests"]["precalculus"]["skill_id"],
-        )
-        self.assertNotIn("sample_answer", state["next_quest"])
-        self.assertNotIn("verification", state["next_quest"])
         for quest in state["quests"]:
             self.assertNotIn("sample_answer", quest)
             self.assertNotIn("verification", quest)
         self.assertEqual("Local SQLite", state["runtime"]["storage"])
-        self.assertEqual(2, state["runtime"]["practice_api_version"])
+        self.assertEqual(4, state["runtime"]["practice_api_version"])
         self.assertEqual(40, state["catalog"]["quest_count"])
         self.assertEqual(20, state["catalog"]["courses"]["precalculus"])
         self.assertEqual(37, state["catalog"]["generated_skill_count"])
@@ -58,24 +49,6 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual("Dojo Adept", rank_name(4))
         self.assertEqual("Realm Scholar", rank_name(7))
         self.assertEqual("Grand Sensei", rank_name(10))
-
-    def test_recommendation_can_select_a_generated_only_calculus_subject(self) -> None:
-        with LearningStore(self.database) as store:
-            store.record_event(
-                LearningEvent(
-                    skill_id="continuity",
-                    outcome=Outcome.INCORRECT,
-                    misconception="Used the point value instead of the limit.",
-                    evidence="The proposed value did not match the limiting value.",
-                    confidence=1.0,
-                    problem="Choose k for continuity.",
-                    hints_used=0,
-                    solution_revealed=False,
-                    tutor_turns=1,
-                )
-            )
-        state = self.service.state()
-        self.assertEqual("continuity", state["next_quests"]["calculus"]["skill_id"])
 
     def test_loopback_server_serves_health_api_and_dashboard_assets(self) -> None:
         server = create_server(
@@ -277,26 +250,23 @@ class DashboardTests(unittest.TestCase):
                     "subject": "Chemistry",
                     "topic": "Stoichiometry",
                     "context": "Mole ratios",
-                    "difficulty": "beginner",
                 },
                 csrf_token,
             )
             skill_id = focus["study_topic"]["id"]
             generated = post(
                 "/api/study/generate",
-                {"skill_id": skill_id, "difficulty": "beginner"},
+                {"skill_id": skill_id},
                 csrf_token,
             )
             self.assertEqual("Chemistry", generated["quest"]["subject"])
-            self.assertEqual("beginner", generated["quest"]["difficulty"])
             self.assertIsNone(generated["quest"]["graph"])
             self.assertNotIn("answer", generated["quest"])
             generated_again = post(
                 "/api/study/generate",
-                {"skill_id": skill_id, "difficulty": "expert"},
+                {"skill_id": skill_id},
                 csrf_token,
             )
-            self.assertEqual("expert", generated_again["quest"]["difficulty"])
             self.assertNotEqual(
                 generated["quest"]["prompt"],
                 generated_again["quest"]["prompt"],
@@ -320,16 +290,9 @@ class DashboardTests(unittest.TestCase):
             with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
                 state = json.load(response)
             self.assertEqual("Stoichiometry", state["study_topics"][0]["name"])
-            self.assertEqual("expert", state["study_topics"][0]["difficulty"])
             self.assertEqual(1, state["study_topics"][0]["attempts_count"])
-            self.assertIn(
-                "Beginner (level 1 of 4)",
-                provider.requests[0][-1]["content"],
-            )
-            self.assertIn(
-                "Expert (level 4 of 4)",
-                provider.requests[2][-1]["content"],
-            )
+            self.assertIn("Topic: Stoichiometry", provider.requests[0][-1]["content"])
+            self.assertIn("Topic: Stoichiometry", provider.requests[2][-1]["content"])
         finally:
             server.shutdown()
             server.server_close()
@@ -433,7 +396,6 @@ class DashboardTests(unittest.TestCase):
             subject="Mathematics",
             topic="Limits",
             context="Practice direct substitution.",
-            difficulty="beginner",
         )
 
         class InvalidProvider:
@@ -459,9 +421,7 @@ class DashboardTests(unittest.TestCase):
                 csrf_token = json.load(response)["csrf_token"]
             request = Request(
                 f"{base_url}/api/study/generate",
-                data=json.dumps(
-                    {"skill_id": skill["id"], "difficulty": "beginner"}
-                ).encode("utf-8"),
+                data=json.dumps({"skill_id": skill["id"]}).encode("utf-8"),
                 headers={
                     "Content-Type": "application/json",
                     "Origin": base_url,

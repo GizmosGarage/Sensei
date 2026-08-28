@@ -15,7 +15,7 @@ Terminal:
 
 `/quest` replaces any active problem with the selected challenge and asks Sensei for one coaching step. `/answer` may be repeated after revisions. A verified-correct answer does not write learning memory automatically; `/done` remains the explicit durable-record boundary.
 
-The dashboard equivalent is **Generate quest** or **Practice topic** → **Check answer** → **Record attempt**. **New question** repeats generation inside the active subject. The final button is the explicit durable-record boundary.
+The dashboard equivalent is **Forge a practice quest** or **Train this topic** → **Check answer** → **Record attempt**. **New encounter** repeats generation inside the active subject. The final button is the explicit durable-record boundary.
 
 ## Selection and rotation
 
@@ -24,7 +24,7 @@ The terminal catalog contains 40 curated quests across 30 verifier-backed skills
 - 20 Calculus I quests across calculus foundations, limits, derivative rules, product/quotient/chain rules, antiderivatives, and substitution;
 - one starter quest for each of the 20 subjects in the [Precalculus path](PRECALCULUS.md).
 
-Sensei filters the review queue to skills with deterministic quest support. Due work is selected first; otherwise the earliest scheduled eligible skill is used. The dashboard maintains a separate recommendation for each course. A new Precalculus learner begins with properties of exponents, while a new Calculus learner begins with calculus foundations. Within a skill, completed attempt count rotates the template when more than one exists.
+Sensei filters the terminal review queue to skills with deterministic quest support. Due work is selected first; otherwise the earliest scheduled eligible skill is used. Within a skill, completed attempt count rotates the template when more than one exists.
 
 The dashboard has a procedural generator for all 37 subjects. This includes bounded scalar or expression problems for continuity, implicit differentiation, related rates, optimization, curve analysis, definite integrals, and the fundamental theorem. Questions never cross skill IDs, and immediate prompt repeats within a subject are regenerated.
 
@@ -60,4 +60,4 @@ A new quest must:
 4. include a sample answer that is verified by the test suite;
 5. avoid exposing its answer through the public dashboard representation.
 
-Quest depth should grow with deterministic capability. The procedural layer now covers every subject, while the terminal's coaching catalog remains curated. Difficulty tiers, richer domains, and multistep proofs still need explicit generation and verification rules before they can influence mastery.
+Quest depth should grow with deterministic capability. The procedural layer now covers every subject, while the terminal's coaching catalog remains curated. Richer domains and multistep proofs still need explicit generation and verification rules before they can influence mastery.

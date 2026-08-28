@@ -18,45 +18,38 @@ non-exception browser problems, log rotation, browser diagnostic ingestion, API
 failure correlation, and terminal startup-failure correlation. Python compilation
 and JavaScript syntax checks also pass.
 
-## 2026-08-27 - Milestone 9: explicit per-problem difficulty
+## 2026-08-27 - Milestone 9: generated encounter reliability
 
 ### Completed
 
-- Replaced the ambiguous Foundation/Adaptive/Challenge starting-intensity control with Beginner, Intermediate, Advanced, and Expert problem difficulty.
-- Defined concrete generation requirements for all four levels, from one-step essential concepts through synthesis, edge cases, and minimal scaffolding.
-- Added a difficulty selector beside every dashboard generation action: first quest, review recommendation, topic card training, and New encounter.
-- Made difficulty an encounter-level request while remembering each topic's most recent selection as its next default.
-- Required the independent review pass to reject drafts whose setup, step count, scaffolding, or conceptual depth do not fit the selected level.
 - Pinned dashboard assets to the server version that loaded them, preventing a running older API from serving newer incompatible JavaScript after a code update.
-- Added action-local generation status so topic-card, recommendation, and New encounter failures are visible beside the button that initiated them.
+- Added action-local generation status so topic-card and New encounter failures are visible beside the button that initiated them.
 - Added an explicit concise-output budget plus a bounded walkthrough margin so slightly verbose local-model solutions do not consume every generation retry.
 - Added validated coordinate-graph data and an accessible SVG renderer so graphical topics require a real graph instead of a prose-only graph description.
 - Removed redundant adaptive-answer comparison text and tightened generation instructions so prompts, hints, and walkthroughs do not restate the same facts.
 - Retried transient local-model and HTTP generation failures once, while returning generation-specific errors that keep the current encounter usable.
-- Migrated schema version 5 difficulty values safely into schema version 6: Foundation to Beginner, Adaptive to Intermediate, and Challenge to Advanced.
 - Released the application metadata as version 0.8.0.
 
 ### Verification
 
-All 86 automated tests pass. Coverage includes the four difficulty contracts, selected-level propagation, real graph requirements and validation, concise graph-reading prompts, transient generation recovery, per-request HTTP overrides, saved topic defaults, bounded walkthrough verbosity, and foreign-key-safe migration of existing difficulty data.
+All 86 automated tests pass. Coverage includes real graph requirements and validation, concise graph-reading prompts, transient generation recovery, bounded walkthrough verbosity, and foreign-key-safe schema migration.
 
 ### Next milestone
 
 - Add multi-turn Socratic conversation inside each browser encounter.
-- Offer a mastery-informed suggested difficulty while preserving the learner's explicit override.
 - Accept larger source materials through an explicit local ingestion and chunking boundary.
 
 ## 2026-08-27 - Milestone 8: learner-directed adaptive questlines
 
 ### Completed
 
-- Replaced the dashboard's fixed course-first entry point with subject, topic, optional study material, and difficulty inputs.
+- Replaced the dashboard's fixed course-first entry point with subject, topic, and optional study material inputs.
 - Migrated learning memory to schema version 5 so learner-created subjects coexist with the original catalog and use the same attempts, XP, mastery, misconceptions, and review schedule.
 - Added stable subject/topic identities so revisiting the same focus grows one history instead of fragmenting progress.
 - Added local-model practice drafting with strict schemas, bounded retries, and a separate recomputation/review pass before issuance.
 - Added fresh per-request variation, nondeterministic adaptive seeds, an eight-problem recent history per topic, persisted-attempt exclusions, and hard duplicate rejection before a new encounter can be issued.
 - Restricted adaptive encounters to locally checkable expression or four-option answer contracts; hidden answers remain in the server's expiring challenge store.
-- Added hints, post-submission walkthroughs, RPG encounter language, a growing mastery atlas, and cross-subject review recommendations to the browser surface.
+- Added hints, post-submission walkthroughs, RPG encounter language, a growing mastery atlas, and topic-level training to the browser surface.
 - Preserved the stronger deterministic Precalculus and Calculus generators and their existing protected API route.
 - Integrated local model startup into the dashboard command, with fast-model, existing-server, custom-path, and diagnostic no-model options.
 - Generalized the tutor identity and RPG ranks beyond Calculus-only language.
@@ -69,7 +62,6 @@ All 78 automated tests pass. Coverage includes schema upgrades from versions 1-4
 ### Next milestone
 
 - Add multi-turn Socratic conversation inside each browser encounter.
-- Use recent mastery and misconceptions to tune adaptive difficulty automatically.
 - Accept larger source materials through an explicit local ingestion and chunking boundary.
 
 ## 2026-08-22 - Milestone 7: subject-confined procedural questions
@@ -94,7 +86,6 @@ Live loopback validation generated two different factoring prompts in sequenceâ€
 
 ### Next milestone
 
-- Add explicit beginner, intermediate, and challenge difficulty bands per subject.
 - Bring local-model hints and Socratic coaching into the browser arena.
 - Use demonstrated mastery to select parameters and problem forms within the active subject.
 
@@ -104,7 +95,6 @@ Live loopback validation generated two different factoring prompts in sequenceâ€
 
 - Expanded the versioned skill catalog from 17 Calculus disciplines to 37 course-aware disciplines, including the requested 20-subject Precalculus path in its specified order.
 - Added one curated, production-verifier-backed starter quest for every Precalculus subject, increasing the catalog from 20 to 40 quests.
-- Added independent Precalculus and Calculus review recommendations while retaining the existing learning-memory and scheduling rules.
 - Migrated local learning memory to schema version 4 with a required course identity and automatic v1, v2, and v3 upgrade coverage.
 - Turned the dashboard into an interactive practice surface with course tabs, unit filters, subject-specific launch buttons, answer entry, local symbolic checking, feedback, and explicit attempt recording.
 - Added protected loopback write endpoints with exact-shape request validation, a per-process CSRF token, origin/fetch-metadata checks, bounded request bodies, and short-lived one-time checked-attempt tokens.
@@ -115,12 +105,11 @@ Live loopback validation generated two different factoring prompts in sequenceâ€
 
 All 67 automated tests pass, including every one of the 40 quest sample answers, schema upgrades from versions 1-3, exact Precalculus subject coverage, answer-key-free public representations, protected HTTP writes, correct XP persistence, and one-time token replay rejection. Python bytecode compilation also succeeds.
 
-The refreshed local preview on `127.0.0.1:8765` returned health `ok`, 37 skills, 40 public quests, exactly 20 Precalculus skills and quests, the properties-of-exponents starting recommendation, and a live write-session token. The dashboard was handed off to the in-app browser. It remains local-only and was not published to a hosting service.
+The refreshed local preview on `127.0.0.1:8765` returned health `ok`, 37 skills, 40 public quests, exactly 20 Precalculus skills and quests, and a live write-session token. The dashboard was handed off to the in-app browser. It remains local-only and was not published to a hosting service.
 
 ### Next milestone
 
 - Bring local-model coaching conversation into the browser quest arena.
-- Add several difficulty tiers and validated variations per Precalculus subject.
 - Add course-specific achievements only after their learning meaning and anti-inflation rules are documented.
 
 ## 2026-08-21 - Milestone 5: review quests and local RPG dashboard

@@ -66,7 +66,7 @@ Schema version 2 added `reported_outcome`, `effective_outcome_source`, verificat
 
 Schema version 3 adds the optional `quest_id`. Existing attempts migrate with a null quest ID. Curated quests supply an authoritative skill ID; when their answer is also conclusively verified, progression confidence is 1.0 because neither the skill classification nor correctness depends on the model.
 
-Schema version 4 adds a required `course` field to every skill. Existing skill rows migrate as Calculus, then catalog synchronization assigns the 20 new Precalculus skills and preserves all prior mastery and attempt relationships. Course is returned with skill progress, recommendations, and recent attempts so the dashboard can present separate paths without creating separate databases.
+Schema version 4 adds a required `course` field to every skill. Existing skill rows migrate as Calculus, then catalog synchronization assigns the 20 new Precalculus skills and preserves all prior mastery and attempt relationships. Course is returned with skill progress and recent attempts so the dashboard can present separate paths without creating separate databases.
 
 The outcome trust order is:
 

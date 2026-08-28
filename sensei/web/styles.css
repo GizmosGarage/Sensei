@@ -396,7 +396,6 @@ button:disabled {
 }
 
 .rank-copy h2,
-.quest-main h2,
 .section-heading h2 {
   margin: 0;
   font-family: Georgia, "Times New Roman", serif;
@@ -527,9 +526,8 @@ button:disabled {
   margin-top: 13px;
 }
 
-.field-pair-wide {
-  grid-template-columns: minmax(0, 1fr) 170px;
-  align-items: start;
+.context-row {
+  margin-top: 13px;
 }
 
 .focus-form label {
@@ -549,8 +547,7 @@ button:disabled {
 }
 
 .focus-form input,
-.focus-form textarea,
-.focus-form select {
+.focus-form textarea {
   width: 100%;
   border: 1px solid var(--line-bright);
   border-radius: 10px;
@@ -561,8 +558,7 @@ button:disabled {
   text-transform: none;
 }
 
-.focus-form input,
-.focus-form select {
+.focus-form input {
   height: 45px;
   padding: 0 13px;
 }
@@ -571,69 +567,6 @@ button:disabled {
   min-height: 84px;
   padding: 11px 13px;
   resize: vertical;
-}
-
-.focus-form select {
-  appearance: none;
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--jade) 50%),
-    linear-gradient(135deg, var(--jade) 50%, transparent 50%);
-  background-position: calc(100% - 16px) 19px, calc(100% - 11px) 19px;
-  background-repeat: no-repeat;
-  background-size: 5px 5px;
-}
-
-.focus-form option {
-  color: var(--paper);
-  background: var(--panel-strong);
-}
-
-.difficulty-control {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.difficulty-control > span {
-  color: var(--muted);
-  font-family: ui-monospace, "Cascadia Mono", monospace;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.difficulty-control select {
-  width: 100%;
-  height: 38px;
-  padding: 0 30px 0 10px;
-  border: 1px solid var(--line-bright);
-  border-radius: 9px;
-  appearance: none;
-  color: var(--paper);
-  background:
-    linear-gradient(45deg, transparent 50%, var(--jade) 50%) calc(100% - 15px) 16px / 5px 5px no-repeat,
-    linear-gradient(135deg, var(--jade) 50%, transparent 50%) calc(100% - 10px) 16px / 5px 5px no-repeat,
-    rgba(0, 0, 0, 0.24);
-  font: 12px/1.3 "Segoe UI Variable", "Segoe UI", sans-serif;
-}
-
-.difficulty-control option {
-  color: var(--paper);
-  background: var(--panel-strong);
-}
-
-.focus-form .difficulty-control select {
-  height: 45px;
-}
-
-.difficulty-control .difficulty-help,
-.focus-form .difficulty-control .difficulty-help {
-  color: #8d9991;
-  font: 10px/1.35 "Segoe UI Variable", "Segoe UI", sans-serif;
-  font-weight: 400;
-  letter-spacing: normal;
-  text-transform: none;
 }
 
 .generation-status {
@@ -684,116 +617,6 @@ button:disabled {
   flex: 0 0 auto;
 }
 
-.quest-section {
-  padding: 2px 0 82px;
-}
-
-.quest-card {
-  min-height: 210px;
-  display: grid;
-  grid-template-columns: 110px minmax(0, 1fr) 240px;
-  gap: 30px;
-  align-items: center;
-  padding: 34px 38px;
-  border-color: rgba(217, 167, 74, 0.25);
-  background:
-    linear-gradient(120deg, rgba(217, 167, 74, 0.09), transparent 42%),
-    linear-gradient(145deg, rgba(24, 34, 29, 0.96), var(--panel));
-}
-
-.quest-seal {
-  width: 86px;
-  height: 106px;
-  display: grid;
-  place-items: center;
-  border: 1px solid rgba(228, 101, 63, 0.5);
-  color: var(--ember);
-  position: relative;
-}
-
-.quest-seal::before,
-.quest-seal::after {
-  content: "";
-  position: absolute;
-  inset: 5px;
-  border: 1px solid rgba(228, 101, 63, 0.23);
-}
-
-.quest-seal::after {
-  inset: 10px;
-}
-
-.quest-seal span {
-  font-family: Georgia, serif;
-  font-size: 43px;
-}
-
-.quest-meta {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  color: var(--muted);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.status-chip {
-  padding: 5px 8px;
-  border: 1px solid rgba(217, 167, 74, 0.35);
-  border-radius: 999px;
-  color: var(--gold);
-  font-family: ui-monospace, "Cascadia Mono", monospace;
-  font-size: 9px;
-}
-
-.quest-main h2 {
-  margin-top: 11px;
-  font-size: 34px;
-}
-
-.quest-main > p {
-  max-width: 680px;
-  margin: 12px 0 0;
-  color: #c6cec7;
-  line-height: 1.55;
-}
-
-.quest-main .quest-reason {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.quest-action {
-  min-height: 118px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding-left: 28px;
-  border-left: 1px solid var(--line);
-}
-
-.quest-action span,
-.quest-action small {
-  color: var(--muted);
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.quest-action .primary-button {
-  margin: 9px 0;
-  font-size: 13px;
-}
-
-.recommendation-difficulty-control {
-  margin-top: 10px;
-}
-
-.quest-action small b {
-  color: var(--paper);
-}
-
 .arena-section[hidden] {
   display: none;
 }
@@ -818,38 +641,11 @@ button:disabled {
   gap: 8px;
 }
 
-.arena-difficulty-control {
-  width: 250px;
-}
-
-.arena-difficulty-control .difficulty-help {
-  max-width: 250px;
-}
-
 .arena-heading h2 {
   margin: 0;
   font-family: Georgia, "Times New Roman", serif;
   font-size: 38px;
   font-weight: 400;
-}
-
-.difficulty-line {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-top: 12px;
-  color: var(--muted);
-  font-family: ui-monospace, "Cascadia Mono", monospace;
-  font-size: 9px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.difficulty-line i {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--ember);
 }
 
 .arena-prompt {
@@ -1209,22 +1005,13 @@ button:disabled {
   white-space: nowrap;
 }
 
-.skill-difficulty {
-  margin: 16px 0 0;
-  color: var(--ember);
-  font-family: ui-monospace, "Cascadia Mono", monospace;
-  font-size: 8px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
 .skill-score {
   color: var(--jade);
 }
 
 .skill-card h3 {
   min-height: 44px;
-  margin: 7px 0 5px;
+  margin: 16px 0 5px;
   font-family: Georgia, serif;
   font-size: 19px;
   font-weight: 400;
@@ -1287,19 +1074,6 @@ body.generating .brand-mark {
 
 .skill-footer {
   text-transform: none;
-}
-
-.card-difficulty-control {
-  margin-top: 18px;
-}
-
-.card-difficulty-control select {
-  height: 36px;
-  font-size: 11px;
-}
-
-.card-difficulty-control + .practice-button {
-  margin-top: 10px;
 }
 
 .card-generation-status {
@@ -1454,35 +1228,6 @@ footer p {
     max-width: 680px;
   }
 
-  .quest-card {
-    grid-template-columns: 90px 1fr;
-  }
-
-  .quest-action {
-    grid-column: 2;
-    min-height: auto;
-    display: grid;
-    grid-template-columns: minmax(170px, 240px) minmax(180px, 220px);
-    align-items: end;
-    justify-content: flex-start;
-    gap: 12px;
-    padding: 18px 0 0;
-    border-left: 0;
-    border-top: 1px solid var(--line);
-  }
-
-  .quest-action .primary-button {
-    margin: 0;
-  }
-
-  .quest-action > span {
-    grid-column: 1 / -1;
-  }
-
-  .recommendation-difficulty-control {
-    margin-top: 0;
-  }
-
   .skill-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -1524,8 +1269,7 @@ footer p {
     padding: 28px;
   }
 
-  .field-pair,
-  .field-pair-wide {
+  .field-pair {
     grid-template-columns: 1fr;
   }
 
@@ -1544,29 +1288,6 @@ footer p {
 
   .rank-ring {
     width: 130px;
-  }
-
-  .quest-card {
-    grid-template-columns: 1fr;
-    padding: 28px;
-  }
-
-  .quest-seal {
-    width: 60px;
-    height: 70px;
-  }
-
-  .quest-seal span {
-    font-size: 30px;
-  }
-
-  .quest-action {
-    grid-column: 1;
-    grid-template-columns: 1fr;
-  }
-
-  .quest-action > span {
-    grid-column: auto;
   }
 
   .arena-section {
@@ -1590,10 +1311,6 @@ footer p {
     margin-top: 18px;
     align-items: end;
     flex-wrap: wrap;
-  }
-
-  .arena-difficulty-control {
-    width: min(100%, 290px);
   }
 
   .section-heading {

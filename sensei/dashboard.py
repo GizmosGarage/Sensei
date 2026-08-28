@@ -81,56 +81,6 @@ def rank_name(level: int) -> str:
     return "Dojo Novice"
 
 
-def generated_recommendation(
-    store: LearningStore,
-    skills: list[dict[str, Any]],
-    course: str,
-) -> dict[str, Any]:
-    eligible = {
-        str(skill["id"])
-        for skill in skills
-        if skill["course"] == course and skill["id"] in GENERATED_SKILL_IDS
-    }
-    review = store.review_recommendation(skill_ids=eligible)
-    if review is None:
-        starting_skill = (
-            "precalc_exponent_properties"
-            if course == "precalculus"
-            else "calculus_foundations"
-        )
-        skill = next(item for item in skills if item["id"] == starting_skill)
-        due = True
-        reason = "Begin your path with a fresh foundation quest."
-        mastery_score = 0.0
-        mastery_label = "not started"
-        next_review_at = None
-    else:
-        skill = next(item for item in skills if item["id"] == review["id"])
-        due = bool(review["due"])
-        reason = (
-            "Scheduled review is due now."
-            if due
-            else "This is the next subject in your generated review queue."
-        )
-        mastery_score = float(review["mastery_score"])
-        mastery_label = str(review["mastery_label"])
-        next_review_at = str(review["next_review_at"])
-    return {
-        "id": f"generated-recommendation-{skill['id']}",
-        "skill_id": skill["id"],
-        "skill_name": skill["name"],
-        "course": course,
-        "title": f"Fresh {skill['name']} quest",
-        "prompt": "Generate a new verifier-backed challenge for this subject.",
-        "check_kind": "generated",
-        "due": due,
-        "reason": reason,
-        "mastery_score": mastery_score,
-        "mastery_label": mastery_label,
-        "next_review_at": next_review_at,
-    }
-
-
 def verification_document(result: VerificationResult) -> dict[str, str | None]:
     return {
         "kind": result.kind.value,
@@ -319,18 +269,10 @@ class DashboardService:
             profile["rank_name"] = rank_name(int(profile["level"]))
             skills = store.skill_progress()
             study_topics = store.study_topics()
-            recommendations = {
-                course: generated_recommendation(store, skills, course)
-                for course in ("precalculus", "calculus")
-            }
-            review = store.review_recommendation()
             return {
                 "generated_at": utc_now().astimezone(timezone.utc).isoformat(),
                 "profile": profile,
-                "next_quest": recommendations["calculus"],
-                "next_quests": recommendations,
                 "quests": deck.public_quests(),
-                "review": review,
                 "skills": skills,
                 "study_topics": study_topics,
                 "recent_attempts": store.recent_attempts(limit=50),
@@ -350,7 +292,7 @@ class DashboardService:
                     "host": LOOPBACK_HOST,
                     "storage": "Local SQLite",
                     "model_access": "Local dashboard process",
-                    "practice_api_version": 2,
+                    "practice_api_version": 4,
                 },
             }
 
@@ -360,27 +302,17 @@ class DashboardService:
         subject: str,
         topic: str,
         context: str,
-        difficulty: str,
     ) -> dict[str, Any]:
         with LearningStore(self.database_path, self.skills_path) as store:
             return store.create_study_topic(
                 subject=subject,
                 topic=topic,
                 context=context,
-                difficulty=difficulty,
             )
 
     def study_topic(self, skill_id: str) -> dict[str, Any]:
         with LearningStore(self.database_path, self.skills_path) as store:
             return store.study_topic(skill_id)
-
-    def study_topic_for_generation(
-        self,
-        skill_id: str,
-        difficulty: str,
-    ) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            return store.set_study_topic_difficulty(skill_id, difficulty)
 
     def recent_topic_prompts(self, skill_id: str) -> tuple[str, ...]:
         with LearningStore(self.database_path, self.skills_path) as store:
@@ -707,36 +639,22 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(202, {"error_id": error_id})
                 return
             if path == "/api/study/focus":
-                document = self._read_json(
-                    {"subject", "topic", "context", "difficulty"}
-                )
+                document = self._read_json({"subject", "topic", "context"})
                 if not all(isinstance(value, str) for value in document.values()):
                     raise ValueError("Study-focus fields must be text.")
                 skill = self.server.service.create_study_topic(
                     subject=str(document["subject"]),
                     topic=str(document["topic"]),
                     context=str(document["context"]),
-                    difficulty=str(document["difficulty"]),
                 )
                 self._send_json(200, {"study_topic": skill})
                 return
             if path == "/api/study/generate":
-                document = self._read_json({"skill_id", "difficulty"})
+                document = self._read_json({"skill_id"})
                 skill_id = document["skill_id"]
-                difficulty = document["difficulty"]
-                if (
-                    not isinstance(skill_id, str)
-                    or len(skill_id) > 80
-                    or not isinstance(difficulty, str)
-                    or len(difficulty) > 20
-                ):
-                    raise ValueError(
-                        "Study topic ID and problem difficulty must be valid text."
-                    )
-                skill = self.server.service.study_topic_for_generation(
-                    skill_id,
-                    difficulty,
-                )
+                if not isinstance(skill_id, str) or len(skill_id) > 80:
+                    raise ValueError("Study topic ID must be valid text.")
+                skill = self.server.service.study_topic(skill_id)
                 challenge_token, quest = self.server.challenges.issue_adaptive(
                     skill,
                     avoid_prompts=self.server.service.recent_topic_prompts(skill_id),

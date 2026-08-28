@@ -9,11 +9,6 @@ import secrets
 from dataclasses import dataclass
 from typing import Any, Collection, Mapping
 
-from sensei.difficulty import (
-    difficulty_design_contract,
-    difficulty_instruction,
-    normalize_difficulty,
-)
 from sensei.providers import ChatProvider, ProviderError
 from sensei.verification import (
     CalculusVerifier,
@@ -28,7 +23,6 @@ EXACT_VERIFIER_VERSION = "sensei-answer-key-1"
 ANSWER_TYPES = {"expression", "multiple_choice"}
 SPECIAL_EXPRESSION_ANSWERS = {"dne", "doesnotexist", "undefined"}
 MAX_SOLUTION_CHARACTERS = 1_600
-MAX_EXPERT_SOLUTION_CHARACTERS = 2_800
 BASE_PRACTICE_FIELDS = {
     "title",
     "prompt",
@@ -49,10 +43,6 @@ GRAPH_FIELDS = {
     "description",
 }
 REPLACEMENT_FEEDBACK_MARKERS = (
-    "difficulty",
-    "too easy",
-    "too simple",
-    "insufficient",
     "repeat",
     "off-topic",
     "outside the requested",
@@ -123,105 +113,6 @@ def _graph_topic(skill: Mapping[str, object]) -> bool:
 def _graph_limit_topic(skill: Mapping[str, object]) -> bool:
     topic = str(skill.get("name") or "").casefold()
     return "graph" in topic and "limit" in topic
-
-
-def _difficulty_problem_pattern(skill: Mapping[str, object]) -> str:
-    """Return a concrete problem shape that makes the selected tier observable."""
-
-    difficulty = normalize_difficulty(str(skill["difficulty"]))
-    topic = str(skill.get("name") or "").casefold()
-    if "dimensional analysis" in topic:
-        return {
-            "beginner": (
-                "Single-prefix pattern: convert one measured quantity between a metric "
-                "prefix and its SI base unit."
-            ),
-            "intermediate": (
-                "Dual-unit rate pattern: convert both the numerator and denominator of "
-                "a given rate into requested SI units, then compute the converted rate. "
-                "Stay with base units and metric prefixes; do not introduce molar mass, "
-                "stoichiometry, or density unless the learner emphasis requests it."
-            ),
-            "advanced": (
-                "Compound-unit pattern: convert a derived quantity containing squared "
-                "or cubed units plus another prefixed unit, then combine the conversion "
-                "factors to obtain one final SI-unit value."
-            ),
-            "expert": (
-                "Constraint-and-compound-unit pattern: infer a missing conversion or "
-                "scale condition, handle squared or cubed units correctly, and combine "
-                "multiple prefix factors to obtain one final SI-unit value."
-            ),
-        }[difficulty]
-    if _graph_topic(skill):
-        return {
-            "beginner": (
-                "Direct graph-reading pattern: use one clear continuous branch near "
-                "the target and ask for one directly readable value."
-            ),
-            "intermediate": (
-                "Discontinuity pattern: make the learner distinguish the approaching "
-                "curve from an open or closed marker at the same target x-value."
-            ),
-            "advanced": (
-                "Multi-feature graph pattern: left-hand behavior, right-hand behavior, "
-                "and a distracting filled or open marker must all matter when deciding "
-                "the requested limit."
-            ),
-            "expert": (
-                "Edge-case graph pattern: combine distinct one-sided behaviors with an "
-                "asymptotic, boundary, or oscillatory-looking feature and a distracting "
-                "function value; the final answer must depend on the subtle feature."
-            ),
-        }[difficulty]
-    if "limit" in topic:
-        return {
-            "beginner": (
-                "Direct-limit pattern: use direct substitution into a continuous "
-                "expression with no indeterminate form."
-            ),
-            "intermediate": (
-                "Single-technique limit pattern: use one removable indeterminate form "
-                "that needs factoring, rationalization, or one standard limit before "
-                "evaluation."
-            ),
-            "advanced": (
-                "Compound-limit pattern: combine two genuinely different limit "
-                "techniques in one expression, such as a trigonometric identity or "
-                "standard trig limit together with factoring or radical "
-                "rationalization, before evaluating the combined result."
-            ),
-            "expert": (
-                "Compound-sided-limit pattern: combine two different limit techniques "
-                "and an absolute-value, piecewise, or one-sided factor whose left/right "
-                "behavior determines whether the final two-sided limit exists. Use DNE "
-                "as the answer key when the value does not exist."
-            ),
-        }[difficulty]
-    return {
-        "beginner": (
-            "Direct-core pattern: ask for one application of the topic's essential "
-            "relationship with no hidden intermediate quantity."
-        ),
-        "intermediate": (
-            "Chained-result pattern: the learner must compute a meaningful intermediate "
-            "quantity and then use it in a different operation to obtain the one final "
-            "requested answer. A required unit or representation conversion followed "
-            "by a topic relationship satisfies this pattern."
-        ),
-        "advanced": (
-            "Compound-method pattern: the learner must select and apply two different "
-            "topic-valid methods or transformations in sequence, then evaluate or "
-            "interpret the combined result. A task solvable by only one standard method "
-            "does not satisfy this pattern."
-        ),
-        "expert": (
-            "Compound-edge-case pattern: the learner must combine two topic-valid "
-            "methods or ideas across at least four concise stages, and a boundary, "
-            "exception, or subtle constraint must change the final answer. Do not "
-            "require a hidden parameter unless it is natural for this topic."
-        ),
-    }[difficulty]
 
 
 def _concise_graph_limit_prompt(prompt: str, answer_type: str) -> str:
@@ -411,7 +302,6 @@ class AdaptiveQuest:
     skill_id: str
     subject: str
     topic: str
-    difficulty: str
     title: str
     prompt: str
     answer_type: str
@@ -428,7 +318,6 @@ class AdaptiveQuest:
             "skill_name": self.topic,
             "course": self.subject,
             "subject": self.subject,
-            "difficulty": self.difficulty,
             "title": self.title,
             "prompt": self.prompt,
             "answer_type": self.answer_type,
@@ -597,18 +486,11 @@ def parse_adaptive_quest(
             "a graph-reading prompt must not repeat plotted coordinates"
         )
 
-    difficulty = normalize_difficulty(str(skill["difficulty"]))
-    solution_limit = (
-        MAX_EXPERT_SOLUTION_CHARACTERS
-        if difficulty == "expert"
-        else MAX_SOLUTION_CHARACTERS
-    )
     quest = AdaptiveQuest(
         id=f"adaptive-{skill['id']}-{secrets.token_hex(6)}",
         skill_id=str(skill["id"]),
         subject=str(skill["course"]),
         topic=str(skill["name"]),
-        difficulty=difficulty,
         title=_text(document, "title", maximum=100),
         prompt=prompt,
         answer_type=answer_type,
@@ -618,7 +500,7 @@ def parse_adaptive_quest(
         solution=_text(
             document,
             "solution",
-            maximum=solution_limit,
+            maximum=MAX_SOLUTION_CHARACTERS,
         ),
         graph=graph,
     )
@@ -662,11 +544,6 @@ class AdaptiveQuestFactory:
         prior_draft: Mapping[str, object] | None = None,
     ) -> list[dict[str, str]]:
         context = str(skill.get("description") or "No additional source material.")
-        difficulty = difficulty_instruction(str(skill["difficulty"]))
-        canonical_difficulty = normalize_difficulty(str(skill["difficulty"]))
-        design_contract = difficulty_design_contract(str(skill["difficulty"]))
-        problem_pattern = _difficulty_problem_pattern(skill)
-        requested_solution_limit = 1_800 if canonical_difficulty == "expert" else 700
         recent = "\n".join(
             f"{index}. {prompt}"
             for index, prompt in enumerate(tuple(avoid_prompts)[-8:], start=1)
@@ -688,8 +565,8 @@ class AdaptiveQuestFactory:
                 revision = (
                     "\nThe prior draft was rejected. Revise it using the feedback "
                     "below. Keep sound parts, but replace the underlying task when "
-                    "the feedback identifies repetition, wrong scope, or insufficient "
-                    "difficulty. Recompute the final answer from the revised prompt.\n"
+                    "the feedback identifies repetition, wrong scope, or a flawed "
+                    "problem design. Recompute the final answer from the revised prompt.\n"
                     f"Reviewer feedback: {repair}\n"
                     "Prior draft: "
                     f"{json.dumps(prior_draft, ensure_ascii=False)}\n"
@@ -717,9 +594,7 @@ class AdaptiveQuestFactory:
                     "backslash commands. Tell the learner "
                     "in the prompt to enter only the requested value when units apply. "
                     "Never tell the learner how many stages to use, ask them to show "
-                    "work, or ban otherwise valid methods merely to manufacture "
-                    "difficulty; the mathematical task itself must create the selected "
-                    "depth. "
+                    "work, or ban otherwise valid methods. "
                     "Use answer_type=multiple_choice for conceptual, formula-name, or "
                     "chemistry-notation questions; provide exactly four plain options "
                     "and make answer exactly A, B, C, or D. Include one useful hint and "
@@ -727,7 +602,7 @@ class AdaptiveQuestFactory:
                     "the same facts across the prompt, hint, and solution. Keep the "
                     "title under 80 characters, "
                     "the problem under 700 characters, the hint under 250 characters, "
-                    f"and the solution under {requested_solution_limit} characters. "
+                    "and the solution under 700 characters. "
                     "Do not use trick "
                     "questions, ambiguous rounding, or facts that require current "
                     "events. Before emitting JSON, silently solve the exact final "
@@ -751,9 +626,7 @@ class AdaptiveQuestFactory:
                     "example is graph={\"x_min\":-5,\"x_max\":5,\"y_min\":-5,"
                     "\"y_max\":5,\"curves\":[[[-5,-3],[0,2],[5,4]]],"
                     "\"points\":[{\"x\":0,\"y\":2,\"type\":\"open\"}],"
-                    "\"description\":\"A curve with an open point at (0, 2).\"}. "
-                    "Match the requested problem "
-                    "difficulty exactly; do not silently make it easier or harder."
+                    "\"description\":\"A curve with an open point at (0, 2).\"}."
                 ),
             },
             {
@@ -761,9 +634,6 @@ class AdaptiveQuestFactory:
                 "content": (
                     f"Subject: {skill['course']}\n"
                     f"Topic: {skill['name']}\n"
-                    f"Problem difficulty: {difficulty}\n"
-                    f"Required difficulty construction: {design_contract}\n"
-                    f"Mandatory problem pattern: {problem_pattern}\n"
                     f"Learner material or emphasis: {context}\n"
                     f"Internal variation key (never mention this): {variation_key}\n"
                     "Do not repeat or paraphrase any recently issued problem below.\n"
@@ -783,16 +653,8 @@ class AdaptiveQuestFactory:
                         "Act as a strict independent teacher reviewing a generated "
                         "practice problem. Recompute the answer. Check that the prompt "
                         "is unambiguous, the keyed answer and solution agree, and the "
-                        "problem stays inside the requested subject and topic. Confirm "
-                        "that its number of steps, setup, scaffolding, and conceptual "
-                        "depth satisfy the explicit difficulty construction contract. "
-                        "Judge substantive reasoning, not prompt length or tedious "
-                        "arithmetic. Do not collapse method recognition, its key "
-                        "transformation, and evaluation into one stage just because the "
-                        "method is familiar. For Intermediate, a necessary unit or "
-                        "representation conversion that feeds a separate topic calculation "
-                        "counts as a meaningful intermediate stage. Do not demand material "
-                        "outside the requested topic or learner emphasis. "
+                        "problem stays inside the requested subject, topic, and learner "
+                        "emphasis. Do not demand material outside that scope. "
                         "For numeric answers, "
                         "answer_type=expression is required and is not an error. For "
                         "graphical limits, treat the structured graph as the displayed "
@@ -808,12 +670,6 @@ class AdaptiveQuestFactory:
                     "content": (
                         f"Requested subject: {skill['course']}\n"
                         f"Requested topic: {skill['name']}\n"
-                        "Requested problem difficulty: "
-                        f"{difficulty_instruction(str(skill['difficulty']))}\n"
-                        "Required difficulty construction: "
-                        f"{difficulty_design_contract(str(skill['difficulty']))}\n"
-                        "Mandatory problem pattern: "
-                        f"{_difficulty_problem_pattern(skill)}\n"
                         f"Draft: {json.dumps(draft, ensure_ascii=False)}"
                     ),
                 },

@@ -15,7 +15,7 @@ Build the progress interface as packaged HTML, CSS, and JavaScript served by a P
 
 ## Consequences
 
-- Review recommendations become immediately playable and remain reproducible.
+- Curated terminal quests become immediately playable and remain reproducible.
 - Model tutoring can adapt around a problem without judging its correctness or skill identity.
 - The dashboard is useful offline and cannot expose study history to a hosted backend by configuration mistake.
 - Quest coverage is narrower than the 17-skill curriculum until deterministic verification expands.

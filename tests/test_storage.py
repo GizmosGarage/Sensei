@@ -75,14 +75,14 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(6, version)
+        self.assertEqual(7, version)
         self.assertEqual(37, len(self.store.skill_names()))
         self.store.close()
         self.store = LearningStore(self.database)
         migration_count = self.store.connection.execute(
             "SELECT COUNT(*) AS count FROM schema_migrations"
         ).fetchone()["count"]
-        self.assertEqual(6, migration_count)
+        self.assertEqual(7, migration_count)
 
     def test_schema_v1_database_migrates_and_backfills_provenance(self) -> None:
         self.store.close()
@@ -121,7 +121,7 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(6, version)
+        self.assertEqual(7, version)
         self.assertIsNone(attempt["quest_id"])
 
     def test_schema_v2_database_migrates_quest_provenance(self) -> None:
@@ -146,7 +146,7 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(6, version)
+        self.assertEqual(7, version)
 
     def test_schema_v3_database_migrates_course_and_preserves_old_skills(self) -> None:
         self.store.close()
@@ -175,11 +175,11 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(6, version)
+        self.assertEqual(7, version)
 
-    def test_schema_v5_difficulties_migrate_to_the_four_level_scale(self) -> None:
+    def test_schema_v6_removes_obsolete_skill_metadata_without_losing_topics(self) -> None:
         self.store.close()
-        old_database = self.root / "version-five.db"
+        old_database = self.root / "version-six.db"
         connection = sqlite3.connect(old_database)
         for migration in (
             MIGRATION_1,
@@ -191,41 +191,28 @@ class LearningStoreTests(unittest.TestCase):
             connection.executescript(migration)
         connection.executemany(
             "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-            [(version, NOW.isoformat()) for version in range(1, 6)],
+            [(version, NOW.isoformat()) for version in range(1, 7)],
         )
-        for skill_id, difficulty in (
-            ("legacy-foundation", "foundation"),
-            ("legacy-adaptive", "adaptive"),
-            ("legacy-challenge", "challenge"),
-        ):
-            connection.execute(
-                """INSERT INTO skills(
-                       id, name, unit, description, prerequisites_json, sort_order,
-                       course, source, difficulty, created_at
-                   ) VALUES (?, ?, 'Legacy', 'Test', '[]', 100, 'Mathematics',
-                             'learner', ?, ?)""",
-                (skill_id, skill_id, difficulty, NOW.isoformat()),
-            )
+        connection.execute("ALTER TABLE skills ADD COLUMN obsolete_mode TEXT")
+        connection.execute(
+            """INSERT INTO skills(
+                   id, name, unit, description, prerequisites_json, sort_order,
+                   course, source, created_at, obsolete_mode
+               ) VALUES ('legacy-topic', 'Legacy topic', 'Legacy', 'Test', '[]',
+                         100, 'Mathematics', 'learner', ?, 'old-value')""",
+            (NOW.isoformat(),),
+        )
         connection.commit()
         connection.close()
 
         self.store = LearningStore(old_database)
-        migrated = {
-            skill_id: self.store.study_topic(skill_id)["difficulty"]
-            for skill_id in (
-                "legacy-foundation",
-                "legacy-adaptive",
-                "legacy-challenge",
-            )
+        topic = self.store.study_topic("legacy-topic")
+        self.assertEqual("Legacy topic", topic["name"])
+        columns = {
+            row["name"]
+            for row in self.store.connection.execute("PRAGMA table_info(skills)")
         }
-        self.assertEqual(
-            {
-                "legacy-foundation": "beginner",
-                "legacy-adaptive": "intermediate",
-                "legacy-challenge": "advanced",
-            },
-            migrated,
-        )
+        self.assertNotIn("obsolete_mode", columns)
         self.assertEqual(
             [], list(self.store.connection.execute("PRAGMA foreign_key_check"))
         )
@@ -235,13 +222,9 @@ class LearningStoreTests(unittest.TestCase):
             subject="Chemistry",
             topic="Stoichiometry",
             context="Mole ratios and limiting reagents",
-            difficulty="beginner",
         )
         self.assertEqual("Chemistry", topic["course"])
         self.assertEqual("learner", topic["source"])
-        self.assertEqual("beginner", topic["difficulty"])
-        updated = self.store.set_study_topic_difficulty(topic["id"], "expert")
-        self.assertEqual("expert", updated["difficulty"])
         self.assertEqual(38, len(self.store.skill_names()))
         self.assertEqual([topic["id"]], [item["id"] for item in self.store.study_topics()])
         self.assertEqual(
