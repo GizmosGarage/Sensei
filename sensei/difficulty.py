@@ -27,13 +27,45 @@ DIFFICULTY_GUIDANCE = {
         "clear choice of the relevant rule or method."
     ),
     "advanced": (
-        "Require multi-step reasoning, less obvious setup, and a deliberate choice "
-        "between plausible methods while staying inside the requested topic."
+        "Require multi-step reasoning with at least three linked solution stages, a "
+        "less obvious setup or method choice, and limited scaffolding while staying "
+        "inside the requested topic."
     ),
     "expert": (
         "Create the most demanding reasonable problem for this topic: combine its "
         "ideas, include a subtle edge case or constraint, and provide minimal "
         "scaffolding without leaving the requested scope."
+    ),
+}
+
+DIFFICULTY_DESIGN_CONTRACTS = {
+    "beginner": (
+        "Require one substantive inference or operation. State the needed method or "
+        "relationship directly, and do not make formatting or unit notation part of "
+        "the challenge."
+    ),
+    "intermediate": (
+        "Require two or three linked substantive inferences or operations, where an "
+        "early result is needed later. Do not count answer formatting, routine "
+        "arithmetic cleanup, or a gratuitous unit conversion as an extra step. Design "
+        "backward from a solution with two or three explicit substantive steps. A "
+        "required unit or representation conversion that feeds a different topic "
+        "calculation is substantive rather than gratuitous."
+    ),
+    "advanced": (
+        "Require at least three linked solution stages and do not state the complete "
+        "method in the prompt. Recognizing a needed method, applying its key "
+        "transformation, and using the simplified result may count as distinct stages; "
+        "do not collapse them merely because the method is standard. A single formula "
+        "substitution or long routine arithmetic does not qualify. Design backward "
+        "from a solution with at least three explicit stages."
+    ),
+    "expert": (
+        "Require at least four linked substantive inferences or operations, combine "
+        "two ideas that genuinely belong to the topic, and make a subtle constraint "
+        "or edge case affect the solution. Keep the final task unambiguous and "
+        "solvable from the supplied information. Design backward from a concise "
+        "solution with at least four explicit substantive steps."
     ),
 }
 
@@ -63,3 +95,10 @@ def difficulty_instruction(value: str) -> str:
         f"{DIFFICULTY_LABELS[difficulty]} (level {position} of 4): "
         f"{DIFFICULTY_GUIDANCE[difficulty]}"
     )
+
+
+def difficulty_design_contract(value: str) -> str:
+    """Return an observable construction target for generation and review."""
+
+    difficulty = normalize_difficulty(value)
+    return DIFFICULTY_DESIGN_CONTRACTS[difficulty]

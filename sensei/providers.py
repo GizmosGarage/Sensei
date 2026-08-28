@@ -105,6 +105,7 @@ class LlamaCppProvider:
         temperature: float = 0.2,
         max_tokens: int = 768,
         seed: int = 42,
+        json_mode: bool = False,
     ) -> None:
         self.endpoint = f"{base_url.rstrip('/')}/v1/chat/completions"
         self.model = model
@@ -113,6 +114,7 @@ class LlamaCppProvider:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.seed = seed
+        self.json_mode = json_mode
         if max_retries < 0:
             raise ValueError("max_retries cannot be negative.")
 
@@ -128,6 +130,8 @@ class LlamaCppProvider:
         }
         if stream:
             payload["stream_options"] = {"include_usage": True}
+        if self.json_mode:
+            payload["response_format"] = {"type": "json_object"}
         return json.dumps(payload).encode("utf-8")
 
     def complete(

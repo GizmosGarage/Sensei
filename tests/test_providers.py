@@ -67,6 +67,21 @@ class ProviderTests(unittest.TestCase):
         )
         self.assertEqual(-1, payload["seed"])
 
+    def test_json_mode_constrains_structured_local_completions(self) -> None:
+        provider = LlamaCppProvider(
+            "http://127.0.0.1:9999",
+            "test",
+            json_mode=True,
+        )
+        payload = json.loads(
+            provider._payload([{"role": "user", "content": "new problem"}], False)
+        )
+
+        self.assertEqual(
+            {"type": "json_object"},
+            payload["response_format"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

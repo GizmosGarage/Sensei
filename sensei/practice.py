@@ -9,10 +9,15 @@ import secrets
 from dataclasses import dataclass
 from typing import Any, Collection, Mapping
 
-from sensei.difficulty import difficulty_instruction, normalize_difficulty
+from sensei.difficulty import (
+    difficulty_design_contract,
+    difficulty_instruction,
+    normalize_difficulty,
+)
 from sensei.providers import ChatProvider, ProviderError
 from sensei.verification import (
     CalculusVerifier,
+    MathInputError,
     VerificationKind,
     VerificationResult,
     VerificationStatus,
@@ -21,7 +26,9 @@ from sensei.verification import (
 
 EXACT_VERIFIER_VERSION = "sensei-answer-key-1"
 ANSWER_TYPES = {"expression", "multiple_choice"}
+SPECIAL_EXPRESSION_ANSWERS = {"dne", "doesnotexist", "undefined"}
 MAX_SOLUTION_CHARACTERS = 1_600
+MAX_EXPERT_SOLUTION_CHARACTERS = 2_800
 BASE_PRACTICE_FIELDS = {
     "title",
     "prompt",
@@ -41,6 +48,22 @@ GRAPH_FIELDS = {
     "points",
     "description",
 }
+REPLACEMENT_FEEDBACK_MARKERS = (
+    "difficulty",
+    "too easy",
+    "too simple",
+    "insufficient",
+    "repeat",
+    "off-topic",
+    "outside the requested",
+    "wrong scope",
+    "ambiguous",
+    "contradiction",
+    "contradictory",
+    "contradicting",
+    "unsolvable",
+    "mathematically flawed",
+)
 
 
 class PracticeGenerationError(ValueError):
@@ -102,6 +125,105 @@ def _graph_limit_topic(skill: Mapping[str, object]) -> bool:
     return "graph" in topic and "limit" in topic
 
 
+def _difficulty_problem_pattern(skill: Mapping[str, object]) -> str:
+    """Return a concrete problem shape that makes the selected tier observable."""
+
+    difficulty = normalize_difficulty(str(skill["difficulty"]))
+    topic = str(skill.get("name") or "").casefold()
+    if "dimensional analysis" in topic:
+        return {
+            "beginner": (
+                "Single-prefix pattern: convert one measured quantity between a metric "
+                "prefix and its SI base unit."
+            ),
+            "intermediate": (
+                "Dual-unit rate pattern: convert both the numerator and denominator of "
+                "a given rate into requested SI units, then compute the converted rate. "
+                "Stay with base units and metric prefixes; do not introduce molar mass, "
+                "stoichiometry, or density unless the learner emphasis requests it."
+            ),
+            "advanced": (
+                "Compound-unit pattern: convert a derived quantity containing squared "
+                "or cubed units plus another prefixed unit, then combine the conversion "
+                "factors to obtain one final SI-unit value."
+            ),
+            "expert": (
+                "Constraint-and-compound-unit pattern: infer a missing conversion or "
+                "scale condition, handle squared or cubed units correctly, and combine "
+                "multiple prefix factors to obtain one final SI-unit value."
+            ),
+        }[difficulty]
+    if _graph_topic(skill):
+        return {
+            "beginner": (
+                "Direct graph-reading pattern: use one clear continuous branch near "
+                "the target and ask for one directly readable value."
+            ),
+            "intermediate": (
+                "Discontinuity pattern: make the learner distinguish the approaching "
+                "curve from an open or closed marker at the same target x-value."
+            ),
+            "advanced": (
+                "Multi-feature graph pattern: left-hand behavior, right-hand behavior, "
+                "and a distracting filled or open marker must all matter when deciding "
+                "the requested limit."
+            ),
+            "expert": (
+                "Edge-case graph pattern: combine distinct one-sided behaviors with an "
+                "asymptotic, boundary, or oscillatory-looking feature and a distracting "
+                "function value; the final answer must depend on the subtle feature."
+            ),
+        }[difficulty]
+    if "limit" in topic:
+        return {
+            "beginner": (
+                "Direct-limit pattern: use direct substitution into a continuous "
+                "expression with no indeterminate form."
+            ),
+            "intermediate": (
+                "Single-technique limit pattern: use one removable indeterminate form "
+                "that needs factoring, rationalization, or one standard limit before "
+                "evaluation."
+            ),
+            "advanced": (
+                "Compound-limit pattern: combine two genuinely different limit "
+                "techniques in one expression, such as a trigonometric identity or "
+                "standard trig limit together with factoring or radical "
+                "rationalization, before evaluating the combined result."
+            ),
+            "expert": (
+                "Compound-sided-limit pattern: combine two different limit techniques "
+                "and an absolute-value, piecewise, or one-sided factor whose left/right "
+                "behavior determines whether the final two-sided limit exists. Use DNE "
+                "as the answer key when the value does not exist."
+            ),
+        }[difficulty]
+    return {
+        "beginner": (
+            "Direct-core pattern: ask for one application of the topic's essential "
+            "relationship with no hidden intermediate quantity."
+        ),
+        "intermediate": (
+            "Chained-result pattern: the learner must compute a meaningful intermediate "
+            "quantity and then use it in a different operation to obtain the one final "
+            "requested answer. A required unit or representation conversion followed "
+            "by a topic relationship satisfies this pattern."
+        ),
+        "advanced": (
+            "Compound-method pattern: the learner must select and apply two different "
+            "topic-valid methods or transformations in sequence, then evaluate or "
+            "interpret the combined result. A task solvable by only one standard method "
+            "does not satisfy this pattern."
+        ),
+        "expert": (
+            "Compound-edge-case pattern: the learner must combine two topic-valid "
+            "methods or ideas across at least four concise stages, and a boundary, "
+            "exception, or subtle constraint must change the final answer. Do not "
+            "require a hidden parameter unless it is natural for this topic."
+        ),
+    }[difficulty]
+
+
 def _concise_graph_limit_prompt(prompt: str, answer_type: str) -> str:
     target = re.search(
         r"\bx\s*(?:approaches|->|→)\s*"
@@ -145,6 +267,24 @@ def _concise_graph_limit_prompt(prompt: str, answer_type: str) -> str:
         "Use the displayed graph to determine the limit of f(x) as x approaches "
         f"{point}{direction}. {instruction}"
     )
+
+
+def _answer_only_prompt(prompt: str) -> str:
+    """Remove model-added work-submission demands from a one-answer encounter."""
+
+    sentences = re.split(r"(?<=[.!?])\s+", prompt.strip())
+    work_request = re.compile(
+        r"\b(?:show|provide|write|include)\b[^.?!]{0,100}"
+        r"\b(?:work|steps|reasoning|derivation)\b",
+        re.IGNORECASE,
+    )
+    kept = [sentence for sentence in sentences if not work_request.search(sentence)]
+    cleaned = " ".join(kept).strip()
+    if not cleaned:
+        raise PracticeGenerationError(
+            "the prompt must ask for an answer, not only request written work"
+        )
+    return cleaned
 
 
 @dataclass(frozen=True)
@@ -304,6 +444,26 @@ class AdaptiveQuest:
         if not submitted:
             raise ValueError("Enter an answer before checking the quest.")
         if self.answer_type == "expression":
+            expected_special = re.sub(r"[^a-z]", "", self.answer.casefold())
+            if expected_special in SPECIAL_EXPRESSION_ANSWERS:
+                submitted_special = re.sub(r"[^a-z]", "", submitted.casefold())
+                correct = submitted_special in SPECIAL_EXPRESSION_ANSWERS
+                return VerificationResult(
+                    kind=VerificationKind.EQUIVALENT,
+                    status=(
+                        VerificationStatus.VERIFIED_CORRECT
+                        if correct
+                        else VerificationStatus.VERIFIED_INCORRECT
+                    ),
+                    submitted=submitted,
+                    expected="DNE",
+                    detail=(
+                        "The submitted answer correctly identifies a nonexistent value."
+                        if correct
+                        else "The validated answer does not exist."
+                    ),
+                    verifier_version=EXACT_VERIFIER_VERSION,
+                )
             return CalculusVerifier().equivalent(self.answer, submitted)
 
         expected_index = ord(self.answer) - ord("A")
@@ -352,6 +512,28 @@ def adaptive_quest_fingerprint(quest: AdaptiveQuest) -> str:
     )
 
 
+def _private_quest_document(quest: AdaptiveQuest) -> dict[str, object]:
+    """Return the complete model-facing draft, including its hidden answer key."""
+
+    return {
+        "title": quest.title,
+        "prompt": quest.prompt,
+        "answer_type": quest.answer_type,
+        "answer": quest.answer,
+        "options": list(quest.options),
+        "hint": quest.hint,
+        "solution": quest.solution,
+        "graph": quest.graph.public_dict() if quest.graph else None,
+    }
+
+
+def _feedback_requires_replacement(feedback: str) -> bool:
+    """Return whether feedback invalidates the task design rather than its details."""
+
+    normalized = feedback.casefold()
+    return any(marker in normalized for marker in REPLACEMENT_FEEDBACK_MARKERS)
+
+
 def parse_adaptive_quest(
     text: str,
     *,
@@ -390,7 +572,7 @@ def parse_adaptive_quest(
         raise PracticeGenerationError(
             "graphical topics require structured graph data, not a text-only description"
         )
-    prompt = _text(document, "prompt", maximum=1_000)
+    prompt = _answer_only_prompt(_text(document, "prompt", maximum=1_000))
     if graph is not None and _graph_limit_topic(skill):
         prompt = _concise_graph_limit_prompt(prompt, answer_type)
     if graph is not None and re.search(r"\bgraph\s+description\s*:", prompt, re.I):
@@ -415,12 +597,18 @@ def parse_adaptive_quest(
             "a graph-reading prompt must not repeat plotted coordinates"
         )
 
+    difficulty = normalize_difficulty(str(skill["difficulty"]))
+    solution_limit = (
+        MAX_EXPERT_SOLUTION_CHARACTERS
+        if difficulty == "expert"
+        else MAX_SOLUTION_CHARACTERS
+    )
     quest = AdaptiveQuest(
         id=f"adaptive-{skill['id']}-{secrets.token_hex(6)}",
         skill_id=str(skill["id"]),
         subject=str(skill["course"]),
         topic=str(skill["name"]),
-        difficulty=normalize_difficulty(str(skill["difficulty"])),
+        difficulty=difficulty,
         title=_text(document, "title", maximum=100),
         prompt=prompt,
         answer_type=answer_type,
@@ -430,14 +618,23 @@ def parse_adaptive_quest(
         solution=_text(
             document,
             "solution",
-            maximum=MAX_SOLUTION_CHARACTERS,
+            maximum=solution_limit,
         ),
         graph=graph,
     )
     if answer_type == "expression":
-        result = quest.check(answer)
-        if result.status is not VerificationStatus.VERIFIED_CORRECT:
-            raise PracticeGenerationError("the expression answer could not be parsed")
+        special_answer = re.sub(r"[^a-z]", "", answer.casefold())
+        if special_answer not in SPECIAL_EXPRESSION_ANSWERS:
+            try:
+                result = quest.check(answer)
+            except MathInputError as error:
+                raise PracticeGenerationError(
+                    f"the expression answer could not be parsed: {error}"
+                ) from error
+            if result.status is not VerificationStatus.VERIFIED_CORRECT:
+                raise PracticeGenerationError(
+                    "the expression answer could not be parsed"
+                )
     return quest
 
 
@@ -448,7 +645,7 @@ class AdaptiveQuestFactory:
         self,
         provider: ChatProvider,
         *,
-        validation_attempts: int = 3,
+        validation_attempts: int = 4,
     ) -> None:
         if validation_attempts < 1:
             raise ValueError("validation_attempts must be positive")
@@ -462,15 +659,46 @@ class AdaptiveQuestFactory:
         *,
         variation_key: str,
         avoid_prompts: Collection[str],
+        prior_draft: Mapping[str, object] | None = None,
     ) -> list[dict[str, str]]:
         context = str(skill.get("description") or "No additional source material.")
         difficulty = difficulty_instruction(str(skill["difficulty"]))
+        canonical_difficulty = normalize_difficulty(str(skill["difficulty"]))
+        design_contract = difficulty_design_contract(str(skill["difficulty"]))
+        problem_pattern = _difficulty_problem_pattern(skill)
+        requested_solution_limit = 1_800 if canonical_difficulty == "expert" else 700
         recent = "\n".join(
             f"{index}. {prompt}"
             for index, prompt in enumerate(tuple(avoid_prompts)[-8:], start=1)
         )
         if not recent:
             recent = "None yet."
+        if prior_draft is not None:
+            recent = "The prior draft already passed repetition screening."
+        if repair:
+            if prior_draft is None:
+                revision = (
+                    "\nThe prior draft was rejected. Start over with a clean problem "
+                    "that corrects this issue:\n"
+                    f"{repair}\n"
+                    "Return only the final JSON. Do not mention the rejected draft, "
+                    "the feedback, or any revision process."
+                )
+            else:
+                revision = (
+                    "\nThe prior draft was rejected. Revise it using the feedback "
+                    "below. Keep sound parts, but replace the underlying task when "
+                    "the feedback identifies repetition, wrong scope, or insufficient "
+                    "difficulty. Recompute the final answer from the revised prompt.\n"
+                    f"Reviewer feedback: {repair}\n"
+                    "Prior draft: "
+                    f"{json.dumps(prior_draft, ensure_ascii=False)}\n"
+                    "Return one clean, self-contained replacement JSON object. Do not "
+                    "mention errors, feedback, revisions, or abandoned calculations "
+                    "inside any field."
+                )
+        else:
+            revision = ""
         return [
             {
                 "role": "system",
@@ -482,8 +710,16 @@ class AdaptiveQuestFactory:
                     "graph. "
                     "Use answer_type=expression for a numeric or symbolic result; the "
                     "answer must use plain restricted math syntax such as 3/4, x^2, "
-                    "sqrt(2), or 6.02*10^23, and options must be []. Tell the learner "
+                    "sqrt(2), 6.02*10^23, or oo for positive infinity, and options "
+                    "must be []. DNE is also accepted as an expression key when a "
+                    "requested value does not exist. Use plain-text "
+                    "math everywhere; never use LaTeX, dollar-sign math delimiters, or "
+                    "backslash commands. Tell the learner "
                     "in the prompt to enter only the requested value when units apply. "
+                    "Never tell the learner how many stages to use, ask them to show "
+                    "work, or ban otherwise valid methods merely to manufacture "
+                    "difficulty; the mathematical task itself must create the selected "
+                    "depth. "
                     "Use answer_type=multiple_choice for conceptual, formula-name, or "
                     "chemistry-notation questions; provide exactly four plain options "
                     "and make answer exactly A, B, C, or D. Include one useful hint and "
@@ -491,9 +727,14 @@ class AdaptiveQuestFactory:
                     "the same facts across the prompt, hint, and solution. Keep the "
                     "title under 80 characters, "
                     "the problem under 700 characters, the hint under 250 characters, "
-                    "and the solution under 700 characters. Do not use trick "
+                    f"and the solution under {requested_solution_limit} characters. "
+                    "Do not use trick "
                     "questions, ambiguous rounding, or facts that require current "
-                    "events. Every encounter "
+                    "events. Before emitting JSON, silently solve the exact final "
+                    "prompt from scratch and make the answer field equal the final "
+                    "line of the worked solution. Never include scratch work, false "
+                    "starts, self-corrections, or alternate abandoned problems in any "
+                    "field. Every encounter "
                     "must be materially new: vary the underlying function, graph "
                     "features, given values, requested direction, or reasoning task, "
                     "not merely the title or wording. Set graph to null unless the "
@@ -521,26 +762,19 @@ class AdaptiveQuestFactory:
                     f"Subject: {skill['course']}\n"
                     f"Topic: {skill['name']}\n"
                     f"Problem difficulty: {difficulty}\n"
+                    f"Required difficulty construction: {design_contract}\n"
+                    f"Mandatory problem pattern: {problem_pattern}\n"
                     f"Learner material or emphasis: {context}\n"
                     f"Internal variation key (never mention this): {variation_key}\n"
                     "Do not repeat or paraphrase any recently issued problem below.\n"
                     f"Recently issued problems:\n{recent}\n"
-                    f"{repair}"
+                    f"{revision}"
                 ),
             },
         ]
 
     def _review(self, skill: Mapping[str, object], quest: AdaptiveQuest) -> str | None:
-        draft = {
-            "title": quest.title,
-            "prompt": quest.prompt,
-            "answer_type": quest.answer_type,
-            "answer": quest.answer,
-            "options": list(quest.options),
-            "hint": quest.hint,
-            "solution": quest.solution,
-            "graph": quest.graph.public_dict() if quest.graph else None,
-        }
+        draft = _private_quest_document(quest)
         result = self.provider.complete(
             [
                 {
@@ -551,7 +785,15 @@ class AdaptiveQuestFactory:
                         "is unambiguous, the keyed answer and solution agree, and the "
                         "problem stays inside the requested subject and topic. Confirm "
                         "that its number of steps, setup, scaffolding, and conceptual "
-                        "depth match the requested difficulty. For numeric answers, "
+                        "depth satisfy the explicit difficulty construction contract. "
+                        "Judge substantive reasoning, not prompt length or tedious "
+                        "arithmetic. Do not collapse method recognition, its key "
+                        "transformation, and evaluation into one stage just because the "
+                        "method is familiar. For Intermediate, a necessary unit or "
+                        "representation conversion that feeds a separate topic calculation "
+                        "counts as a meaningful intermediate stage. Do not demand material "
+                        "outside the requested topic or learner emphasis. "
+                        "For numeric answers, "
                         "answer_type=expression is required and is not an error. For "
                         "graphical limits, treat the structured graph as the displayed "
                         "source of truth; an open marker at the target x-value is a "
@@ -568,6 +810,10 @@ class AdaptiveQuestFactory:
                         f"Requested topic: {skill['name']}\n"
                         "Requested problem difficulty: "
                         f"{difficulty_instruction(str(skill['difficulty']))}\n"
+                        "Required difficulty construction: "
+                        f"{difficulty_design_contract(str(skill['difficulty']))}\n"
+                        "Mandatory problem pattern: "
+                        f"{_difficulty_problem_pattern(skill)}\n"
                         f"Draft: {json.dumps(draft, ensure_ascii=False)}"
                     ),
                 },
@@ -592,6 +838,7 @@ class AdaptiveQuestFactory:
         avoid_fingerprints: Collection[str] = (),
     ) -> AdaptiveQuest:
         repair = ""
+        prior_draft: dict[str, object] | None = None
         last_error = "The local model did not return a usable quest."
         avoided = {
             fingerprint
@@ -600,6 +847,7 @@ class AdaptiveQuestFactory:
         }
         avoided_quests = set(avoid_fingerprints)
         for _ in range(self.validation_attempts):
+            candidate_draft: dict[str, object] | None = None
             try:
                 result = self.provider.complete(
                     self._request(
@@ -607,9 +855,11 @@ class AdaptiveQuestFactory:
                         repair,
                         variation_key=secrets.token_hex(12),
                         avoid_prompts=avoid_prompts,
+                        prior_draft=prior_draft,
                     )
                 )
                 quest = parse_adaptive_quest(result.text, skill=skill)
+                candidate_draft = _private_quest_document(quest)
                 repeats_graph = (
                     quest.graph is not None
                     and adaptive_quest_fingerprint(quest) in avoided_quests
@@ -627,12 +877,24 @@ class AdaptiveQuestFactory:
                 if review_issue is None:
                     return quest
                 last_error = review_issue
-            except (PracticeGenerationError, ProviderError) as error:
+                prior_draft = (
+                    None
+                    if _feedback_requires_replacement(last_error)
+                    else candidate_draft
+                )
+            except ProviderError as error:
                 last_error = str(error)
-            repair = (
-                "The prior draft was rejected. Correct this issue in a completely "
-                f"new problem: {last_error}"
-            )
+            except PracticeGenerationError as error:
+                last_error = str(error)
+                if candidate_draft is not None:
+                    prior_draft = (
+                        None
+                        if _feedback_requires_replacement(last_error)
+                        else candidate_draft
+                    )
+                else:
+                    prior_draft = None
+            repair = last_error
         raise PracticeGenerationError(
             f"Sensei could not validate a fresh quest: {last_error}"
         )

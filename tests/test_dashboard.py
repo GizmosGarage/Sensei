@@ -392,7 +392,7 @@ class DashboardTests(unittest.TestCase):
                 urlopen(request, timeout=5)
             self.assertEqual(503, rejected.exception.code)
             self.assertIn("Please try again", json.load(rejected.exception)["error"])
-            self.assertEqual(3, provider.calls)
+            self.assertEqual(4, provider.calls)
         finally:
             server.shutdown()
             server.server_close()

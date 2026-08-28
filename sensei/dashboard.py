@@ -824,7 +824,13 @@ def _adaptive_factory(
         )
         base_url = stack.enter_context(runtime).base_url
     return AdaptiveQuestFactory(
-        LlamaCppProvider(base_url, selected_id, seed=-1, max_tokens=1_024)
+        LlamaCppProvider(
+            base_url,
+            selected_id,
+            seed=-1,
+            max_tokens=1_536,
+            json_mode=True,
+        )
     )
 
 

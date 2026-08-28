@@ -2,6 +2,7 @@ import json
 import unittest
 
 from sensei.practice import (
+    MAX_EXPERT_SOLUTION_CHARACTERS,
     MAX_SOLUTION_CHARACTERS,
     AdaptiveQuestFactory,
     PracticeGenerationError,
@@ -87,7 +88,144 @@ class AdaptivePracticeTests(unittest.TestCase):
                 request = messages[-1]["content"]
                 for phrase in phrases:
                     self.assertIn(phrase, request)
+                self.assertIn("Required difficulty construction:", request)
+                self.assertIn("Mandatory problem pattern:", request)
                 self.assertIn("graph", messages[0]["content"])
+
+    def test_fixable_draft_is_revised_with_feedback_instead_of_discarded(self) -> None:
+        incorrect_key = json.dumps(
+            {
+                "title": "Direct Conversion",
+                "prompt": "Convert 100 centimeters to meters. Enter only the value.",
+                "answer_type": "expression",
+                "answer": "100",
+                "options": [],
+                "hint": "There are 100 centimeters in one meter.",
+                "solution": "The keyed answer is 100.",
+                "graph": None,
+            }
+        )
+        revised = json.dumps(
+            {
+                "title": "Direct Conversion",
+                "prompt": "Convert 100 centimeters to meters. Enter only the value.",
+                "answer_type": "expression",
+                "answer": "1",
+                "options": [],
+                "hint": "There are 100 centimeters in one meter.",
+                "solution": "Divide 100 by 100 to get 1.",
+                "graph": None,
+            }
+        )
+        provider = StubProvider(
+            [
+                incorrect_key,
+                json.dumps(
+                    {
+                        "approved": False,
+                        "reason": "The keyed answer is wrong; it should be 1.",
+                    }
+                ),
+                revised,
+                json.dumps({"approved": True, "reason": "Checked."}),
+            ]
+        )
+        quest = AdaptiveQuestFactory(provider).generate(
+            {**SKILL, "name": "Unit conversions", "difficulty": "intermediate"}
+        )
+
+        self.assertEqual("1", quest.answer)
+        revision_request = provider.requests[2][-1]["content"]
+        self.assertIn("prior draft was rejected", revision_request)
+        self.assertIn("keyed answer is wrong", revision_request)
+        self.assertIn("Convert 100 centimeters to meters", revision_request)
+        self.assertIn("Return one clean, self-contained replacement", revision_request)
+
+    def test_difficulty_failure_forces_a_new_problem_design(self) -> None:
+        too_easy = json.dumps(
+            {
+                "title": "Direct Conversion",
+                "prompt": "Convert 100 centimeters to meters. Enter only the value.",
+                "answer_type": "expression",
+                "answer": "1",
+                "options": [],
+                "hint": "Use the metric prefix.",
+                "solution": "Divide 100 by 100 to get 1.",
+                "graph": None,
+            }
+        )
+        harder = json.dumps(
+            {
+                "title": "Travel Conversion",
+                "prompt": (
+                    "A car travels 1500 meters in 2 minutes. Convert both quantities "
+                    "and find its speed in km/h. Enter only the value."
+                ),
+                "answer_type": "expression",
+                "answer": "45",
+                "options": [],
+                "hint": "Convert distance and time before dividing.",
+                "solution": "1500 m is 1.5 km; 2 min is 1/30 h; 1.5/(1/30)=45.",
+                "graph": None,
+            }
+        )
+        provider = StubProvider(
+            [
+                too_easy,
+                json.dumps(
+                    {
+                        "approved": False,
+                        "reason": "The problem is too simple for this difficulty.",
+                    }
+                ),
+                harder,
+                json.dumps({"approved": True, "reason": "Checked."}),
+            ]
+        )
+        quest = AdaptiveQuestFactory(provider).generate(
+            {**SKILL, "name": "Unit conversions", "difficulty": "intermediate"}
+        )
+
+        self.assertEqual("45", quest.answer)
+        replacement_request = provider.requests[2][-1]["content"]
+        self.assertIn("Start over with a clean problem", replacement_request)
+        self.assertIn("too simple for this difficulty", replacement_request)
+        self.assertNotIn("Prior draft:", replacement_request)
+
+    def test_dimensional_analysis_uses_a_topic_specific_tier_pattern(self) -> None:
+        messages = AdaptiveQuestFactory._request(
+            {
+                **SKILL,
+                "course": "Chemistry",
+                "name": "Dimensional Analysis",
+                "difficulty": "intermediate",
+            },
+            "",
+            variation_key="test-variation",
+            avoid_prompts=(),
+        )
+
+        request = messages[-1]["content"]
+        self.assertIn("Dual-unit rate pattern", request)
+        self.assertIn("do not introduce molar mass", request)
+
+    def test_expert_limits_require_a_decisive_sided_edge_case(self) -> None:
+        messages = AdaptiveQuestFactory._request(
+            {
+                **SKILL,
+                "course": "Mathematics",
+                "name": "Numerical Limits",
+                "difficulty": "expert",
+            },
+            "",
+            variation_key="test-variation",
+            avoid_prompts=(),
+        )
+
+        request = messages[-1]["content"]
+        self.assertIn("Compound-sided-limit pattern", request)
+        self.assertIn("left/right behavior", request)
+        self.assertIn("Use DNE as the answer key", request)
 
     def test_repeated_graphical_limit_is_rejected_and_replaced(self) -> None:
         skill = {
@@ -210,6 +348,47 @@ class AdaptivePracticeTests(unittest.TestCase):
         )
         self.assertEqual(VerificationStatus.VERIFIED_INCORRECT, quest.check("D").status)
 
+    def test_dne_expression_key_is_checked_by_normalized_exact_match(self) -> None:
+        document = {
+            "title": "Nonexistent limit",
+            "prompt": "Find a two-sided limit. Enter DNE if it does not exist.",
+            "answer_type": "expression",
+            "answer": "DNE",
+            "options": [],
+            "hint": "Compare both sides.",
+            "solution": "The sides differ, so the limit does not exist.",
+            "graph": None,
+        }
+
+        quest = parse_adaptive_quest(json.dumps(document), skill=SKILL)
+
+        self.assertEqual(
+            VerificationStatus.VERIFIED_CORRECT,
+            quest.check("does not exist").status,
+        )
+        self.assertEqual(
+            VerificationStatus.VERIFIED_INCORRECT,
+            quest.check("0").status,
+        )
+
+    def test_unparseable_expression_key_becomes_a_retryable_generation_error(self) -> None:
+        document = {
+            "title": "Invalid expression key",
+            "prompt": "Find the requested value.",
+            "answer_type": "expression",
+            "answer": "not-a-number",
+            "options": [],
+            "hint": "Recompute it.",
+            "solution": "The draft used an invalid answer key.",
+            "graph": None,
+        }
+
+        with self.assertRaisesRegex(
+            PracticeGenerationError,
+            "expression answer could not be parsed",
+        ):
+            parse_adaptive_quest(json.dumps(document), skill=SKILL)
+
     def test_walkthrough_allows_bounded_local_model_verbosity(self) -> None:
         document = {
             "title": "Verbose but bounded walkthrough",
@@ -230,6 +409,48 @@ class AdaptivePracticeTests(unittest.TestCase):
             f"solution exceeds {MAX_SOLUTION_CHARACTERS} characters",
         ):
             parse_adaptive_quest(json.dumps(document), skill=SKILL)
+
+        document["solution"] = "x" * 2_000
+        expert = parse_adaptive_quest(
+            json.dumps(document),
+            skill={**SKILL, "difficulty": "expert"},
+        )
+        self.assertEqual(2_000, len(expert.solution))
+
+        document["solution"] = "x" * (MAX_EXPERT_SOLUTION_CHARACTERS + 1)
+        with self.assertRaisesRegex(
+            PracticeGenerationError,
+            f"solution exceeds {MAX_EXPERT_SOLUTION_CHARACTERS} characters",
+        ):
+            parse_adaptive_quest(
+                json.dumps(document),
+                skill={**SKILL, "difficulty": "expert"},
+            )
+
+    def test_prompt_discards_stray_show_your_work_instruction(self) -> None:
+        document = {
+            "title": "Answer-only encounter",
+            "prompt": (
+                "Evaluate (1 - cos(3x))/x^2 as x approaches 0. "
+                "You must show your work using two transformations. "
+                "Enter only the final number."
+            ),
+            "answer_type": "expression",
+            "answer": "9/2",
+            "options": [],
+            "hint": "Use a trigonometric identity.",
+            "solution": "Rewrite 1-cos(3x), use the sine limit, and obtain 9/2.",
+            "graph": None,
+        }
+
+        quest = parse_adaptive_quest(json.dumps(document), skill=SKILL)
+
+        self.assertNotIn("show your work", quest.prompt.casefold())
+        self.assertEqual(
+            "Evaluate (1 - cos(3x))/x^2 as x approaches 0. "
+            "Enter only the final number.",
+            quest.prompt,
+        )
 
     def test_graphical_topic_rejects_a_text_only_problem(self) -> None:
         document = {
