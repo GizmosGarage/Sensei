@@ -438,7 +438,7 @@ class LearningStore:
         slug = re.sub(r"[^a-z0-9]+", "-", topic.casefold()).strip("-")[:40]
         skill_id = f"focus-{slug or 'topic'}-{digest}"
         timestamp = utc_now().isoformat()
-        description = context or "Learner-created practice focus."
+        description = context or "No additional practice instructions were provided."
         sort_order = int(
             self.connection.execute(
                 "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM skills"

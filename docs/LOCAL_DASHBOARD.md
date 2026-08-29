@@ -20,21 +20,21 @@ IDs and are recorded locally; see the [local error log](ERROR_LOG.md).
 
 ## Practice loop
 
-1. Enter a broad subject, such as **Mathematics** or **Chemistry**.
-2. Enter the topic or skill to practice.
-3. Optionally paste an objective, notes excerpt, formula emphasis, or test scope.
-4. Solve the expression question or select one of four conceptual answers.
-5. Ask for the stored hint if needed, check the response, and study the walkthrough.
-6. Claim XP to record mastery and place the topic into spaced review.
+1. Enter a broad subject, such as **Algebra**, **Calculus**, **Chemistry**, or **Physics**. This is the top-level domain for generation.
+2. Enter the exact topic or skill to practice, such as **Graphical limits**, **Properties of exponents**, or **Dimensional analysis**. This becomes the topic in the Atlas.
+3. Optionally describe the problem type, learning objective, emphasis, source excerpt, or test scope in **Anything Sensei should know**. These instructions shape every problem in the chat without replacing the named subject or topic.
+4. Choose **Start practice chat**. The three-part study brief appears as the learner's first message, and Sensei replies with one independently reviewed problem.
+5. Solve the expression question or select one of four conceptual answers. Ask for the stored hint if needed, send the answer, and study Sensei's feedback and walkthrough.
+6. Choose **Save progress to Atlas** to record mastery, then **Next problem** to continue the same questline. Sensei issues only one active problem at a time.
 
-The topic remains in the learner's atlas under **Profile**. Later encounters can start from its card, and **New encounter** creates another checked problem without fragmenting its history. Completed encounters appear under **Past Quest**.
+The topic remains in the learner's atlas under **Profile**. Later practice chats can start from its card. **Skip to next problem** replaces the current problem without recording it, while **Next problem** continues after a saved attempt. Completed encounters appear under **Past Quest**.
 
 ## Validation boundary
 
 Adaptive generation has three gates:
 
 1. The local model must return an exact, size-bounded problem schema.
-2. A separate local-model review pass recomputes the answer and rejects ambiguous or off-topic drafts.
+2. A separate local-model review pass recomputes the answer; enforces the subject, topic, and practice instructions; and rejects ambiguous problems, unused or inconsistent quantitative givens, and off-topic drafts.
 3. The issued quest must use a locally checkable answer contract: restricted symbolic equivalence for quantitative work or an exact four-option key for conceptual work.
 
 This substantially reduces bad generated exercises, but it is not a formal proof that every natural-language premise is scientifically correct. The interface identifies answers as checked or validated rather than claiming universal certainty. Existing Calculus and Precalculus generators continue to use their stronger subject-specific symbolic validation.

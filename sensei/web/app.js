@@ -12,6 +12,10 @@ const viewTitles = {
 let dashboardState = null;
 let activeQuest = null;
 let attemptToken = null;
+let activeSessionSkillId = null;
+let activeAnswer = "";
+let activeFeedback = null;
+let attemptRecorded = false;
 let generatingQuestion = false;
 const generationStatuses = new Map();
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
@@ -276,7 +280,11 @@ function renderTopics(topics) {
     card.querySelector(".skill-review").textContent = relativeDate(topic.next_review_at);
     const generationStatus = card.querySelector(".card-generation-status");
     restoreGenerationStatus(generationStatus, topic.id);
-    card.querySelector(".practice-button").addEventListener("click", () => startAdaptiveQuest(topic.id, generationStatus));
+    card.querySelector(".practice-button").addEventListener("click", () => startAdaptiveQuest(
+      topic.id,
+      generationStatus,
+      { resetSession: true },
+    ));
     grid.append(card);
   });
 }
@@ -305,8 +313,78 @@ function renderHistory(attempts) {
   });
 }
 
+function studyTopicById(skillId) {
+  return dashboardState?.study_topics.find((topic) => topic.id === skillId) || null;
+}
+
+function beginPracticeSession(topic) {
+  activeSessionSkillId = topic.id;
+  activeQuest = null;
+  activeAnswer = "";
+  activeFeedback = null;
+  attemptRecorded = false;
+  attemptToken = null;
+  resetArenaFeedback();
+  renderGraph(null);
+  byId("quest-arena").hidden = true;
+  byId("chat-history").replaceChildren();
+  byId("session-subject").textContent = topic.course;
+  byId("session-topic").textContent = topic.name;
+  byId("session-context").textContent = topic.description || "No extra instructions provided.";
+}
+
+function archivedChatMessage(kind, role, copy) {
+  const message = document.createElement("article");
+  message.className = `chat-message ${kind === "sensei" ? "sensei-chat-message" : "learner-message"} archived-message`;
+  const avatar = document.createElement("span");
+  avatar.className = `chat-avatar${kind === "sensei" ? " sensei-chat-avatar" : ""}`;
+  avatar.setAttribute("aria-hidden", "true");
+  avatar.textContent = kind === "sensei" ? "道" : "You";
+  const bubble = document.createElement("div");
+  bubble.className = "chat-bubble";
+  const label = document.createElement("p");
+  label.className = "chat-role";
+  label.textContent = role;
+  const content = document.createElement("p");
+  content.textContent = copy;
+  bubble.append(label, content);
+  message.append(avatar, bubble);
+  return message;
+}
+
+function archiveActiveTurn() {
+  if (!activeQuest) return;
+  const history = byId("chat-history");
+  const exchange = document.createElement("div");
+  exchange.className = "completed-exchange";
+  exchange.append(archivedChatMessage(
+    "sensei",
+    `Sensei · ${activeQuest.title}`,
+    activeQuest.prompt,
+  ));
+  if (activeAnswer) {
+    exchange.append(archivedChatMessage("learner", "Your answer", activeAnswer));
+    if (activeFeedback) {
+      const saved = attemptRecorded ? " Saved to your Atlas." : "";
+      exchange.append(archivedChatMessage(
+        "sensei",
+        "Sensei",
+        `${activeFeedback.correct ? "Correct." : "Not quite."}${saved}`,
+      ));
+    }
+  } else {
+    exchange.append(archivedChatMessage("learner", "You", "Skipped this problem."));
+  }
+  history.append(exchange);
+}
+
 function resetArenaFeedback() {
   attemptToken = null;
+  activeAnswer = "";
+  activeFeedback = null;
+  attemptRecorded = false;
+  byId("learner-answer-turn").hidden = true;
+  byId("learner-answer-copy").textContent = "";
   const feedback = byId("answer-feedback");
   feedback.hidden = true;
   feedback.className = "answer-feedback";
@@ -317,6 +395,9 @@ function resetArenaFeedback() {
   byId("solution-copy").hidden = true;
   byId("solution-text").textContent = "";
   byId("record-attempt").hidden = true;
+  byId("continue-practice").hidden = true;
+  byId("quest-answer").disabled = false;
+  byId("check-answer").disabled = false;
 }
 
 function renderOptions(quest) {
@@ -342,11 +423,13 @@ function renderOptions(quest) {
 }
 
 function openArena(quest) {
+  archiveActiveTurn();
   activeQuest = quest;
   showView("dojo");
   resetArenaFeedback();
   byId("arena-skill").textContent = `${quest.subject} · ${quest.skill_name}`;
-  byId("arena-title").textContent = quest.title;
+  byId("arena-title").textContent = "Practice chat";
+  byId("problem-title").textContent = quest.title;
   byId("arena-prompt").textContent = quest.prompt;
   renderGraph(quest.graph);
   byId("quest-answer").value = "";
@@ -362,7 +445,11 @@ function openArena(quest) {
   if (quest.answer_type === "expression") byId("quest-answer").focus({ preventScroll: true });
 }
 
-async function startAdaptiveQuest(skillId, statusTarget = byId("form-status")) {
+async function startAdaptiveQuest(
+  skillId,
+  statusTarget = byId("form-status"),
+  { resetSession = false } = {},
+) {
   if (!dashboardState || generatingQuestion) return;
   if (dashboardState.runtime.practice_api_version !== 4) {
     setGenerationStatus(
@@ -373,11 +460,18 @@ async function startAdaptiveQuest(skillId, statusTarget = byId("form-status")) {
     );
     return;
   }
+  const topic = studyTopicById(skillId);
+  if (!topic) {
+    setGenerationStatus(statusTarget, "That Atlas topic is no longer available.", "error", skillId);
+    return;
+  }
+  if (resetSession || activeSessionSkillId !== skillId) beginPracticeSession(topic);
   generatingQuestion = true;
   document.body.classList.add("generating");
   setGenerationStatus(statusTarget, "Sensei is drafting and independently checking your encounter…", "working", skillId);
   byId("forge-button").disabled = true;
   byId("new-question").disabled = true;
+  byId("continue-practice").disabled = true;
   try {
     const response = await postJson(
       "/api/study/generate",
@@ -393,7 +487,7 @@ async function startAdaptiveQuest(skillId, statusTarget = byId("form-status")) {
       },
     );
     openArena({ ...response.quest, challenge_token: response.challenge_token });
-    setGenerationStatus(statusTarget, "Quest validated. Enter the arena.", "success", skillId);
+    setGenerationStatus(statusTarget, "Problem validated. Your practice chat is ready.", "success", skillId);
   } catch (error) {
     void reportClientProblem(error, "startAdaptiveQuest");
     setGenerationStatus(statusTarget, error.message, "error", skillId);
@@ -402,6 +496,7 @@ async function startAdaptiveQuest(skillId, statusTarget = byId("form-status")) {
     document.body.classList.remove("generating");
     byId("forge-button").disabled = false;
     byId("new-question").disabled = false;
+    byId("continue-practice").disabled = false;
   }
 }
 
@@ -420,7 +515,11 @@ async function createFocus(event) {
       context: byId("context-input").value.trim(),
     });
     await loadDashboard();
-    await startAdaptiveQuest(response.study_topic.id);
+    await startAdaptiveQuest(
+      response.study_topic.id,
+      byId("form-status"),
+      { resetSession: true },
+    );
   } catch (error) {
     void reportClientProblem(error, "createFocus");
     byId("form-status").textContent = error.message;
@@ -431,8 +530,10 @@ async function createFocus(event) {
 
 function closeArena() {
   activeQuest = null;
+  activeSessionSkillId = null;
   resetArenaFeedback();
   renderGraph(null);
+  byId("chat-history").replaceChildren();
   byId("quest-arena").hidden = true;
 }
 
@@ -481,8 +582,12 @@ async function checkAnswer() {
     if (!activeQuest || activeQuest.challenge_token !== challengeToken) return;
     const result = response.result;
     attemptToken = response.attempt_token;
+    activeAnswer = answer;
     const feedback = byId("answer-feedback");
     const correct = result.status === "verified_correct";
+    activeFeedback = { correct };
+    byId("learner-answer-copy").textContent = answer;
+    byId("learner-answer-turn").hidden = false;
     feedback.classList.add(correct ? "correct" : "incorrect");
     byId("feedback-status").textContent = correct ? "Victory — your answer holds." : "Not yet — this encounter has another opening.";
     const detail = byId("feedback-detail");
@@ -496,6 +601,9 @@ async function checkAnswer() {
     }
     byId("record-attempt").hidden = !attemptToken;
     feedback.hidden = false;
+    feedback.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    byId("quest-answer").disabled = true;
+    byId("option-grid").querySelectorAll("button").forEach((option) => { option.disabled = true; });
   } catch (error) {
     void reportClientProblem(error, "checkAnswer");
     const feedback = byId("answer-feedback");
@@ -505,7 +613,7 @@ async function checkAnswer() {
     byId("feedback-detail").hidden = false;
     feedback.hidden = false;
   } finally {
-    button.disabled = false;
+    button.disabled = Boolean(activeFeedback);
   }
 }
 
@@ -516,8 +624,10 @@ async function recordAttempt() {
   try {
     const response = await postJson("/api/quest/record", { attempt_token: attemptToken });
     attemptToken = null;
+    attemptRecorded = true;
     byId("feedback-expected").textContent = `Recorded: +${response.progress.xp_awarded} XP · ${Math.round(response.progress.mastery_score)}/100 mastery.`;
     button.hidden = true;
+    byId("continue-practice").hidden = false;
     await loadDashboard();
   } catch (error) {
     void reportClientProblem(error, "recordAttempt");
@@ -584,6 +694,9 @@ document.querySelectorAll(".prompt-examples button").forEach((button) => {
   });
 });
 byId("new-question").addEventListener("click", () => {
+  if (activeQuest) startAdaptiveQuest(activeQuest.skill_id, byId("arena-generation-status"));
+});
+byId("continue-practice").addEventListener("click", () => {
   if (activeQuest) startAdaptiveQuest(activeQuest.skill_id, byId("arena-generation-status"));
 });
 byId("close-arena").addEventListener("click", closeArena);

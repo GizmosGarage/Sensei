@@ -34,7 +34,7 @@
             <h1 id="forge-heading">Forge a questline</h1>
             <div class="sensei-message">
               <span class="sensei-avatar" aria-hidden="true">道</span>
-              <p><strong>Sensei</strong>What would you like to train today? Name the discipline and I’ll forge your next challenge.</p>
+              <p><strong>Sensei</strong>Give me a broad subject, the exact skill you want in your Atlas, and any instructions for the kinds of problems you need. I’ll turn that brief into a practice chat, one checked problem at a time.</p>
             </div>
             <div class="prompt-examples" aria-label="Example study requests">
               <button type="button" data-subject="Mathematics" data-topic="Quadratic equations">Quadratic equations</button>
@@ -44,50 +44,83 @@
           </div>
           <form class="focus-form" id="focus-form">
             <div class="field-pair">
-              <label>Subject<input id="subject-input" name="subject" maxlength="80" placeholder="Chemistry" autocomplete="off" required></label>
-              <label>Topic or skill<input id="topic-input" name="topic" maxlength="120" placeholder="Balancing chemical equations" autocomplete="off" required></label>
+              <label>Subject<input id="subject-input" name="subject" maxlength="80" placeholder="Chemistry" autocomplete="off" aria-describedby="subject-help" required><small class="field-help" id="subject-help">Broad context, such as Algebra, Calculus, Chemistry, or Physics.</small></label>
+              <label>Topic or skill<input id="topic-input" name="topic" maxlength="120" placeholder="Dimensional analysis" autocomplete="off" aria-describedby="topic-help" required><small class="field-help" id="topic-help">The specific skill Sensei will add to your Atlas and train.</small></label>
             </div>
             <div class="context-row">
-              <label>Anything Sensei should know <span>optional</span><textarea id="context-input" name="context" maxlength="2000" rows="3" placeholder="Share a learning objective, notes excerpt, formula, or what your test covers."></textarea></label>
+              <label>Anything Sensei should know <span>optional</span><textarea id="context-input" name="context" maxlength="2000" rows="3" placeholder="Example: Use dimensional analysis for unit conversions and computations involving two or more properties." aria-describedby="context-help"></textarea><small class="field-help" id="context-help">Instructions for the type, emphasis, or scope of practice problems you want.</small></label>
             </div>
             <div class="form-action-row">
               <p id="form-status" role="status">Your conversation stays on this machine.</p>
-              <button class="primary-button forge-button" id="forge-button" type="submit">Forge a practice quest</button>
+              <button class="primary-button forge-button" id="forge-button" type="submit">Start practice chat</button>
             </div>
           </form>
         </section>
 
         <section class="arena-section panel" id="quest-arena" aria-labelledby="arena-title" hidden>
           <div class="arena-heading">
-            <div><p class="eyebrow" id="arena-skill">Selected discipline</p><h2 id="arena-title">Quest title</h2></div>
+            <div><p class="eyebrow" id="arena-skill">Selected discipline</p><h2 id="arena-title">Practice chat</h2></div>
             <div class="arena-actions">
-              <button class="secondary-button" id="new-question" type="button">New encounter</button>
-              <button class="icon-button" id="close-arena" type="button" aria-label="Close practice quest">Close</button>
+              <button class="secondary-button" id="new-question" type="button">Skip to next problem</button>
+              <button class="icon-button" id="close-arena" type="button" aria-label="Close practice chat">Close</button>
             </div>
           </div>
           <p class="generation-status arena-generation-status" id="arena-generation-status" role="status"></p>
-          <p class="arena-prompt" id="arena-prompt"></p>
-          <figure class="quest-graph" id="arena-graph" hidden>
-            <svg id="arena-graph-svg" viewBox="0 0 720 400" role="img" aria-labelledby="arena-graph-description"></svg>
-            <figcaption class="visually-hidden" id="arena-graph-description"></figcaption>
-          </figure>
-          <div class="option-grid" id="option-grid"></div>
-          <label class="answer-label" for="quest-answer">Your answer</label>
-          <div class="answer-row">
-            <input id="quest-answer" type="text" maxlength="500" autocomplete="off" spellcheck="false" placeholder="Enter your answer">
-            <button class="primary-button" id="check-answer" type="button">Check answer</button>
+          <div class="chat-thread" id="chat-thread" aria-live="polite">
+            <article class="chat-message learner-message study-brief-message">
+              <span class="chat-avatar" aria-hidden="true">You</span>
+              <div class="chat-bubble">
+                <p class="chat-role">Your study brief</p>
+                <dl class="study-brief">
+                  <div><dt>Subject</dt><dd id="session-subject"></dd></div>
+                  <div><dt>Atlas topic</dt><dd id="session-topic"></dd></div>
+                  <div><dt>Practice instructions</dt><dd id="session-context"></dd></div>
+                </dl>
+              </div>
+            </article>
+            <div class="chat-history" id="chat-history"></div>
+            <article class="chat-message sensei-chat-message" id="active-problem-turn">
+              <span class="chat-avatar sensei-chat-avatar" aria-hidden="true">道</span>
+              <div class="chat-bubble problem-bubble">
+                <p class="chat-role">Sensei · <span id="problem-title">Next problem</span></p>
+                <p class="arena-prompt" id="arena-prompt"></p>
+                <figure class="quest-graph" id="arena-graph" hidden>
+                  <svg id="arena-graph-svg" viewBox="0 0 720 400" role="img" aria-labelledby="arena-graph-description"></svg>
+                  <figcaption class="visually-hidden" id="arena-graph-description"></figcaption>
+                </figure>
+                <div class="option-grid" id="option-grid"></div>
+                <div class="coach-row">
+                  <button class="hint-button" id="show-hint" type="button">Ask Sensei for a hint</button>
+                  <p class="notation-help" id="notation-help">For numeric or symbolic answers, use <code>^</code> for powers, <code>pi</code> for π, and <code>DNE</code> when a requested value does not exist.</p>
+                </div>
+                <p class="hint-copy" id="hint-copy" hidden></p>
+              </div>
+            </article>
+            <article class="chat-message learner-message answer-message" id="learner-answer-turn" hidden>
+              <span class="chat-avatar" aria-hidden="true">You</span>
+              <div class="chat-bubble"><p class="chat-role">Your answer</p><p id="learner-answer-copy"></p></div>
+            </article>
+            <div class="answer-feedback sensei-feedback-message" id="answer-feedback" role="status" hidden>
+              <span class="chat-avatar sensei-chat-avatar" aria-hidden="true">道</span>
+              <div class="chat-bubble">
+                <p class="chat-role">Sensei</p>
+                <p class="feedback-status" id="feedback-status"></p>
+                <p id="feedback-detail"></p>
+                <p class="feedback-expected" id="feedback-expected"></p>
+                <div class="solution-copy" id="solution-copy" hidden><strong>Sensei’s walkthrough</strong><p id="solution-text"></p></div>
+                <div class="feedback-actions">
+                  <button class="secondary-button" id="record-attempt" type="button" hidden>Save progress to Atlas</button>
+                  <button class="primary-button" id="continue-practice" type="button" hidden>Next problem</button>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="coach-row">
-            <button class="hint-button" id="show-hint" type="button">Ask Sensei for a hint</button>
-            <p class="notation-help" id="notation-help">For math, use <code>^</code> for powers, <code>pi</code> for π, and <code>DNE</code> when a requested value does not exist.</p>
-          </div>
-          <p class="hint-copy" id="hint-copy" hidden></p>
-          <div class="answer-feedback" id="answer-feedback" role="status" hidden>
-            <p class="feedback-status" id="feedback-status"></p>
-            <p id="feedback-detail"></p>
-            <p class="feedback-expected" id="feedback-expected"></p>
-            <div class="solution-copy" id="solution-copy" hidden><strong>Sensei’s walkthrough</strong><p id="solution-text"></p></div>
-            <button class="secondary-button" id="record-attempt" type="button" hidden>Claim XP and record mastery</button>
+          <div class="chat-composer">
+            <label class="answer-label" for="quest-answer">Message Sensei</label>
+            <div class="answer-row">
+              <input id="quest-answer" type="text" maxlength="500" autocomplete="off" spellcheck="false" placeholder="Type your answer">
+              <button class="primary-button" id="check-answer" type="button">Send answer</button>
+            </div>
           </div>
         </section>
       </section>

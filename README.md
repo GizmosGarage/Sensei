@@ -1,6 +1,6 @@
 # Sensei
 
-Sensei is a local-first, learner-directed math and chemistry tutor. Name a subject and topic, optionally supply your own material, and Sensei creates checked practice encounters while growing a persistent RPG-style mastery atlas around what you choose to study.
+Sensei is a local-first, learner-directed math and chemistry tutor. Name a broad subject, a specific topic or skill, and optionally describe the practice style you need. Sensei turns that brief into a one-problem-at-a-time practice chat while growing a persistent RPG-style mastery atlas around what you choose to study.
 
 Repository: [GizmosGarage/Sensei](https://github.com/GizmosGarage/Sensei)
 
@@ -8,7 +8,7 @@ Repository: [GizmosGarage/Sensei](https://github.com/GizmosGarage/Sensei)
 
 **Phase 9 complete: reliable learner-directed encounters**
 
-Sensei no longer requires a premade course path. Its loopback-only dashboard accepts a subject, a topic, and an optional learning objective or source excerpt. The local model drafts a confined problem, a separate review pass recomputes and approves its answer and scope, and a deterministic answer contract checks the learner's response. Each learner-created topic joins the same student-owned SQLite memory, XP economy, mastery scoring, and spaced-review queue as the original verifier-backed math foundation. No hosted inference or cloud storage is involved. The local stack is:
+Sensei no longer requires a premade course path. Its loopback-only dashboard accepts a broad subject, a specific topic or skill, and optional instructions for the type and scope of practice. The local model drafts one confined problem at a time, a separate review pass checks the answer and all three layers of the brief, and a deterministic answer contract checks the learner's response. Each learner-created topic joins the same student-owned SQLite memory, XP economy, mastery scoring, and spaced-review queue as the original verifier-backed math foundation. No hosted inference or cloud storage is involved. The local stack is:
 
 - `llama.cpp` b10549 with its Vulkan backend
 - Qwen 3.5 9B Q4_K_M as the default tutor model
@@ -43,7 +43,7 @@ Start a scheduled terminal challenge with `/quest`, submit it with `/answer`, an
 python -m sensei.dashboard
 ```
 
-Enter the **Dojo**, name a subject such as **Chemistry** and a focus such as **Stoichiometry**, then add any material or emphasis that should shape the encounter. Choose **Forge a practice quest**, answer it, and claim XP to save the mastery evidence. Your rank and growing atlas live under **Profile**, while completed encounters live under **Past Quest**. Use `python -m sensei.dashboard --fast` for the lighter local model. See the [dashboard guide](docs/LOCAL_DASHBOARD.md).
+Enter the **Dojo**, name a subject such as **Chemistry**, a specific Atlas topic such as **Dimensional analysis**, and any instructions that should shape the problems. Choose **Start practice chat**, answer one problem, save the result to the Atlas, and continue when ready. Your rank and growing atlas live under **Profile**, while completed encounters live under **Past Quest**. Use `python -m sensei.dashboard --fast` for the lighter local model. See the [dashboard guide](docs/LOCAL_DASHBOARD.md).
 
 ## Product principles
 

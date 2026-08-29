@@ -59,9 +59,28 @@ class AdaptivePracticeTests(unittest.TestCase):
         self.assertNotIn("solution", public)
         self.assertEqual(2, len(provider.requests))
         self.assertIn("Subject: Chemistry", provider.requests[0][-1]["content"])
-        self.assertIn("Topic: Stoichiometry", provider.requests[0][-1]["content"])
+        self.assertIn("Topic or skill: Stoichiometry", provider.requests[0][-1]["content"])
+        self.assertIn(
+            "Practice instructions: Practice mole ratios.",
+            provider.requests[0][-1]["content"],
+        )
+        self.assertIn(
+            "Every quantitative given must be necessary",
+            provider.requests[0][0]["content"],
+        )
         self.assertIn("Requested subject: Chemistry", provider.requests[1][-1]["content"])
-        self.assertIn("Requested topic: Stoichiometry", provider.requests[1][-1]["content"])
+        self.assertIn(
+            "Requested topic or skill: Stoichiometry",
+            provider.requests[1][-1]["content"],
+        )
+        self.assertIn(
+            "Requested practice instructions: Practice mole ratios.",
+            provider.requests[1][-1]["content"],
+        )
+        self.assertIn(
+            "Reject unused or redundant quantitative givens",
+            provider.requests[1][0]["content"],
+        )
 
     def test_fixable_draft_is_revised_with_feedback_instead_of_discarded(self) -> None:
         incorrect_key = json.dumps(

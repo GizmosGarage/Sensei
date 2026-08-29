@@ -543,7 +543,10 @@ class AdaptiveQuestFactory:
         avoid_prompts: Collection[str],
         prior_draft: Mapping[str, object] | None = None,
     ) -> list[dict[str, str]]:
-        context = str(skill.get("description") or "No additional source material.")
+        context = str(
+            skill.get("description")
+            or "No additional practice instructions were provided."
+        )
         recent = "\n".join(
             f"{index}. {prompt}"
             for index, prompt in enumerate(tuple(avoid_prompts)[-8:], start=1)
@@ -581,10 +584,25 @@ class AdaptiveQuestFactory:
                 "role": "system",
                 "content": (
                     "You are Sensei's practice architect. Create exactly one accurate, "
-                    "standalone practice problem confined to the learner's requested "
-                    "subject and topic. Return only JSON with exactly these fields: "
+                    "standalone practice problem from the learner's three-layer study "
+                    "brief. Treat Subject as the broad academic domain and never cross "
+                    "into a different domain. Treat Topic or skill as the narrow target "
+                    "inside that subject and the exact focus being trained. Treat "
+                    "Practice instructions as binding guidance for the kind, emphasis, "
+                    "and scope of problem the learner wants. Use all three layers in "
+                    "every problem, while interpreting the practice instructions only "
+                    "within the named subject and topic. Return only JSON with exactly "
+                    "these fields: "
                     "title, prompt, answer_type, answer, options, hint, solution, "
                     "graph. "
+                    "Every quantitative given must be necessary to solve the requested "
+                    "problem; do not add distractor measurements or provide an "
+                    "intermediate value that makes another supplied property optional. "
+                    "When the practice instructions request computations involving two "
+                    "or more properties, build one conversion chain in which each named "
+                    "property is essential, such as volume times density divided by "
+                    "molar mass. Verify that all givens are mutually consistent before "
+                    "returning the problem. "
                     "Use answer_type=expression for a numeric or symbolic result; the "
                     "answer must use plain restricted math syntax such as 3/4, x^2, "
                     "sqrt(2), 6.02*10^23, or oo for positive infinity, and options "
@@ -633,8 +651,8 @@ class AdaptiveQuestFactory:
                 "role": "user",
                 "content": (
                     f"Subject: {skill['course']}\n"
-                    f"Topic: {skill['name']}\n"
-                    f"Learner material or emphasis: {context}\n"
+                    f"Topic or skill: {skill['name']}\n"
+                    f"Practice instructions: {context}\n"
                     f"Internal variation key (never mention this): {variation_key}\n"
                     "Do not repeat or paraphrase any recently issued problem below.\n"
                     f"Recently issued problems:\n{recent}\n"
@@ -644,6 +662,10 @@ class AdaptiveQuestFactory:
         ]
 
     def _review(self, skill: Mapping[str, object], quest: AdaptiveQuest) -> str | None:
+        context = str(
+            skill.get("description")
+            or "No additional practice instructions were provided."
+        )
         draft = _private_quest_document(quest)
         result = self.provider.complete(
             [
@@ -653,8 +675,17 @@ class AdaptiveQuestFactory:
                         "Act as a strict independent teacher reviewing a generated "
                         "practice problem. Recompute the answer. Check that the prompt "
                         "is unambiguous, the keyed answer and solution agree, and the "
-                        "problem stays inside the requested subject, topic, and learner "
-                        "emphasis. Do not demand material outside that scope. "
+                        "problem obeys the complete three-layer study brief: broad "
+                        "subject, narrow topic or skill, and the learner's practice "
+                        "instructions. The practice instructions describe the desired "
+                        "problem type or emphasis, not a new subject. Reject a problem "
+                        "that ignores any supplied layer or demands material outside "
+                        "that scope. Reject unused or redundant quantitative givens, "
+                        "inconsistent measurements, and any supplied intermediate value "
+                        "that lets the learner bypass a requested property. When the "
+                        "instructions request two or more properties, trace the solution "
+                        "and approve only if one necessary conversion chain actually "
+                        "uses them. "
                         "For numeric answers, "
                         "answer_type=expression is required and is not an error. For "
                         "graphical limits, treat the structured graph as the displayed "
@@ -669,7 +700,8 @@ class AdaptiveQuestFactory:
                     "role": "user",
                     "content": (
                         f"Requested subject: {skill['course']}\n"
-                        f"Requested topic: {skill['name']}\n"
+                        f"Requested topic or skill: {skill['name']}\n"
+                        f"Requested practice instructions: {context}\n"
                         f"Draft: {json.dumps(draft, ensure_ascii=False)}"
                     ),
                 },

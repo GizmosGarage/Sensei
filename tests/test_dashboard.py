@@ -75,6 +75,10 @@ class DashboardTests(unittest.TestCase):
                 html = response.read().decode("utf-8")
                 self.assertIn("Sensei // Adaptive Dojo", html)
                 self.assertIn("Forge a questline", html)
+                self.assertIn("Start practice chat", html)
+                self.assertIn("Your study brief", html)
+                self.assertIn("Practice instructions", html)
+                self.assertIn("Next problem", html)
                 self.assertIn('data-view="profile"', html)
                 self.assertIn('data-view="past-quest"', html)
                 self.assertNotIn("Name the quest.", html)
@@ -294,8 +298,18 @@ class DashboardTests(unittest.TestCase):
                 state = json.load(response)
             self.assertEqual("Stoichiometry", state["study_topics"][0]["name"])
             self.assertEqual(1, state["study_topics"][0]["attempts_count"])
-            self.assertIn("Topic: Stoichiometry", provider.requests[0][-1]["content"])
-            self.assertIn("Topic: Stoichiometry", provider.requests[2][-1]["content"])
+            self.assertIn(
+                "Topic or skill: Stoichiometry",
+                provider.requests[0][-1]["content"],
+            )
+            self.assertIn(
+                "Practice instructions: Mole ratios",
+                provider.requests[0][-1]["content"],
+            )
+            self.assertIn(
+                "Topic or skill: Stoichiometry",
+                provider.requests[2][-1]["content"],
+            )
         finally:
             server.shutdown()
             server.server_close()
