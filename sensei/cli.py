@@ -1,4 +1,4 @@
-"""Terminal interface for the local Sensei tutor."""
+"""Terminal interface for the API-backed Sensei tutor."""
 
 from __future__ import annotations
 
@@ -9,22 +9,20 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from sensei.errorlog import DEFAULT_ERROR_LOG_PATH, ErrorRecorder, error_reference
-from sensei.models import (
-    DEFAULT_MODEL_ID,
-    DEFAULT_MODELS_DIRECTORY,
-    FAST_MODEL_ID,
-    ModelCatalog,
-    model_path,
-)
 from sensei.learning import (
     LearningEvent,
     LearningEventError,
     LearningEventExtractor,
     Outcome,
 )
-from sensei.providers import LlamaCppProvider, ProviderError
+from sensei.providers import (
+    DEFAULT_API_BASE_URL,
+    DEFAULT_API_MODEL,
+    ProviderError,
+    ResponsesAPIProvider,
+    api_settings_from_environment,
+)
 from sensei.quests import QuestDeck, QuestRecommendation
-from sensei.runtime import DEFAULT_RUNTIME_DIRECTORY, LocalLlamaRuntime, RuntimeSettings
 from sensei.storage import (
     DEFAULT_DATABASE_PATH,
     LearningStore,
@@ -41,10 +39,10 @@ from sensei.verification import (
 )
 
 
-BANNER = """Sensei - local calculus tutor
+BANNER = """Sensei - API-backed calculus tutor
 Commands: /quest, /answer, /hint, /solve, /check, /done, /profile,
           /skills, /review, /new, /help, /quit
-Study text is kept out of Git.
+Learning data stays in local SQLite.
 """
 
 HELP = """Commands
@@ -65,7 +63,7 @@ HELP = """Commands
   /backup [path]    Back up the SQLite database to a new file.
   /delete-data      Permanently clear personal learning records after confirmation.
   /help             Show this command list.
-  /quit             Stop the local runtime and exit.
+  /quit             Exit Sensei.
 
 Plain text uses coach mode. The first plain-text message starts a problem;
 later messages are treated as attempts or follow-up questions.
@@ -74,7 +72,7 @@ later messages are treated as attempts or follow-up questions.
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run the local Sensei calculus tutor."
+        description="Run the API-backed Sensei calculus tutor."
     )
     parser.add_argument(
         "--prompt",
@@ -86,38 +84,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=TutorMode.COACH.value,
         help="Help mode for --prompt (default: coach).",
     )
-    model_group = parser.add_mutually_exclusive_group()
-    model_group.add_argument(
-        "--model-id",
+    parser.add_argument(
+        "--model",
         default=None,
-        help=f"Pinned model ID (default: {DEFAULT_MODEL_ID}).",
-    )
-    model_group.add_argument(
-        "--fast",
-        action="store_true",
-        help=f"Use the lighter fallback model ({FAST_MODEL_ID}).",
+        help=(
+            f"Hosted model name (default: {DEFAULT_API_MODEL}, or "
+            "SENSEI_LLM_MODEL)."
+        ),
     )
     parser.add_argument(
-        "--manifest",
-        type=Path,
+        "--api-base-url",
         default=None,
-        help="Override the pinned model manifest path.",
-    )
-    parser.add_argument(
-        "--models-dir",
-        type=Path,
-        default=DEFAULT_MODELS_DIRECTORY,
-        help="Directory containing local GGUF weights.",
-    )
-    parser.add_argument(
-        "--runtime-dir",
-        type=Path,
-        default=DEFAULT_RUNTIME_DIRECTORY,
-        help="Directory containing llama-server.exe.",
-    )
-    parser.add_argument(
-        "--server-url",
-        help="Use an already-running llama.cpp server instead of starting one.",
+        help=(
+            f"Responses-compatible API root (default: {DEFAULT_API_BASE_URL}, "
+            "or SENSEI_LLM_BASE_URL)."
+        ),
     )
     parser.add_argument(
         "--database",
@@ -634,54 +615,21 @@ def run_interactive(
             )
 
 
-def _runtime_context(
-    args: argparse.Namespace,
-    selected_path: Path,
-    model_id: str,
-    stack: ExitStack,
-) -> str:
-    if args.server_url:
-        return args.server_url
-    executable = args.runtime_dir.resolve() / "llama-server.exe"
-    print(
-        f"Starting local model {model_id}; initial loading may take a moment...",
-        file=sys.stderr,
-    )
-    runtime = LocalLlamaRuntime(
-        RuntimeSettings(
-            executable=executable,
-            model_path=selected_path,
-            model_alias=model_id,
-        )
-    )
-    return stack.enter_context(runtime).base_url
-
-
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     error_recorder = ErrorRecorder(args.error_log)
     try:
-        catalog = (
-            ModelCatalog.load(args.manifest.resolve())
-            if args.manifest
-            else ModelCatalog.load()
+        settings = api_settings_from_environment(
+            model=args.model,
+            base_url=args.api_base_url,
         )
-        selected_id = FAST_MODEL_ID if args.fast else args.model_id or DEFAULT_MODEL_ID
-        candidate = catalog.get(selected_id)
-        selected_path = model_path(candidate, args.models_dir)
-        if not args.server_url and not selected_path.is_file():
-            raise FileNotFoundError(
-                f"Model is missing: {selected_path}\n"
-                f"Download it with: python scripts\\download_models.py "
-                f"--model {selected_id}"
-            )
-
+        provider = ResponsesAPIProvider(
+            settings.api_key,
+            settings.model,
+            base_url=settings.base_url,
+        )
+        session = TutorSession(provider, settings.model)
         with ExitStack() as stack:
-            base_url = _runtime_context(
-                args, selected_path, selected_id, stack
-            )
-            provider = LlamaCppProvider(base_url, selected_id)
-            session = TutorSession(provider, selected_id)
             if args.prompt:
                 _print_reply(
                     session,

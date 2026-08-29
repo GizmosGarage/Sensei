@@ -87,7 +87,7 @@ class LearningSnapshot:
 
 
 def student_facing_text(text: str) -> str:
-    """Remove tagged reasoning if a runtime violates the no-reasoning setting."""
+    """Remove tagged reasoning if a provider returns it despite the prompt policy."""
 
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
     if re.search(r"<think>", cleaned, flags=re.IGNORECASE):

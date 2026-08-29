@@ -23,13 +23,13 @@ Keep the 40 curated quests for terminal coaching and regression coverage. Use th
 - The browser cannot read or modify the hidden answer, credited skill, correctness result, or XP award.
 - Temporary challenges disappear when the dashboard process stops; durable recorded attempts remain in SQLite.
 - Immediate repeats are prevented, but a random form may recur later in a long session.
-- The current generators emphasize compact scalar and symbolic exercises; richer multistep reasoning needs broader validated templates and local-model coaching.
+- The current generators emphasize compact scalar and symbolic exercises; richer multistep reasoning needs broader validated templates and LLM coaching.
 
 ## Alternatives considered
 
-### Ask the local language model for each question and answer
+### Ask the language model for each question and answer
 
-Rejected as the correctness boundary because a generated answer key could be wrong or subtly outside the selected subject. The local model can later explain or hint around a prevalidated procedural problem.
+Rejected as the correctness boundary because a generated answer key could be wrong or subtly outside the selected subject. The configured LLM can explain or hint around a prevalidated procedural problem.
 
 ### Store a very large static question bank
 

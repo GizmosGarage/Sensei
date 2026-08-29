@@ -31,8 +31,8 @@ while the local server is temporarily unreachable are queued locally (up to 25)
 and submitted after the dashboard reconnects. Incorrect student answers are normal
 learning outcomes and are not application errors.
 
-The managed `llama.cpp` process continues to write its detailed runtime output to
-`data/runtime/llama-server.log`; related Sensei errors point there when appropriate.
+Hosted API failures are recorded without authorization headers or API keys. Provider
+error details are truncated before being added to the local structured log.
 
 ## Configuration and retention
 

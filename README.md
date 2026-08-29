@@ -1,95 +1,99 @@
 # Sensei
 
-Sensei is a local-first, learner-directed math and chemistry tutor. Name a broad subject, a specific topic or skill, and optionally describe the practice style you need. Sensei turns that brief into a one-problem-at-a-time practice chat while growing a persistent RPG-style mastery atlas around what you choose to study.
+Sensei is a learner-directed math and chemistry tutor. It uses a hosted
+Responses-compatible LLM API for tutoring and problem generation while keeping the
+learner profile, attempts, mastery, XP, misconceptions, and review schedule in the
+existing local SQLite database.
 
 Repository: [GizmosGarage/Sensei](https://github.com/GizmosGarage/Sensei)
 
-## Project status
+## Architecture
 
-**Phase 9 complete: reliable learner-directed encounters**
+- `data/sensei.db` remains the default and only durable learning store.
+- The dashboard remains loopback-only at `http://127.0.0.1:8765/`.
+- LLM requests go to the configured hosted Responses API.
+- API credentials are read from environment variables and are never saved to SQLite
+  or the repository.
+- Deterministic SymPy checks remain the correctness boundary for supported math.
+- The API is called with remote response storage disabled.
 
-Sensei no longer requires a premade course path. Its loopback-only dashboard accepts a broad subject, a specific topic or skill, and optional instructions for the type and scope of practice. The local model drafts one confined problem at a time, a separate review pass checks the answer and all three layers of the brief, and a deterministic answer contract checks the learner's response. Each learner-created topic joins the same student-owned SQLite memory, XP economy, mastery scoring, and spaced-review queue as the original verifier-backed math foundation. No hosted inference or cloud storage is involved. The local stack is:
+The current default is OpenAI's `gpt-5.4-mini`, but both the model name and API base
+URL are configurable for another Responses-compatible service.
 
-- `llama.cpp` b10549 with its Vulkan backend
-- Qwen 3.5 9B Q4_K_M as the default tutor model
-- Qwen 3.5 4B Q4_K_M as the lighter fallback
-- 4,096-token working context with reasoning output disabled
+## Setup
 
-The default model scored 23/23 on the initial tutoring rubric and generated 29.6 tokens/second on the target RX 5700 XT. See the [benchmark report](docs/BENCHMARK_RESULTS.md) for methodology and limitations.
+Sensei requires Python 3.11 or newer and an API key. Install the project:
 
-## Quick start
+```powershell
+python -m pip install -e .
+```
 
-After completing the [local inference setup](docs/LOCAL_INFERENCE_SETUP.md), start the tutor with:
+For OpenAI, set the key in the current PowerShell session:
+
+```powershell
+$env:OPENAI_API_KEY = "your-api-key"
+```
+
+Sensei also accepts `SENSEI_LLM_API_KEY`. Optional connection overrides are:
+
+```powershell
+$env:SENSEI_LLM_MODEL = "gpt-5.4-mini"
+$env:SENSEI_LLM_BASE_URL = "https://api.openai.com/v1"
+```
+
+The key is required at startup. Sensei exits with a clear error when neither
+`SENSEI_LLM_API_KEY` nor `OPENAI_API_KEY` is set.
+
+## Run
+
+Start the terminal tutor:
 
 ```powershell
 python -m sensei
 ```
 
-Use the lighter model when faster startup and lower memory use are more important:
-
-```powershell
-python -m sensei --fast
-```
-
-Inside the tutor, use `/check derivative`, `/check limit`, `/check antiderivative`, or `/check equivalent` to start a guided deterministic check. Use `/hint`, `/solve`, `/done`, `/profile`, `/skills`, `/review`, `/new`, `/status`, `/help`, or `/quit` for tutoring and progress. Plain text uses coach mode. For an automated one-shot model check:
-
-```powershell
-python -m sensei --prompt "Evaluate lim_(x->0) sin(x)/x" --mode hint
-```
-
-Start a scheduled terminal challenge with `/quest`, submit it with `/answer`, and record it with `/done`. Or open the local dashboard:
+Start the browser dashboard:
 
 ```powershell
 python -m sensei.dashboard
 ```
 
-Enter the **Dojo**, name a subject such as **Chemistry**, a specific Atlas topic such as **Dimensional analysis**, and any instructions that should shape the problems. Choose **Start practice chat**, answer one problem, save the result to the Atlas, and continue when ready. Your rank and growing atlas live under **Profile**, while completed encounters live under **Past Quest**. Use `python -m sensei.dashboard --fast` for the lighter local model. See the [dashboard guide](docs/LOCAL_DASHBOARD.md).
+Choose a different API model or endpoint without changing source code:
 
-## Product principles
+```powershell
+python -m sensei.dashboard --model "gpt-5.4-mini" --api-base-url "https://api.openai.com/v1"
+```
 
-- Run the tutor and learning memory locally.
-- Treat the model as the teacher, not as permanent storage.
-- Ask for a student attempt before revealing a solution.
-- Reward effort with XP while measuring mastery separately.
-- Verify mathematical answers with deterministic tools where possible.
-- Validate model-authored problems before presenting them to the learner.
-- Grow the study map from learner intent instead of assuming a universal syllabus.
-- Keep personal study history, model weights, and secrets out of Git.
-- Make architectural decisions and benchmark results reproducible.
+The dashboard lets a learner name a subject, topic, and practice instructions. The
+configured LLM drafts and reviews one problem at a time, while protected answer keys
+stay in the dashboard process until the attempt is checked and recorded.
+
+The terminal supports `/quest`, `/answer`, `/hint`, `/solve`, `/done`, `/profile`,
+`/skills`, `/review`, `/new`, `/status`, `/errors`, `/export`, `/backup`,
+`/delete-data`, `/help`, and `/quit`.
+
+## Local data
+
+Existing learner data needs no migration. The default database remains
+`data/sensei.db`, and `data/` remains excluded from Git. Use `--database PATH` to
+select another SQLite file.
+
+The terminal provides:
+
+- `/export [path]` to create a JSON export.
+- `/backup [path]` to create a SQLite backup.
+- `/delete-data` to clear learning records only after an exact confirmation.
+
+Running tests uses temporary databases and does not modify `data/sensei.db`.
 
 ## Documentation
 
-- [Hardware baseline](docs/HARDWARE_BASELINE.md)
-- [Model evaluation plan](docs/MODEL_EVALUATION.md)
-- [Benchmark results](docs/BENCHMARK_RESULTS.md)
-- [Local inference setup](docs/LOCAL_INFERENCE_SETUP.md)
-- [Terminal tutor guide](docs/TEXT_TUTOR.md)
+- [API setup](docs/API_SETUP.md)
+- [Terminal tutor](docs/TEXT_TUTOR.md)
+- [Dashboard](docs/LOCAL_DASHBOARD.md)
 - [Learning memory and progression](docs/LEARNING_MEMORY.md)
 - [Deterministic verification](docs/DETERMINISTIC_VERIFICATION.md)
 - [Review quests](docs/REVIEW_QUESTS.md)
 - [Precalculus path](docs/PRECALCULUS.md)
-- [Local RPG dashboard](docs/LOCAL_DASHBOARD.md)
-- [Local structured error log](docs/ERROR_LOG.md)
-- [Local-first architecture decision](docs/decisions/0001-local-first-architecture.md)
-- [Runtime and default-model decision](docs/decisions/0002-runtime-and-default-model.md)
-- [Terminal tutor architecture decision](docs/decisions/0003-terminal-tutor-architecture.md)
-- [Learning-memory architecture decision](docs/decisions/0004-learning-memory-and-progression.md)
-- [Deterministic-verification decision](docs/decisions/0005-deterministic-verification.md)
-- [Quest-and-dashboard decision](docs/decisions/0006-local-quests-and-dashboard.md)
-- [Interactive-course-dashboard decision](docs/decisions/0007-interactive-course-dashboard.md)
-- [Procedural-question-generation decision](docs/decisions/0008-procedural-question-generation.md)
-- [Learner-directed-practice decision](docs/decisions/0009-learner-directed-practice.md)
-- [Project log](docs/PROJECT_LOG.md)
-
-## Planned phases
-
-1. ~~Benchmark local model and inference-runtime candidates.~~
-2. ~~Build a minimal text-based tutoring loop.~~
-3. ~~Add persistent skill, attempt, and misconception tracking.~~
-4. ~~Add deterministic calculus verification.~~
-5. ~~Build guided review quests and a portfolio-ready interface.~~
-6. ~~Add an interactive dashboard practice loop and a complete Precalculus topic path.~~
-7. ~~Generate fresh, deterministically validated questions inside every subject.~~
-8. ~~Replace fixed course selection with learner-created, locally generated questlines.~~
-9. ~~Harden generated encounters with validated graphs, retryable generation, and local diagnostics.~~
-10. **Bring multi-turn coaching conversation into each dashboard encounter.**
+- [Structured error log](docs/ERROR_LOG.md)
+- [Architecture decisions](docs/decisions)

@@ -293,7 +293,7 @@ class AdaptivePracticeTests(unittest.TestCase):
         ):
             parse_adaptive_quest(json.dumps(document), skill=SKILL)
 
-    def test_walkthrough_allows_bounded_local_model_verbosity(self) -> None:
+    def test_walkthrough_allows_bounded_provider_verbosity(self) -> None:
         document = {
             "title": "Verbose but bounded walkthrough",
             "prompt": "Evaluate 1 + 1. Enter only the number.",
@@ -467,7 +467,7 @@ class AdaptivePracticeTests(unittest.TestCase):
                 if not self.failed:
                     self.failed = True
                     self.requests.append(list(messages))
-                    raise ProviderError("temporary local model disconnect")
+                    raise ProviderError("temporary hosted model disconnect")
                 return super().complete(messages, on_token)
 
         provider = FlakyProvider()

@@ -122,7 +122,7 @@ footer {
 }
 
 .topbar-actions,
-.local-badge {
+.connection-badge {
   display: flex;
   align-items: center;
 }
@@ -165,7 +165,7 @@ footer {
   box-shadow: 0 6px 20px rgba(123, 198, 164, 0.16);
 }
 
-.local-badge {
+.connection-badge {
   gap: 8px;
   color: var(--muted);
   font-size: 12px;
@@ -173,7 +173,7 @@ footer {
   text-transform: uppercase;
 }
 
-.local-badge i {
+.connection-badge i {
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -1427,7 +1427,7 @@ footer p {
     padding-inline: 10px;
   }
 
-  .local-badge {
+  .connection-badge {
     display: none;
   }
 

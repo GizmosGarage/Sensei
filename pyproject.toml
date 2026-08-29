@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sensei-calculus-tutor"
-version = "0.8.0"
-description = "A local-first learner-directed math and chemistry tutor"
+version = "0.9.0"
+description = "An API-backed tutor with learner-owned local SQLite memory"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "GizmosGarage" }]

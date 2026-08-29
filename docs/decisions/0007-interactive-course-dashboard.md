@@ -13,7 +13,7 @@ Add `course` to the versioned skill catalog and SQLite schema. Represent Precalc
 
 Allow the loopback dashboard to check and record curated quest attempts. Keep checking non-durable. After a conclusive verifier result, hold the result in process memory behind a cryptographically random token that expires after 15 minutes and can be consumed once. Require the dashboard's per-process CSRF token for writes, validate browser origin metadata, accept only small exact-shape JSON documents, and construct the durable learning event from server-owned quest and verifier data.
 
-Keep the server bound to `127.0.0.1`, SQLite as the only durable learning store, and the local model outside the browser server for this milestone.
+Keep the server bound to `127.0.0.1`, SQLite as the only durable learning store, and LLM credentials outside the browser for this milestone.
 
 ## Consequences
 
@@ -24,7 +24,7 @@ Keep the server bound to `127.0.0.1`, SQLite as the only durable learning store,
 - Public quest data remains answer-key-free before submission.
 - Incorrect checks may reveal the verifier's reference form as learning feedback after the learner has attempted the problem.
 - The dashboard remains a single-learner local application rather than an authenticated multi-user service.
-- Local-model coaching inside the browser remains a later integration.
+- API-backed coaching can be added without exposing credentials to the browser.
 
 ## Alternatives considered
 
@@ -42,4 +42,4 @@ Rejected because developer tools or another local process could forge progressio
 
 ### Host the dashboard for portfolio viewing
 
-Rejected for the live learning application because the user's study history and inference stack are intentionally local. A future public demo should use synthetic data and a separate deployment boundary.
+Rejected for the live learning application because the user's study history is intentionally local. A future public demo should use synthetic data and a separate deployment boundary.

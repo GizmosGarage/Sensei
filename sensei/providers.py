@@ -1,14 +1,21 @@
-"""Model-provider boundary and local llama.cpp implementation."""
+"""Model-provider boundary and hosted Responses API implementation."""
 
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Callable, Protocol, Sequence
 
+
+DEFAULT_API_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_API_MODEL = "gpt-5.4-mini"
+API_KEY_ENVIRONMENTS = ("SENSEI_LLM_API_KEY", "OPENAI_API_KEY")
+MODEL_ENVIRONMENT = "SENSEI_LLM_MODEL"
+BASE_URL_ENVIRONMENT = "SENSEI_LLM_BASE_URL"
 
 Message = dict[str, str]
 TokenCallback = Callable[[str], None]
@@ -26,8 +33,17 @@ class CompletionResult:
     completion_tokens: int | None = None
 
 
+@dataclass(frozen=True)
+class APISettings:
+    """Hosted LLM connection settings resolved without persisting the secret."""
+
+    api_key: str
+    model: str
+    base_url: str
+
+
 class ChatProvider(Protocol):
-    """Small interface that keeps the tutor independent from its runtime."""
+    """Small interface that keeps the tutor independent from its provider."""
 
     def complete(
         self,
@@ -36,42 +52,40 @@ class ChatProvider(Protocol):
     ) -> CompletionResult: ...
 
 
-def parse_completion(document: dict[str, object]) -> CompletionResult:
-    """Validate the subset of the chat-completion schema Sensei consumes."""
+def api_settings_from_environment(
+    *,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> APISettings:
+    """Resolve required API credentials and optional endpoint/model overrides."""
 
-    try:
-        choices = document["choices"]
-        if not isinstance(choices, list) or not choices:
-            raise TypeError("choices must be a non-empty list")
-        choice = choices[0]
-        if not isinstance(choice, dict):
-            raise TypeError("the first choice must be an object")
-        message = choice["message"]
-        if not isinstance(message, dict):
-            raise TypeError("choice.message must be an object")
-        text = message["content"]
-        finish_reason = choice["finish_reason"]
-        if not isinstance(text, str) or not text.strip():
-            raise TypeError("choice.message.content must be a non-empty string")
-        if not isinstance(finish_reason, str):
-            raise TypeError("choice.finish_reason must be a string")
-        usage = document.get("usage")
-        prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
-        completion_tokens = (
-            usage.get("completion_tokens") if isinstance(usage, dict) else None
+    api_key = next(
+        (
+            value.strip()
+            for name in API_KEY_ENVIRONMENTS
+            if (value := os.environ.get(name, "")).strip()
+        ),
+        "",
+    )
+    if not api_key:
+        names = " or ".join(API_KEY_ENVIRONMENTS)
+        raise ValueError(
+            f"A hosted LLM API key is required. Set {names} before starting Sensei."
         )
-        if prompt_tokens is not None and not isinstance(prompt_tokens, int):
-            prompt_tokens = None
-        if completion_tokens is not None and not isinstance(completion_tokens, int):
-            completion_tokens = None
-    except (KeyError, TypeError) as error:
-        raise ProviderError(f"Invalid chat-completion response: {error}") from error
 
-    if finish_reason != "stop":
-        raise ProviderError(
-            f"The model response did not finish normally ({finish_reason!r})."
-        )
-    return CompletionResult(text, finish_reason, prompt_tokens, completion_tokens)
+    resolved_model = (model or os.environ.get(MODEL_ENVIRONMENT) or DEFAULT_API_MODEL)
+    resolved_model = resolved_model.strip()
+    if not resolved_model:
+        raise ValueError("The hosted LLM model name cannot be empty.")
+
+    resolved_base_url = (
+        base_url
+        or os.environ.get(BASE_URL_ENVIRONMENT)
+        or DEFAULT_API_BASE_URL
+    ).strip()
+    if not resolved_base_url.startswith(("https://", "http://")):
+        raise ValueError("The hosted LLM base URL must begin with http:// or https://.")
+    return APISettings(api_key, resolved_model, resolved_base_url.rstrip("/"))
 
 
 def parse_sse_data(line: bytes) -> dict[str, object] | None:
@@ -92,47 +106,116 @@ def parse_sse_data(line: bytes) -> dict[str, object] | None:
     return parsed
 
 
-class LlamaCppProvider:
-    """Calls llama.cpp's localhost OpenAI-compatible chat endpoint."""
+def _usage(document: dict[str, object]) -> tuple[int | None, int | None]:
+    usage = document.get("usage")
+    if not isinstance(usage, dict):
+        return None, None
+    prompt_tokens = usage.get("input_tokens")
+    completion_tokens = usage.get("output_tokens")
+    return (
+        prompt_tokens if isinstance(prompt_tokens, int) else None,
+        completion_tokens if isinstance(completion_tokens, int) else None,
+    )
+
+
+def _response_text(document: dict[str, object]) -> str:
+    direct_text = document.get("output_text")
+    if isinstance(direct_text, str) and direct_text.strip():
+        return direct_text
+
+    parts: list[str] = []
+    output = document.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "output_text":
+                    continue
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+    text = "".join(parts)
+    if not text.strip():
+        raise ProviderError("The Responses API returned no student-facing text.")
+    return text
+
+
+def parse_response(document: dict[str, object]) -> CompletionResult:
+    """Validate and normalize the subset of the Responses schema Sensei uses."""
+
+    status = document.get("status")
+    if status != "completed":
+        error = document.get("error")
+        message = error.get("message") if isinstance(error, dict) else None
+        incomplete = document.get("incomplete_details")
+        reason = incomplete.get("reason") if isinstance(incomplete, dict) else None
+        detail = message or reason or status or "unknown status"
+        raise ProviderError(f"The Responses API did not complete normally ({detail}).")
+    prompt_tokens, completion_tokens = _usage(document)
+    return CompletionResult(
+        _response_text(document),
+        "completed",
+        prompt_tokens,
+        completion_tokens,
+    )
+
+
+class ResponsesAPIProvider:
+    """Calls a hosted, OpenAI-compatible Responses API."""
 
     def __init__(
         self,
-        base_url: str,
+        api_key: str,
         model: str,
         *,
-        timeout_seconds: int = 600,
+        base_url: str = DEFAULT_API_BASE_URL,
+        timeout_seconds: int = 120,
         max_retries: int = 2,
-        temperature: float = 0.2,
-        max_tokens: int = 768,
-        seed: int = 42,
+        max_output_tokens: int = 1_536,
         json_mode: bool = False,
     ) -> None:
-        self.endpoint = f"{base_url.rstrip('/')}/v1/chat/completions"
+        if not api_key.strip():
+            raise ValueError("A hosted LLM API key is required.")
+        if max_retries < 0:
+            raise ValueError("max_retries cannot be negative.")
+        self.endpoint = f"{base_url.rstrip('/')}/responses"
+        self.api_key = api_key.strip()
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.seed = seed
+        self.max_output_tokens = max_output_tokens
         self.json_mode = json_mode
-        if max_retries < 0:
-            raise ValueError("max_retries cannot be negative.")
 
     def _payload(self, messages: Sequence[Message], stream: bool) -> bytes:
         payload: dict[str, object] = {
             "model": self.model,
-            "messages": list(messages),
-            "temperature": self.temperature,
-            "top_p": 0.9,
-            "seed": self.seed,
-            "max_tokens": self.max_tokens,
+            "input": list(messages),
+            "max_output_tokens": self.max_output_tokens,
+            "store": False,
             "stream": stream,
         }
-        if stream:
-            payload["stream_options"] = {"include_usage": True}
         if self.json_mode:
-            payload["response_format"] = {"type": "json_object"}
+            payload["text"] = {"format": {"type": "json_object"}}
         return json.dumps(payload).encode("utf-8")
+
+    def _request(
+        self,
+        messages: Sequence[Message],
+        stream: bool,
+    ) -> urllib.request.Request:
+        return urllib.request.Request(
+            self.endpoint,
+            data=self._payload(messages, stream),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
 
     def complete(
         self,
@@ -141,34 +224,30 @@ class LlamaCppProvider:
     ) -> CompletionResult:
         if not messages:
             raise ValueError("At least one chat message is required.")
-        request = urllib.request.Request(
-            self.endpoint,
-            data=self._payload(messages, stream=on_token is not None),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
 
         for attempt in range(self.max_retries + 1):
+            request = self._request(messages, stream=on_token is not None)
             try:
                 with urllib.request.urlopen(
-                    request, timeout=self.timeout_seconds
+                    request,
+                    timeout=self.timeout_seconds,
                 ) as response:
-                    if on_token is None:
-                        document = json.loads(response.read().decode("utf-8"))
-                        if not isinstance(document, dict):
-                            raise ProviderError("Completion response is not an object.")
-                        return parse_completion(document)
-                    return self._read_stream(response, on_token)
+                    if on_token is not None:
+                        return self._read_stream(response, on_token)
+                    document = json.loads(response.read().decode("utf-8"))
+                    if not isinstance(document, dict):
+                        raise ProviderError("The Responses API returned a non-object.")
+                    return parse_response(document)
             except urllib.error.HTTPError as error:
-                retryable = error.code >= 500
+                retryable = error.code in {408, 409, 429} or error.code >= 500
                 detail = error.read().decode("utf-8", errors="replace")[:500]
                 provider_error = ProviderError(
-                    f"llama.cpp returned HTTP {error.code}: {detail}"
+                    f"The hosted LLM API returned HTTP {error.code}: {detail}"
                 )
                 if not retryable or attempt == self.max_retries:
                     raise provider_error from error
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
-                provider_error = ProviderError(f"Local model request failed: {error}")
+                provider_error = ProviderError(f"Hosted LLM request failed: {error}")
                 if attempt == self.max_retries:
                     raise provider_error from error
             except ProviderError:
@@ -183,37 +262,39 @@ class LlamaCppProvider:
         on_token: TokenCallback,
     ) -> CompletionResult:
         parts: list[str] = []
-        finish_reason: str | None = None
         prompt_tokens: int | None = None
         completion_tokens: int | None = None
-        emitted_text = False
+        completed = False
 
         try:
             for raw_line in response:  # type: ignore[union-attr]
                 event = parse_sse_data(raw_line)
                 if event is None:
                     continue
-                choices = event.get("choices")
-                if isinstance(choices, list) and choices:
-                    choice = choices[0]
-                    if not isinstance(choice, dict):
-                        raise ProviderError("Streaming choice is not an object.")
-                    delta = choice.get("delta")
-                    if isinstance(delta, dict):
-                        token = delta.get("content")
-                        if isinstance(token, str) and token:
-                            parts.append(token)
-                            emitted_text = True
-                            on_token(token)
-                    reason = choice.get("finish_reason")
-                    if isinstance(reason, str):
-                        finish_reason = reason
-                usage = event.get("usage")
-                if isinstance(usage, dict):
-                    if isinstance(usage.get("prompt_tokens"), int):
-                        prompt_tokens = usage["prompt_tokens"]
-                    if isinstance(usage.get("completion_tokens"), int):
-                        completion_tokens = usage["completion_tokens"]
+                event_type = event.get("type")
+                if event_type == "response.output_text.delta":
+                    delta = event.get("delta")
+                    if isinstance(delta, str) and delta:
+                        parts.append(delta)
+                        on_token(delta)
+                elif event_type == "response.completed":
+                    final_response = event.get("response")
+                    if isinstance(final_response, dict):
+                        prompt_tokens, completion_tokens = _usage(final_response)
+                        completed = final_response.get("status") == "completed"
+                    else:
+                        completed = True
+                elif event_type in {
+                    "response.failed",
+                    "response.incomplete",
+                    "error",
+                }:
+                    error = event.get("error")
+                    message = error.get("message") if isinstance(error, dict) else None
+                    raise ProviderError(
+                        f"The streaming Responses API request failed: "
+                        f"{message or event_type}."
+                    )
         except ProviderError:
             raise
         except (OSError, UnicodeDecodeError) as error:
@@ -222,15 +303,13 @@ class LlamaCppProvider:
             ) from error
 
         text = "".join(parts)
-        if not emitted_text or not text.strip():
+        if not text.strip():
             raise ProviderError("The streaming response contained no student-facing text.")
-        if finish_reason != "stop":
-            raise ProviderError(
-                f"The streaming response did not finish normally ({finish_reason!r})."
-            )
+        if not completed:
+            raise ProviderError("The streaming response did not complete normally.")
         return CompletionResult(
             text=text,
-            finish_reason=finish_reason,
+            finish_reason="completed",
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )

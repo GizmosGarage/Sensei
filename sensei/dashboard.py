@@ -1,4 +1,4 @@
-"""Loopback-only browser dashboard for Sensei's local learning memory."""
+"""Loopback-only browser dashboard with local learning memory and hosted inference."""
 
 from __future__ import annotations
 
@@ -22,22 +22,19 @@ from urllib.parse import urlsplit
 from sensei.errorlog import DEFAULT_ERROR_LOG_PATH, ErrorRecorder, error_reference
 from sensei.generation import GENERATED_SKILL_IDS, GeneratedQuestFactory
 from sensei.learning import LearningEvent, Outcome
-from sensei.models import (
-    DEFAULT_MODEL_ID,
-    DEFAULT_MODELS_DIRECTORY,
-    FAST_MODEL_ID,
-    ModelCatalog,
-    model_path,
-)
 from sensei.practice import (
     AdaptiveQuest,
     AdaptiveQuestFactory,
     PracticeGenerationError,
     adaptive_quest_fingerprint,
 )
-from sensei.providers import LlamaCppProvider
+from sensei.providers import (
+    DEFAULT_API_BASE_URL,
+    DEFAULT_API_MODEL,
+    ResponsesAPIProvider,
+    api_settings_from_environment,
+)
 from sensei.quests import DEFAULT_QUESTS_PATH, QuestDeck, QuestTemplate
-from sensei.runtime import DEFAULT_RUNTIME_DIRECTORY, LocalLlamaRuntime, RuntimeSettings
 from sensei.storage import DEFAULT_DATABASE_PATH, DEFAULT_SKILLS_PATH, LearningStore, utc_now
 from sensei.verification import (
     CalculusVerifier,
@@ -182,8 +179,8 @@ class ChallengeStore:
     ) -> tuple[str, AdaptiveQuest]:
         if self.adaptive_factory is None:
             raise RuntimeError(
-                "Adaptive generation is unavailable. Restart the dashboard with its "
-                "local model enabled."
+                "Adaptive generation is unavailable. Restart the dashboard with a "
+                "valid hosted LLM API connection."
             )
         skill_id = str(skill["id"])
         for _ in range(ADAPTIVE_DISTINCT_ATTEMPTS):
@@ -291,7 +288,7 @@ class DashboardService:
                 "runtime": {
                     "host": LOOPBACK_HOST,
                     "storage": "Local SQLite",
-                    "model_access": "Local dashboard process",
+                    "model_access": "Hosted Responses API",
                     "practice_api_version": 4,
                 },
             }
@@ -838,38 +835,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Start the dashboard without opening a browser.",
     )
-    model_group = parser.add_mutually_exclusive_group()
-    model_group.add_argument("--model-id", help="Pinned local model ID.")
-    model_group.add_argument(
-        "--fast",
-        action="store_true",
-        help=f"Use the lighter adaptive model ({FAST_MODEL_ID}).",
+    parser.add_argument(
+        "--model",
+        help=(
+            f"Hosted model name (default: {DEFAULT_API_MODEL}, or "
+            "SENSEI_LLM_MODEL)."
+        ),
     )
     parser.add_argument(
-        "--manifest",
-        type=Path,
-        help="Override the pinned model manifest path.",
-    )
-    parser.add_argument(
-        "--models-dir",
-        type=Path,
-        default=DEFAULT_MODELS_DIRECTORY,
-        help="Directory containing local GGUF weights.",
-    )
-    parser.add_argument(
-        "--runtime-dir",
-        type=Path,
-        default=DEFAULT_RUNTIME_DIRECTORY,
-        help="Directory containing llama-server.exe.",
-    )
-    parser.add_argument(
-        "--server-url",
-        help="Use an already-running llama.cpp server.",
-    )
-    parser.add_argument(
-        "--no-model",
-        action="store_true",
-        help="Run only the legacy deterministic practice generators.",
+        "--api-base-url",
+        help=(
+            f"Responses-compatible API root (default: {DEFAULT_API_BASE_URL}, "
+            "or SENSEI_LLM_BASE_URL)."
+        ),
     )
     parser.add_argument(
         "--error-log",
@@ -883,43 +861,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _adaptive_factory(
     args: argparse.Namespace,
     stack: ExitStack,
-) -> AdaptiveQuestFactory | None:
-    if args.no_model:
-        return None
-    catalog = (
-        ModelCatalog.load(args.manifest.resolve())
-        if args.manifest
-        else ModelCatalog.load()
+) -> AdaptiveQuestFactory:
+    del stack
+    settings = api_settings_from_environment(
+        model=args.model,
+        base_url=args.api_base_url,
     )
-    selected_id = FAST_MODEL_ID if args.fast else args.model_id or DEFAULT_MODEL_ID
-    candidate = catalog.get(selected_id)
-    selected_path = model_path(candidate, args.models_dir)
-    if args.server_url:
-        base_url = args.server_url
-    else:
-        if not selected_path.is_file():
-            raise FileNotFoundError(
-                f"Model is missing: {selected_path}. Run scripts/download_models.py "
-                f"--model {selected_id}."
-            )
-        print(
-            f"Starting local practice architect {selected_id}; loading may take a moment...",
-            file=sys.stderr,
-        )
-        runtime = LocalLlamaRuntime(
-            RuntimeSettings(
-                executable=args.runtime_dir.resolve() / "llama-server.exe",
-                model_path=selected_path,
-                model_alias=selected_id,
-            )
-        )
-        base_url = stack.enter_context(runtime).base_url
     return AdaptiveQuestFactory(
-        LlamaCppProvider(
-            base_url,
-            selected_id,
-            seed=-1,
-            max_tokens=1_536,
+        ResponsesAPIProvider(
+            settings.api_key,
+            settings.model,
+            base_url=settings.base_url,
+            max_output_tokens=1_536,
             json_mode=True,
         )
     )
@@ -966,7 +919,7 @@ def main(argv: list[str] | None = None) -> int:
         host, port = server.server_address
         url = f"http://{host}:{port}/"
         print(f"Sensei dashboard: {url}")
-        print("Learning data and model inference stay on this machine.")
+        print("Learning data stays in local SQLite; tutoring uses the configured API.")
         print(f"Structured error log: {error_recorder.path}")
         if not args.no_open:
             webbrowser.open(url)

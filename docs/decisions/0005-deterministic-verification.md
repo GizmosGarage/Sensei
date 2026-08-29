@@ -5,7 +5,7 @@
 
 ## Context
 
-Sensei previously derived correctness from a student report or a local model classification. That is useful learning evidence but not a reliable mathematical oracle. Incorrect classifications could award mastery, while a growing prompt or a larger model would not create a dependable correctness boundary.
+Sensei previously derived correctness from a student report or an LLM classification. That is useful learning evidence but not a reliable mathematical oracle. Incorrect classifications could award mastery, while a growing prompt or a larger model would not create a dependable correctness boundary.
 
 The project needs an offline, reproducible check for common Calculus I answers. It must not execute user input, must preserve disagreements for later inspection, and must degrade safely when symbolic mathematics is undecidable or unsupported in practice.
 
@@ -22,7 +22,7 @@ Attach the latest check to the active problem. On `/done`, a conclusive verifica
 ## Consequences
 
 - Mathematical correctness for supported problems no longer depends on model prose.
-- The local model can use an authoritative result to explain a specific error.
+- The configured LLM can use an authoritative result to explain a specific error.
 - XP, mastery, and review decisions are auditable through stored provenance.
 - Existing learning databases require an automatic forward-only migration and backfill.
 - A restricted grammar rejects some valid notation and must be expanded deliberately with tests.

@@ -162,7 +162,7 @@ def parse_learning_event(
 
 
 class LearningEventExtractor:
-    """Asks the local model for one validated, retryable learning record."""
+    """Asks the configured LLM for one validated, retryable learning record."""
 
     def __init__(
         self,
@@ -260,6 +260,6 @@ Create the learning record now."""
                 validation_error = str(error)
 
         raise LearningEventError(
-            f"The local model did not return a valid learning record after "
+            f"The configured LLM did not return a valid learning record after "
             f"{self.validation_attempts} attempts: {validation_error}"
         )

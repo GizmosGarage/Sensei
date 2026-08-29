@@ -521,7 +521,7 @@ def parse_adaptive_quest(
 
 
 class AdaptiveQuestFactory:
-    """Uses a local model to draft and independently review one focused quest."""
+    """Uses the configured LLM to draft and independently review one focused quest."""
 
     def __init__(
         self,
@@ -727,7 +727,7 @@ class AdaptiveQuestFactory:
     ) -> AdaptiveQuest:
         repair = ""
         prior_draft: dict[str, object] | None = None
-        last_error = "The local model did not return a usable quest."
+        last_error = "The configured LLM did not return a usable quest."
         avoided = {
             fingerprint
             for prompt in avoid_prompts

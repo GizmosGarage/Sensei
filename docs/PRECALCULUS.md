@@ -46,4 +46,4 @@ Checking is intentionally separate from recording. A checked result uses a short
 
 Version 0.6.0 provides a dedicated procedural generator for every subject. Each generator changes coefficients, exponents, intervals, angles, functions, or transformation values only within that subject's explicit rules. The production symbolic verifier checks the generated reference answer before the server issues the question.
 
-The hidden target remains in process memory behind a random challenge token and is not returned in the public question document. Immediate duplicate prompts for the same subject are rejected and regenerated. Future milestones can add local-model coaching without changing the course or memory identity.
+The hidden target remains in process memory behind a random challenge token and is not returned in the public question document. Immediate duplicate prompts for the same subject are rejected and regenerated. API-backed coaching does not change the course or memory identity.

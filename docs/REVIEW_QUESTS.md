@@ -1,6 +1,6 @@
 # Curated and generated review quests
 
-Review quests turn Sensei's spaced-review recommendation into a concrete problem with a deterministic answer target. In the terminal, the local model can coach around a curated catalog problem without deciding correctness. In the dashboard, a subject-specific generator creates a fresh, prevalidated challenge before each attempt.
+Review quests turn Sensei's spaced-review recommendation into a concrete problem with a deterministic answer target. In the terminal, the configured LLM can coach around a curated catalog problem without deciding correctness. In the dashboard, a subject-specific generator creates a fresh, prevalidated challenge before each attempt.
 
 ## Play loops
 

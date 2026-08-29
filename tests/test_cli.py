@@ -24,9 +24,17 @@ from sensei.verification import CalculusVerifier, VerificationStatus
 
 
 class CliTests(unittest.TestCase):
-    def test_fast_and_model_id_are_mutually_exclusive(self) -> None:
-        with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
-            parse_args(["--fast", "--model-id", "another-model"])
+    def test_hosted_model_and_api_url_parse(self) -> None:
+        args = parse_args(
+            [
+                "--model",
+                "example-model",
+                "--api-base-url",
+                "https://example.test/v1",
+            ]
+        )
+        self.assertEqual("example-model", args.model)
+        self.assertEqual("https://example.test/v1", args.api_base_url)
 
     def test_one_shot_mode_parses(self) -> None:
         args = parse_args(["--prompt", "Differentiate x^2", "--mode", "hint"])
@@ -37,15 +45,8 @@ class CliTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             error_log = Path(directory) / "errors.jsonl"
             stderr = StringIO()
-            with redirect_stderr(stderr):
-                status = main(
-                    [
-                        "--models-dir",
-                        directory,
-                        "--error-log",
-                        str(error_log),
-                    ]
-                )
+            with redirect_stderr(stderr), patch.dict("os.environ", {}, clear=True):
+                status = main(["--error-log", str(error_log)])
 
             self.assertEqual(1, status)
             record = json.loads(error_log.read_text(encoding="utf-8"))

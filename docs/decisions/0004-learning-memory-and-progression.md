@@ -13,7 +13,7 @@ Learning records are personal data. Storage, export, backup, deletion, and infer
 
 Use the Python standard library's SQLite interface with versioned migrations and an application-owned schema. Store structured attempts, consolidated misconceptions, mastery aggregates, review dates, and immutable additive XP events in separate tables.
 
-Create durable evidence only after the student invokes `/done`. Ask the local model for an exact five-field learning event, validate it deterministically, and retry once before failing without a write. Record whether the outcome came from the student or model.
+Create durable evidence only after the student invokes `/done`. Ask the configured LLM for an exact five-field learning event, validate it deterministically, and retry once before failing without a write. Record whether the outcome came from the student or model.
 
 Update one attempt, misconception, mastery aggregate, and XP event atomically. Keep XP additive and independent from mastery. Reduce uncertain mastery movement using extraction confidence and require repeated correct attempts for higher labels.
 

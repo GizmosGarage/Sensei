@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="A local, learner-directed RPG practice tutor for math, chemistry, and beyond.">
+    <meta name="description" content="An API-backed, learner-directed RPG practice tutor with local learning memory.">
     <title>Sensei // Adaptive Dojo</title>
     <link rel="stylesheet" href="/assets/styles.css">
     <script src="/assets/app.js" defer></script>
@@ -21,7 +21,7 @@
         <button class="nav-tab" id="past-quest-tab" type="button" role="tab" aria-selected="false" aria-controls="past-quest-view" data-view="past-quest" tabindex="-1">Past Quest</button>
       </nav>
       <div class="topbar-actions">
-        <span class="local-badge"><i aria-hidden="true"></i> Local model</span>
+        <span class="connection-badge"><i aria-hidden="true"></i> LLM API</span>
         <button class="icon-button" id="refresh-button" type="button">Sync</button>
       </div>
     </header>
@@ -165,8 +165,8 @@
     </main>
 
     <footer>
-      <p><span class="footer-mark">S</span> Sensei runs on your machine.</p>
-      <p>Local model <span aria-hidden="true">•</span> Local SQLite <span aria-hidden="true">•</span> Learner-owned path</p>
+      <p><span class="footer-mark">S</span> Sensei keeps your learning memory on this machine.</p>
+      <p>Hosted LLM API <span aria-hidden="true">•</span> Local SQLite <span aria-hidden="true">•</span> Learner-owned path</p>
     </footer>
 
     <template id="skill-template">

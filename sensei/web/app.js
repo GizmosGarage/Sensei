@@ -644,7 +644,7 @@ function render(state) {
   byId("practiced").textContent = state.study_topics.length;
   renderTopics(state.study_topics);
   renderHistory(state.recent_attempts);
-  const modelState = state.runtime.adaptive_generation === "ready" ? "Local practice architect ready" : "Adaptive model unavailable";
+  const modelState = state.runtime.adaptive_generation === "ready" ? "LLM API ready" : "LLM API unavailable";
   byId("updated-at").textContent = `${modelState} · synced ${new Date(state.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
   void flushPendingClientProblems();
 }

@@ -13,7 +13,7 @@ Nothing becomes a learning attempt automatically. Finish an active problem expli
 /done incorrect
 ```
 
-Without an argument, the local model classifies the observable student work. With an argument, the student supplies the reported outcome. The database records that report and its `model` or `student` source.
+Without an argument, the configured LLM classifies the observable student work. With an argument, the student supplies the reported outcome. The database records that report and its `model` or `student` source.
 
 In the dashboard, **Check answer** is also non-durable. **Record attempt** is the explicit persistence action after a conclusive verifier result. The server consumes a single-use checked-attempt token so the same result cannot be recorded twice.
 
@@ -72,7 +72,7 @@ The outcome trust order is:
 
 1. A conclusive deterministic check (`verified_correct` or `verified_incorrect`).
 2. An explicit student report supplied to `/done`.
-3. The local model's structured classification.
+3. The configured LLM's structured classification.
 
 This order affects XP, mastery, and scheduling, while provenance keeps disagreements inspectable.
 
