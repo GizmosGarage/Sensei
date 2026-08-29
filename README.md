@@ -43,7 +43,7 @@ Start a scheduled terminal challenge with `/quest`, submit it with `/answer`, an
 python -m sensei.dashboard
 ```
 
-Enter a subject such as **Chemistry**, a focus such as **Stoichiometry**, and any material or emphasis that should shape the encounter. Choose **Forge a practice quest**, answer it, and then claim XP to save the mastery evidence. The topic remains in your growing atlas for later practice and scheduled review. Use `python -m sensei.dashboard --fast` for the lighter local model. See the [dashboard guide](docs/LOCAL_DASHBOARD.md).
+Enter the **Dojo**, name a subject such as **Chemistry** and a focus such as **Stoichiometry**, then add any material or emphasis that should shape the encounter. Choose **Forge a practice quest**, answer it, and claim XP to save the mastery evidence. Your rank and growing atlas live under **Profile**, while completed encounters live under **Past Quest**. Use `python -m sensei.dashboard --fast` for the lighter local model. See the [dashboard guide](docs/LOCAL_DASHBOARD.md).
 
 ## Product principles
 

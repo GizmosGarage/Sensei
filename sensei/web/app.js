@@ -3,6 +3,12 @@
 const byId = (id) => document.getElementById(id);
 const skillTemplate = byId("skill-template");
 const historyTemplate = byId("history-template");
+const viewNames = ["dojo", "profile", "past-quest"];
+const viewTitles = {
+  dojo: "Sensei // Adaptive Dojo",
+  profile: "Profile // Sensei",
+  "past-quest": "Past Quest // Sensei",
+};
 let dashboardState = null;
 let activeQuest = null;
 let attemptToken = null;
@@ -12,6 +18,29 @@ const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const CLIENT_ERROR_STORAGE_KEY = "sensei.pending-client-errors.v1";
 const MAX_PENDING_CLIENT_ERRORS = 25;
 const reportedClientErrors = new WeakSet();
+
+function viewFromHash() {
+  const requestedView = window.location.hash.slice(1);
+  return viewNames.includes(requestedView) ? requestedView : "dojo";
+}
+
+function showView(viewName, { updateHash = true, focus = false } = {}) {
+  const nextView = viewNames.includes(viewName) ? viewName : "dojo";
+  document.querySelectorAll(".app-view").forEach((view) => {
+    view.hidden = view.id !== `${nextView}-view`;
+  });
+  document.querySelectorAll(".nav-tab").forEach((tab) => {
+    const selected = tab.dataset.view === nextView;
+    tab.classList.toggle("active", selected);
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    if (selected && focus) tab.focus();
+  });
+  document.title = viewTitles[nextView];
+  if (updateHash && window.location.hash !== `#${nextView}`) {
+    window.history.replaceState(null, "", `#${nextView}`);
+  }
+}
 
 window.addEventListener("error", (event) => {
   void reportClientProblem(
@@ -258,7 +287,7 @@ function renderHistory(attempts) {
   if (!attempts.length) {
     const empty = document.createElement("p");
     empty.className = "empty-history";
-    empty.textContent = "No encounters yet. Forge your first quest above to begin the adventure log.";
+    empty.textContent = "No encounters yet. Visit the Dojo to forge your first quest.";
     list.append(empty);
     return;
   }
@@ -314,6 +343,7 @@ function renderOptions(quest) {
 
 function openArena(quest) {
   activeQuest = quest;
+  showView("dojo");
   resetArenaFeedback();
   byId("arena-skill").textContent = `${quest.subject} · ${quest.skill_name}`;
   byId("arena-title").textContent = quest.title;
@@ -531,6 +561,21 @@ async function loadDashboard() {
 }
 
 byId("focus-form").addEventListener("submit", createFocus);
+document.querySelectorAll(".nav-tab").forEach((tab, index, tabs) => {
+  tab.addEventListener("click", () => showView(tab.dataset.view));
+  tab.addEventListener("keydown", (event) => {
+    if (!(["ArrowLeft", "ArrowRight"].includes(event.key))) return;
+    event.preventDefault();
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const nextTab = tabs[(index + direction + tabs.length) % tabs.length];
+    showView(nextTab.dataset.view, { focus: true });
+  });
+});
+document.querySelector(".brand").addEventListener("click", (event) => {
+  event.preventDefault();
+  showView("dojo");
+});
+window.addEventListener("hashchange", () => showView(viewFromHash(), { updateHash: false }));
 document.querySelectorAll(".prompt-examples button").forEach((button) => {
   button.addEventListener("click", () => {
     byId("subject-input").value = button.dataset.subject;
@@ -551,5 +596,6 @@ byId("check-answer").addEventListener("click", checkAnswer);
 byId("record-attempt").addEventListener("click", recordAttempt);
 byId("quest-answer").addEventListener("keydown", (event) => { if (event.key === "Enter") checkAnswer(); });
 byId("refresh-button").addEventListener("click", loadDashboard);
+showView(viewFromHash());
 loadDashboard();
 setInterval(() => { if (!document.hidden && !generatingQuestion) loadDashboard(); }, 30000);

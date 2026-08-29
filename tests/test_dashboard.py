@@ -74,7 +74,10 @@ class DashboardTests(unittest.TestCase):
             with urlopen(f"{base_url}/", timeout=5) as response:
                 html = response.read().decode("utf-8")
                 self.assertIn("Sensei // Adaptive Dojo", html)
-                self.assertIn("What do you want to master?", html)
+                self.assertIn("Forge a questline", html)
+                self.assertIn('data-view="profile"', html)
+                self.assertIn('data-view="past-quest"', html)
+                self.assertNotIn("Name the quest.", html)
                 self.assertIn("/assets/app.js", html)
         finally:
             server.shutdown()

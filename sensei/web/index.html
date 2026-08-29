@@ -11,29 +11,88 @@
   <body>
     <div class="ambient-grid" aria-hidden="true"></div>
     <header class="topbar">
-      <a class="brand" href="#top" aria-label="Sensei home">
+      <a class="brand" href="#dojo" aria-label="Enter Sensei's dojo">
         <span class="brand-mark" aria-hidden="true">道</span>
         <span><strong>Sensei</strong><small>Adaptive Dojo</small></span>
       </a>
+      <nav class="primary-nav" aria-label="Sensei sections" role="tablist">
+        <button class="nav-tab active" id="dojo-tab" type="button" role="tab" aria-selected="true" aria-controls="dojo-view" data-view="dojo">Dojo</button>
+        <button class="nav-tab" id="profile-tab" type="button" role="tab" aria-selected="false" aria-controls="profile-view" data-view="profile" tabindex="-1">Profile</button>
+        <button class="nav-tab" id="past-quest-tab" type="button" role="tab" aria-selected="false" aria-controls="past-quest-view" data-view="past-quest" tabindex="-1">Past Quest</button>
+      </nav>
       <div class="topbar-actions">
         <span class="local-badge"><i aria-hidden="true"></i> Local model</span>
-        <button class="icon-button" id="refresh-button" type="button">Sync atlas</button>
+        <button class="icon-button" id="refresh-button" type="button">Sync</button>
       </div>
     </header>
 
     <main id="top">
-      <section class="hero" aria-labelledby="hero-title">
-        <div class="hero-copy">
-          <p class="eyebrow">Your studies. Your adventure.</p>
-          <h1 id="hero-title">Name the quest.<br><em>Build the path.</em></h1>
-          <p class="hero-lede">Tell Sensei what you want to practice. It forges a fresh, checked challenge and grows a mastery map around the subjects you bring.</p>
-          <div class="system-strip" aria-label="System features">
-            <span><b>On demand</b> questlines</span>
-            <span><b>Checked</b> answer keys</span>
-            <span><b>Persistent</b> mastery</span>
+      <section class="app-view dojo-view" id="dojo-view" role="tabpanel" aria-labelledby="dojo-tab" tabindex="0">
+        <section class="forge-section panel" aria-labelledby="forge-heading">
+          <div class="forge-intro">
+            <p class="eyebrow">Sensei's dojo</p>
+            <h1 id="forge-heading">Forge a questline</h1>
+            <div class="sensei-message">
+              <span class="sensei-avatar" aria-hidden="true">道</span>
+              <p><strong>Sensei</strong>What would you like to train today? Name the discipline and I’ll forge your next challenge.</p>
+            </div>
+            <div class="prompt-examples" aria-label="Example study requests">
+              <button type="button" data-subject="Mathematics" data-topic="Quadratic equations">Quadratic equations</button>
+              <button type="button" data-subject="Chemistry" data-topic="Stoichiometry">Stoichiometry</button>
+              <button type="button" data-subject="Chemistry" data-topic="Lewis structures">Lewis structures</button>
+            </div>
           </div>
-        </div>
+          <form class="focus-form" id="focus-form">
+            <div class="field-pair">
+              <label>Subject<input id="subject-input" name="subject" maxlength="80" placeholder="Chemistry" autocomplete="off" required></label>
+              <label>Topic or skill<input id="topic-input" name="topic" maxlength="120" placeholder="Balancing chemical equations" autocomplete="off" required></label>
+            </div>
+            <div class="context-row">
+              <label>Anything Sensei should know <span>optional</span><textarea id="context-input" name="context" maxlength="2000" rows="3" placeholder="Share a learning objective, notes excerpt, formula, or what your test covers."></textarea></label>
+            </div>
+            <div class="form-action-row">
+              <p id="form-status" role="status">Your conversation stays on this machine.</p>
+              <button class="primary-button forge-button" id="forge-button" type="submit">Forge a practice quest</button>
+            </div>
+          </form>
+        </section>
 
+        <section class="arena-section panel" id="quest-arena" aria-labelledby="arena-title" hidden>
+          <div class="arena-heading">
+            <div><p class="eyebrow" id="arena-skill">Selected discipline</p><h2 id="arena-title">Quest title</h2></div>
+            <div class="arena-actions">
+              <button class="secondary-button" id="new-question" type="button">New encounter</button>
+              <button class="icon-button" id="close-arena" type="button" aria-label="Close practice quest">Close</button>
+            </div>
+          </div>
+          <p class="generation-status arena-generation-status" id="arena-generation-status" role="status"></p>
+          <p class="arena-prompt" id="arena-prompt"></p>
+          <figure class="quest-graph" id="arena-graph" hidden>
+            <svg id="arena-graph-svg" viewBox="0 0 720 400" role="img" aria-labelledby="arena-graph-description"></svg>
+            <figcaption class="visually-hidden" id="arena-graph-description"></figcaption>
+          </figure>
+          <div class="option-grid" id="option-grid"></div>
+          <label class="answer-label" for="quest-answer">Your answer</label>
+          <div class="answer-row">
+            <input id="quest-answer" type="text" maxlength="500" autocomplete="off" spellcheck="false" placeholder="Enter your answer">
+            <button class="primary-button" id="check-answer" type="button">Check answer</button>
+          </div>
+          <div class="coach-row">
+            <button class="hint-button" id="show-hint" type="button">Ask Sensei for a hint</button>
+            <p class="notation-help" id="notation-help">For math, use <code>^</code> for powers, <code>pi</code> for π, and <code>DNE</code> when a requested value does not exist.</p>
+          </div>
+          <p class="hint-copy" id="hint-copy" hidden></p>
+          <div class="answer-feedback" id="answer-feedback" role="status" hidden>
+            <p class="feedback-status" id="feedback-status"></p>
+            <p id="feedback-detail"></p>
+            <p class="feedback-expected" id="feedback-expected"></p>
+            <div class="solution-copy" id="solution-copy" hidden><strong>Sensei’s walkthrough</strong><p id="solution-text"></p></div>
+            <button class="secondary-button" id="record-attempt" type="button" hidden>Claim XP and record mastery</button>
+          </div>
+        </section>
+      </section>
+
+      <section class="app-view profile-view" id="profile-view" role="tabpanel" aria-labelledby="profile-tab" tabindex="0" hidden>
         <article class="rank-card panel" aria-labelledby="rank-heading">
           <div class="rank-ring" id="rank-ring">
             <div><span>LVL</span><strong id="level">1</strong></div>
@@ -50,80 +109,20 @@
             </dl>
           </div>
         </article>
+
+        <section class="mastery-section" aria-labelledby="mastery-heading">
+          <div class="section-heading">
+            <div><p class="eyebrow">Your growing atlas</p><h2 id="mastery-heading">Practiced realms</h2></div>
+            <p class="atlas-summary" id="atlas-summary">No fixed curriculum. Add only what matters to you.</p>
+          </div>
+          <div class="skill-grid" id="skill-grid" aria-live="polite"></div>
+          <div class="empty-atlas panel" id="empty-atlas">
+            <span aria-hidden="true">＋</span><p>Your first topic will appear here with its own mastery score, review schedule, and quest history.</p>
+          </div>
+        </section>
       </section>
 
-      <section class="forge-section panel" aria-labelledby="forge-heading">
-        <div class="forge-intro">
-          <p class="eyebrow">Forge a questline</p>
-          <h2 id="forge-heading">What do you want to master?</h2>
-          <p>No enrollment and no fixed syllabus. A topic becomes part of your atlas the moment you train it.</p>
-          <div class="prompt-examples" aria-label="Example study requests">
-            <button type="button" data-subject="Mathematics" data-topic="Quadratic equations">Quadratic equations</button>
-            <button type="button" data-subject="Chemistry" data-topic="Stoichiometry">Stoichiometry</button>
-            <button type="button" data-subject="Chemistry" data-topic="Lewis structures">Lewis structures</button>
-          </div>
-        </div>
-        <form class="focus-form" id="focus-form">
-          <div class="field-pair">
-            <label>Subject<input id="subject-input" name="subject" maxlength="80" placeholder="Chemistry" autocomplete="off" required></label>
-            <label>Topic or skill<input id="topic-input" name="topic" maxlength="120" placeholder="Balancing chemical equations" autocomplete="off" required></label>
-          </div>
-          <div class="context-row">
-            <label>Material or emphasis <span>optional</span><textarea id="context-input" name="context" maxlength="2000" rows="3" placeholder="Paste a learning objective, formula sheet excerpt, or tell Sensei what the test covers."></textarea></label>
-          </div>
-          <div class="form-action-row">
-            <p id="form-status" role="status">Your material stays on this machine.</p>
-            <button class="primary-button forge-button" id="forge-button" type="submit">Forge a practice quest</button>
-          </div>
-        </form>
-      </section>
-
-      <section class="arena-section panel" id="quest-arena" aria-labelledby="arena-title" hidden>
-        <div class="arena-heading">
-          <div><p class="eyebrow" id="arena-skill">Selected discipline</p><h2 id="arena-title">Quest title</h2></div>
-          <div class="arena-actions">
-            <button class="secondary-button" id="new-question" type="button">New encounter</button>
-            <button class="icon-button" id="close-arena" type="button" aria-label="Close practice quest">Close</button>
-          </div>
-        </div>
-        <p class="generation-status arena-generation-status" id="arena-generation-status" role="status"></p>
-        <p class="arena-prompt" id="arena-prompt"></p>
-        <figure class="quest-graph" id="arena-graph" hidden>
-          <svg id="arena-graph-svg" viewBox="0 0 720 400" role="img" aria-labelledby="arena-graph-description"></svg>
-          <figcaption class="visually-hidden" id="arena-graph-description"></figcaption>
-        </figure>
-        <div class="option-grid" id="option-grid"></div>
-        <label class="answer-label" for="quest-answer">Your answer</label>
-        <div class="answer-row">
-          <input id="quest-answer" type="text" maxlength="500" autocomplete="off" spellcheck="false" placeholder="Enter your answer">
-          <button class="primary-button" id="check-answer" type="button">Check answer</button>
-        </div>
-        <div class="coach-row">
-          <button class="hint-button" id="show-hint" type="button">Ask Sensei for a hint</button>
-          <p class="notation-help" id="notation-help">For math, use <code>^</code> for powers, <code>pi</code> for π, and <code>DNE</code> when a requested value does not exist.</p>
-        </div>
-        <p class="hint-copy" id="hint-copy" hidden></p>
-        <div class="answer-feedback" id="answer-feedback" role="status" hidden>
-          <p class="feedback-status" id="feedback-status"></p>
-          <p id="feedback-detail"></p>
-          <p class="feedback-expected" id="feedback-expected"></p>
-          <div class="solution-copy" id="solution-copy" hidden><strong>Sensei’s walkthrough</strong><p id="solution-text"></p></div>
-          <button class="secondary-button" id="record-attempt" type="button" hidden>Claim XP and record mastery</button>
-        </div>
-      </section>
-
-      <section class="mastery-section" aria-labelledby="mastery-heading">
-        <div class="section-heading">
-          <div><p class="eyebrow">Your growing atlas</p><h2 id="mastery-heading">Practiced realms</h2></div>
-          <p class="atlas-summary" id="atlas-summary">No fixed curriculum. Add only what matters to you.</p>
-        </div>
-        <div class="skill-grid" id="skill-grid" aria-live="polite"></div>
-        <div class="empty-atlas panel" id="empty-atlas">
-          <span aria-hidden="true">＋</span><p>Your first topic will appear here with its own mastery score, review schedule, and quest history.</p>
-        </div>
-      </section>
-
-      <section class="history-section" aria-labelledby="history-heading">
+      <section class="app-view past-quest-view history-section" id="past-quest-view" role="tabpanel" aria-labelledby="past-quest-tab" tabindex="0" hidden>
         <div class="section-heading compact">
           <div><p class="eyebrow">Adventure log</p><h2 id="history-heading">Recent encounters</h2></div>
           <p class="updated-at" id="updated-at" role="status">Connecting to local memory...</p>

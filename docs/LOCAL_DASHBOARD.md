@@ -2,6 +2,8 @@
 
 The dashboard is Sensei's local practice, tutoring, and progression interface. Instead of enrolling the learner in a fixed course, it asks what they want to practice and grows a personal mastery atlas from those requests.
 
+The interface opens in the **Dojo**, a focused conversational surface for forging a questline. **Profile** holds the learner's current rank and growing atlas, and **Past Quest** holds the adventure log of recent encounters.
+
 ## Start the dashboard
 
 From the repository root:
@@ -25,7 +27,7 @@ IDs and are recorded locally; see the [local error log](ERROR_LOG.md).
 5. Ask for the stored hint if needed, check the response, and study the walkthrough.
 6. Claim XP to record mastery and place the topic into spaced review.
 
-The topic remains in the learner's atlas. Later encounters can start from its card, and **New encounter** creates another checked problem without fragmenting its history.
+The topic remains in the learner's atlas under **Profile**. Later encounters can start from its card, and **New encounter** creates another checked problem without fragmenting its history. Completed encounters appear under **Past Quest**.
 
 ## Validation boundary
 
