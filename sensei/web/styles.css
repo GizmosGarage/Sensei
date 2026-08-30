@@ -804,27 +804,6 @@ button:disabled {
   line-height: 1.45;
 }
 
-.completed-exchange {
-  padding: 3px 0 10px;
-  border-bottom: 1px solid rgba(216, 224, 216, 0.06);
-}
-
-.archived-message {
-  margin-block: 12px;
-  opacity: 0.76;
-}
-
-.archived-message .chat-bubble {
-  padding: 11px 14px;
-}
-
-.archived-message .chat-bubble > p:last-child {
-  margin: 0;
-  color: #aeb7b0;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 .visually-hidden {
   position: absolute;
   width: 1px;

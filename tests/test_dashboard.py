@@ -112,6 +112,11 @@ class DashboardTests(unittest.TestCase):
             with urlopen(f"{base_url}/assets/app.js", timeout=5) as response:
                 javascript = response.read().decode("utf-8")
                 self.assertIn("It cannot be recovered once deleted.", javascript)
+                self.assertIn(
+                    'function openArena(quest) {\n  byId("chat-history").replaceChildren();',
+                    javascript,
+                )
+                self.assertNotIn("function archiveActiveTurn()", javascript)
         finally:
             server.shutdown()
             server.server_close()

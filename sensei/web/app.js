@@ -637,51 +637,6 @@ function beginPracticeSession(topic) {
   byId("session-context").textContent = topic.description || "No extra instructions provided.";
 }
 
-function archivedChatMessage(kind, role, copy) {
-  const message = document.createElement("article");
-  message.className = `chat-message ${kind === "sensei" ? "sensei-chat-message" : "learner-message"} archived-message`;
-  const avatar = document.createElement("span");
-  avatar.className = `chat-avatar${kind === "sensei" ? " sensei-chat-avatar" : ""}`;
-  avatar.setAttribute("aria-hidden", "true");
-  avatar.textContent = kind === "sensei" ? "道" : "You";
-  const bubble = document.createElement("div");
-  bubble.className = "chat-bubble";
-  const label = document.createElement("p");
-  label.className = "chat-role";
-  label.textContent = role;
-  const content = document.createElement("p");
-  content.textContent = copy;
-  bubble.append(label, content);
-  message.append(avatar, bubble);
-  return message;
-}
-
-function archiveActiveTurn() {
-  if (!activeQuest) return;
-  const history = byId("chat-history");
-  const exchange = document.createElement("div");
-  exchange.className = "completed-exchange";
-  exchange.append(archivedChatMessage(
-    "sensei",
-    `Sensei · ${activeQuest.title}`,
-    activeQuest.prompt,
-  ));
-  if (activeAnswer) {
-    exchange.append(archivedChatMessage("learner", "Your answer", activeAnswer));
-    if (activeFeedback) {
-      const saved = attemptRecorded ? " Saved to your Atlas." : "";
-      exchange.append(archivedChatMessage(
-        "sensei",
-        "Sensei",
-        `${activeFeedback.correct ? "Correct." : "Not quite."}${saved}`,
-      ));
-    }
-  } else {
-    exchange.append(archivedChatMessage("learner", "You", "Skipped this problem."));
-  }
-  history.append(exchange);
-}
-
 function resetArenaFeedback() {
   attemptToken = null;
   activeAnswer = "";
@@ -727,7 +682,7 @@ function renderOptions(quest) {
 }
 
 function openArena(quest) {
-  archiveActiveTurn();
+  byId("chat-history").replaceChildren();
   activeQuest = quest;
   showView("dojo");
   resetArenaFeedback();
