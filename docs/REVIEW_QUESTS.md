@@ -15,7 +15,7 @@ Terminal:
 
 `/quest` replaces any active problem with the selected challenge and asks Sensei for one coaching step. `/answer` may be repeated after revisions. A verified-correct answer does not write learning memory automatically; `/done` remains the explicit durable-record boundary.
 
-The learner-directed dashboard loop is **Start practice chat** or **Train this topic** → **Send answer** → **Save progress to Atlas** → **Next problem**. **Skip to next problem** replaces an unanswered encounter inside the active subject/topic brief. Saving progress remains the explicit durable-record boundary.
+The learner-directed dashboard loop is **Start practice chat** or **Train this topic** → optionally **Ask Sensei for help** one step at a time → **Send answer** → **Save progress to Atlas** → **Next problem**. Each help step lowers the pending reward, and the final-answer step reduces XP and mastery evidence to zero. **Skip to next problem** replaces an unanswered encounter inside the active subject/topic brief. Saving progress remains the explicit durable-record boundary.
 
 ## Selection and rotation
 

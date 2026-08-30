@@ -35,7 +35,13 @@ from sensei.providers import (
     api_settings_from_environment,
 )
 from sensei.quests import DEFAULT_QUESTS_PATH, QuestDeck, QuestTemplate
-from sensei.storage import DEFAULT_DATABASE_PATH, DEFAULT_SKILLS_PATH, LearningStore, utc_now
+from sensei.storage import (
+    DEFAULT_DATABASE_PATH,
+    DEFAULT_SKILLS_PATH,
+    LearningStore,
+    help_reward_preview,
+    utc_now,
+)
 from sensei.verification import (
     CalculusVerifier,
     MathInputError,
@@ -93,6 +99,8 @@ def verification_document(result: VerificationResult) -> dict[str, str | None]:
 class PendingAttempt:
     quest: PracticeQuest
     result: VerificationResult
+    hints_used: int
+    solution_revealed: bool
     issued_at: float
 
 
@@ -103,12 +111,25 @@ class PendingAttemptStore:
         self._attempts: dict[str, PendingAttempt] = {}
         self._lock = threading.Lock()
 
-    def issue(self, quest: PracticeQuest, result: VerificationResult) -> str:
+    def issue(
+        self,
+        quest: PracticeQuest,
+        result: VerificationResult,
+        *,
+        hints_used: int = 0,
+        solution_revealed: bool = False,
+    ) -> str:
         token = secrets.token_urlsafe(32)
         now = time.monotonic()
         with self._lock:
             self._prune(now)
-            self._attempts[token] = PendingAttempt(quest, result, now)
+            self._attempts[token] = PendingAttempt(
+                quest,
+                result,
+                hints_used,
+                solution_revealed,
+                now,
+            )
         return token
 
     def consume(self, token: str) -> PendingAttempt:
@@ -144,10 +165,57 @@ class PendingAttemptStore:
             del self._attempts[token]
 
 
+def quest_help_steps(quest: PracticeQuest) -> tuple[str, ...]:
+    """Build the private, ordered help sequence for one generated problem."""
+
+    if isinstance(quest, AdaptiveQuest):
+        steps = quest.help_steps
+        if quest.answer_type == "multiple_choice":
+            index = ord(quest.answer) - ord("A")
+            final = f"Final answer: {quest.answer}. {quest.options[index]}"
+        else:
+            final = f"Final answer: {quest.answer}"
+        return (*steps, final)
+
+    first_moves = {
+        "derivative": (
+            "Identify the outermost operation, then apply its derivative rule before "
+            "simplifying."
+        ),
+        "limit": (
+            "Try direct substitution first. If it is indeterminate, simplify the "
+            "expression before evaluating the limit again."
+        ),
+        "antiderivative": (
+            "Choose the matching antiderivative rule term by term, then include the "
+            "constant of integration."
+        ),
+        "equivalent": (
+            "Rewrite the expression into a common form and simplify one operation at "
+            "a time."
+        ),
+    }
+    first = first_moves.get(
+        quest.kind.value,
+        "Identify the rule that matches the requested operation and apply it first.",
+    )
+    return first, f"Final answer: {quest.sample_answer}"
+
+
 @dataclass(frozen=True)
+class HelpReveal:
+    step: str
+    step_number: int
+    total_steps: int
+    hints_used: int
+    final_answer: bool
+
+
+@dataclass
 class PendingChallenge:
     quest: PracticeQuest
     issued_at: float
+    help_used: int = 0
 
 
 class ChallengeStore:
@@ -244,6 +312,45 @@ class ChallengeStore:
                     "This generated question is missing or expired. Request a new one."
                 ) from error
 
+    def reveal_help(self, token: str) -> HelpReveal:
+        now = time.monotonic()
+        with self._lock:
+            self._prune(now)
+            try:
+                challenge = self._challenges[token]
+            except KeyError as error:
+                raise ValueError(
+                    "This generated question is missing or expired. Request a new one."
+                ) from error
+            steps = quest_help_steps(challenge.quest)
+            if challenge.help_used >= len(steps):
+                raise ValueError("Sensei has already revealed every step for this problem.")
+            challenge.help_used += 1
+            return HelpReveal(
+                step=steps[challenge.help_used - 1],
+                step_number=challenge.help_used,
+                total_steps=len(steps),
+                hints_used=challenge.help_used,
+                final_answer=challenge.help_used == len(steps),
+            )
+
+    def attempt_context(self, token: str) -> tuple[PracticeQuest, int, bool]:
+        """Return server-authoritative help use when the learner checks an answer."""
+
+        now = time.monotonic()
+        with self._lock:
+            self._prune(now)
+            try:
+                challenge = self._challenges[token]
+            except KeyError as error:
+                raise ValueError(
+                    "This generated question is missing or expired. Request a new one."
+                ) from error
+            solution_revealed = challenge.help_used >= len(
+                quest_help_steps(challenge.quest)
+            )
+            return challenge.quest, challenge.help_used, solution_revealed
+
     def discard_skill(self, skill_id: str) -> None:
         """Forget generated questions and duplicate history for one deleted topic."""
 
@@ -317,7 +424,7 @@ class DashboardService:
                     "host": LOOPBACK_HOST,
                     "storage": "Local SQLite",
                     "model_access": "Hosted Responses API",
-                    "practice_api_version": 4,
+                    "practice_api_version": 5,
                 },
             }
 
@@ -419,9 +526,9 @@ class DashboardService:
             evidence=evidence,
             confidence=1.0,
             problem=attempt.quest.prompt,
-            hints_used=0,
-            solution_revealed=False,
-            tutor_turns=1,
+            hints_used=attempt.hints_used,
+            solution_revealed=attempt.solution_revealed,
+            tutor_turns=1 + attempt.hints_used,
             outcome_source="student",
             reported_outcome=outcome,
             effective_outcome_source="verifier",
@@ -791,6 +898,24 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+            if path == "/api/quest/help":
+                document = self._read_json({"challenge_token"})
+                challenge_token = document["challenge_token"]
+                if not isinstance(challenge_token, str) or len(challenge_token) > 200:
+                    raise ValueError("Challenge token must be valid text.")
+                with self.server.topic_state_lock:
+                    reveal = self.server.challenges.reveal_help(challenge_token)
+                self._send_json(
+                    200,
+                    {
+                        **asdict(reveal),
+                        "reward": help_reward_preview(
+                            reveal.hints_used,
+                            solution_revealed=reveal.final_answer,
+                        ),
+                    },
+                )
+                return
             if path == "/api/quest/check":
                 document = self._read_json({"challenge_token", "answer"})
                 challenge_token = document["challenge_token"]
@@ -802,12 +927,19 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 ):
                     raise ValueError("Challenge token and answer must be text.")
                 with self.server.topic_state_lock:
-                    quest = self.server.challenges.get(challenge_token)
+                    quest, hints_used, solution_revealed = (
+                        self.server.challenges.attempt_context(challenge_token)
+                    )
                     result = self.server.service.check_quest(quest, answer)
                     attempt_token = (
                         None
                         if result.status is VerificationStatus.INCONCLUSIVE
-                        else self.server.pending_attempts.issue(quest, result)
+                        else self.server.pending_attempts.issue(
+                            quest,
+                            result,
+                            hints_used=hints_used,
+                            solution_revealed=solution_revealed,
+                        )
                     )
                 self._send_json(
                     200,

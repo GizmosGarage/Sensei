@@ -31,8 +31,12 @@ The dashboard requires API credentials at startup. See [API setup](API_SETUP.md)
 3. The hosted LLM drafts one confined problem.
 4. A separate LLM pass reviews the answer and checks topic fit.
 5. Sensei validates the returned schema and deterministic answer contract.
-6. The protected answer remains process-local until submission.
-7. Recording an attempt atomically updates the SQLite mastery and XP records.
+6. The protected answer and ordered help steps remain process-local.
+7. **Ask Sensei for help** reveals only the next step. Each click reduces the pending
+   correct-answer ceiling by 5 XP and 15 mastery-evidence points.
+8. If the next help step reveals the final answer, both reward ceilings become zero.
+9. Submitting an answer captures the server-counted help use, and recording the attempt
+   atomically updates the SQLite mastery and XP records.
 
 Each topic card has its own **Delete** action. After a permanent-deletion warning,
 Sensei removes that topic's attempts, XP events, mastery, misconceptions, and pending

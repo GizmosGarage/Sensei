@@ -197,6 +197,7 @@ CREATE INDEX idx_atlas_folder_topics_folder
 class ProgressUpdate:
     attempt_id: int
     xp_awarded: int
+    mastery_evidence: float
     total_xp: int
     level: int
     xp_into_level: int
@@ -241,32 +242,58 @@ def mastery_label(score: float, correct_count: int, attempts_count: int) -> str:
 
 
 def evidence_score(event: LearningEvent) -> float:
+    if event.solution_revealed:
+        # Seeing the final answer is useful for learning, but it is not evidence of
+        # mastery on this attempt.
+        return 0.0
     raw_score = {
         Outcome.CORRECT: 100.0,
         Outcome.PARTIAL: 55.0,
         Outcome.INCORRECT: 10.0,
     }[event.outcome]
-    if event.solution_revealed:
-        raw_score = min(raw_score, 45.0)
-    elif event.hints_used:
-        raw_score *= max(0.55, 1 - 0.12 * min(event.hints_used, 4))
+    if event.hints_used:
+        raw_score = max(0.0, raw_score - 15.0 * event.hints_used)
     confidence_adjusted = 50 + (raw_score - 50) * event.confidence
     return round(confidence_adjusted, 2)
 
 
 def xp_award(event: LearningEvent) -> tuple[int, str]:
+    if event.solution_revealed:
+        return 0, "final answer revealed; no experience reward"
+
     points = 5
     reasons = ["practice effort"]
     if event.outcome is Outcome.CORRECT:
-        points += 15
+        points += 20
         reasons.append("correct result")
-        if event.hints_used == 0 and not event.solution_revealed:
-            points += 5
+        if event.hints_used == 0:
             reasons.append("independent solution")
     elif event.outcome is Outcome.PARTIAL:
         points += 7
         reasons.append("partial progress")
+    if event.hints_used:
+        penalty = min(points, 5 * event.hints_used)
+        points -= penalty
+        reasons.append(
+            f"{event.hints_used} Sensei help step{'s' if event.hints_used != 1 else ''} "
+            f"(-{penalty} XP)"
+        )
     return points, ", ".join(reasons)
+
+
+def help_reward_preview(
+    hints_used: int, *, solution_revealed: bool
+) -> dict[str, int | float]:
+    """Return the remaining reward ceiling for a correct dashboard answer."""
+
+    if hints_used < 0:
+        raise ValueError("Help-step count cannot be negative.")
+    if solution_revealed:
+        return {"xp_if_correct": 0, "mastery_evidence_if_correct": 0.0}
+    return {
+        "xp_if_correct": max(0, 25 - 5 * hints_used),
+        "mastery_evidence_if_correct": max(0.0, 100.0 - 15.0 * hints_used),
+    }
 
 
 class LearningStore:
@@ -720,6 +747,7 @@ class LearningStore:
         return ProgressUpdate(
             attempt_id=attempt_id,
             xp_awarded=points,
+            mastery_evidence=score,
             total_xp=total_xp,
             level=level,
             xp_into_level=into_level,

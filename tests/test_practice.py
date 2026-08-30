@@ -42,7 +42,10 @@ class AdaptivePracticeTests(unittest.TestCase):
                 "answer_type": "expression",
                 "answer": "3",
                 "options": [],
-                "hint": "Compare the coefficients of H2 and H2O.",
+                "help_steps": [
+                    "Compare the coefficients of H2 and H2O.",
+                    "Use that coefficient ratio to convert the given moles.",
+                ],
                 "solution": "The coefficient ratio is 2:2, or 1:1, so 3 moles form.",
                 "graph": None,
             }
@@ -57,6 +60,8 @@ class AdaptivePracticeTests(unittest.TestCase):
         public = quest.public_dict()
         self.assertNotIn("answer", public)
         self.assertNotIn("solution", public)
+        self.assertNotIn("help_steps", public)
+        self.assertEqual(2, len(quest.help_steps))
         self.assertEqual(2, len(provider.requests))
         self.assertIn("Subject: Chemistry", provider.requests[0][-1]["content"])
         self.assertIn("Topic or skill: Stoichiometry", provider.requests[0][-1]["content"])
@@ -79,6 +84,10 @@ class AdaptivePracticeTests(unittest.TestCase):
         )
         self.assertIn(
             "Reject unused or redundant quantitative givens",
+            provider.requests[1][0]["content"],
+        )
+        self.assertIn(
+            "help_steps are ordered",
             provider.requests[1][0]["content"],
         )
 

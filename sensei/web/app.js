@@ -16,6 +16,9 @@ let activeSessionSkillId = null;
 let activeAnswer = "";
 let activeFeedback = null;
 let attemptRecorded = false;
+let activeHelpCount = 0;
+let helpExhausted = false;
+let revealingHelp = false;
 let generatingQuestion = false;
 let activeSubjectFilter = "all";
 let editingFolderId = null;
@@ -659,6 +662,20 @@ function resetArenaFeedback() {
   byId("check-answer").disabled = false;
 }
 
+function resetProgressiveHelp() {
+  activeHelpCount = 0;
+  helpExhausted = false;
+  revealingHelp = false;
+  byId("help-steps").replaceChildren();
+  byId("help-panel").hidden = true;
+  const reward = byId("help-reward");
+  reward.textContent = "";
+  reward.classList.remove("final");
+  const button = byId("ask-sensei-help");
+  button.textContent = "Ask Sensei for help";
+  button.disabled = false;
+}
+
 function renderOptions(quest) {
   const grid = byId("option-grid");
   grid.replaceChildren();
@@ -694,9 +711,7 @@ function openArena(quest) {
   byId("quest-answer").value = "";
   byId("quest-answer").placeholder = quest.answer_type === "multiple_choice" ? "Choose A, B, C, or D" : "Enter only the requested value";
   byId("notation-help").hidden = quest.answer_type !== "expression";
-  byId("hint-copy").textContent = quest.hint;
-  byId("hint-copy").hidden = true;
-  byId("show-hint").textContent = "Ask Sensei for a hint";
+  resetProgressiveHelp();
   renderOptions(quest);
   const arena = byId("quest-arena");
   arena.hidden = false;
@@ -710,7 +725,7 @@ async function startAdaptiveQuest(
   { resetSession = false } = {},
 ) {
   if (!dashboardState || generatingQuestion || deletingTopicIds.has(skillId)) return;
-  if (dashboardState.runtime.practice_api_version !== 4) {
+  if (dashboardState.runtime.practice_api_version !== 5) {
     setGenerationStatus(
       statusTarget,
       "Sensei was updated while this dashboard was running. Restart Sensei, then try again.",
@@ -792,9 +807,49 @@ function closeArena() {
   activeQuest = null;
   activeSessionSkillId = null;
   resetArenaFeedback();
+  resetProgressiveHelp();
   renderGraph(null);
   byId("chat-history").replaceChildren();
   byId("quest-arena").hidden = true;
+}
+
+async function askSenseiForHelp() {
+  if (!activeQuest || activeFeedback || helpExhausted || revealingHelp) return;
+  const challengeToken = activeQuest.challenge_token;
+  const button = byId("ask-sensei-help");
+  revealingHelp = true;
+  button.disabled = true;
+  byId("check-answer").disabled = true;
+  try {
+    const response = await postJson("/api/quest/help", { challenge_token: challengeToken });
+    if (!activeQuest || activeQuest.challenge_token !== challengeToken) return;
+    activeHelpCount = response.hints_used;
+    helpExhausted = response.final_answer;
+    const step = document.createElement("li");
+    step.textContent = response.step;
+    byId("help-steps").append(step);
+    byId("help-panel").hidden = false;
+    const reward = byId("help-reward");
+    if (response.final_answer) {
+      reward.textContent = "Final answer revealed — this attempt can earn 0 XP and 0 mastery evidence.";
+      reward.classList.add("final");
+      button.textContent = "Final answer revealed";
+    } else {
+      reward.textContent = `${response.reward.xp_if_correct} XP and ${Math.round(response.reward.mastery_evidence_if_correct)} mastery evidence remain for a correct answer. Step ${response.step_number} of ${response.total_steps}.`;
+      reward.classList.remove("final");
+      button.textContent = "Ask Sensei for help";
+    }
+  } catch (error) {
+    void reportClientProblem(error, "askSenseiForHelp");
+    const reward = byId("help-reward");
+    reward.textContent = error.message;
+    reward.classList.add("final");
+    byId("help-panel").hidden = false;
+  } finally {
+    revealingHelp = false;
+    button.disabled = helpExhausted || Boolean(activeFeedback);
+    byId("check-answer").disabled = Boolean(activeFeedback);
+  }
 }
 
 async function postJson(path, document, { retries = 0, onRetry = null } = {}) {
@@ -830,13 +885,14 @@ async function postJson(path, document, { retries = 0, onRetry = null } = {}) {
 }
 
 async function checkAnswer() {
-  if (!activeQuest) return;
+  if (!activeQuest || revealingHelp) return;
   const challengeToken = activeQuest.challenge_token;
   const answer = byId("quest-answer").value.trim();
   if (!answer) { byId("quest-answer").focus(); return; }
   const button = byId("check-answer");
-  button.disabled = true;
   resetArenaFeedback();
+  button.disabled = true;
+  byId("ask-sensei-help").disabled = true;
   try {
     const response = await postJson("/api/quest/check", { challenge_token: challengeToken, answer });
     if (!activeQuest || activeQuest.challenge_token !== challengeToken) return;
@@ -864,6 +920,7 @@ async function checkAnswer() {
     feedback.scrollIntoView({ behavior: "smooth", block: "nearest" });
     byId("quest-answer").disabled = true;
     byId("option-grid").querySelectorAll("button").forEach((option) => { option.disabled = true; });
+    byId("ask-sensei-help").disabled = true;
   } catch (error) {
     void reportClientProblem(error, "checkAnswer");
     const feedback = byId("answer-feedback");
@@ -874,6 +931,7 @@ async function checkAnswer() {
     feedback.hidden = false;
   } finally {
     button.disabled = Boolean(activeFeedback);
+    byId("ask-sensei-help").disabled = helpExhausted || Boolean(activeFeedback);
   }
 }
 
@@ -885,7 +943,7 @@ async function recordAttempt() {
     const response = await postJson("/api/quest/record", { attempt_token: attemptToken });
     attemptToken = null;
     attemptRecorded = true;
-    byId("feedback-expected").textContent = `Recorded: +${response.progress.xp_awarded} XP · ${Math.round(response.progress.mastery_score)}/100 mastery.`;
+    byId("feedback-expected").textContent = `Recorded: +${response.progress.xp_awarded} XP · ${Math.round(response.progress.mastery_evidence)} mastery evidence · ${Math.round(response.progress.mastery_score)}/100 topic mastery.`;
     button.hidden = true;
     byId("continue-practice").hidden = false;
     await loadDashboard();
@@ -960,11 +1018,7 @@ byId("continue-practice").addEventListener("click", () => {
   if (activeQuest) startAdaptiveQuest(activeQuest.skill_id, byId("arena-generation-status"));
 });
 byId("close-arena").addEventListener("click", closeArena);
-byId("show-hint").addEventListener("click", () => {
-  const hint = byId("hint-copy");
-  hint.hidden = !hint.hidden;
-  byId("show-hint").textContent = hint.hidden ? "Ask Sensei for a hint" : "Hide Sensei’s hint";
-});
+byId("ask-sensei-help").addEventListener("click", askSenseiForHelp);
 byId("check-answer").addEventListener("click", checkAnswer);
 byId("record-attempt").addEventListener("click", recordAttempt);
 byId("quest-answer").addEventListener("keydown", (event) => { if (event.key === "Enter") checkAnswer(); });

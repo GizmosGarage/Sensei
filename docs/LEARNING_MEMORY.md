@@ -78,14 +78,20 @@ This order affects XP, mastery, and scheduling, while provenance keeps disagreem
 
 ## XP rules
 
-XP rewards practice effort; it is deliberately separate from mastery and is never deducted.
+XP rewards practice effort and is deliberately separate from mastery. Already-earned XP
+is never deducted. For a pending attempt, each **Ask Sensei for help** step reduces the
+available XP by 5 (never below zero), and revealing the final-answer step makes the
+attempt worth zero XP.
 
 | Outcome | XP |
 | --- | ---: |
 | Incorrect | 5 effort XP |
 | Partial | 5 effort + 7 progress = 12 XP |
-| Correct with help | 5 effort + 15 correct = 20 XP |
 | Correct independently | 5 effort + 15 correct + 5 independence = 25 XP |
+
+A correct attempt is therefore worth 20 XP after one help step, 15 after two, and so
+on. Partial and incorrect rewards use the same 5-XP-per-step reduction. The dashboard
+shows the remaining correct-answer reward after every help request.
 
 Level 1 requires 100 XP to advance, level 2 requires another 200, level 3 another 300, and so on. This produces visible progress without disguising it as subject mastery.
 
@@ -97,7 +103,10 @@ Each result begins with an evidence value:
 - partial: 55
 - incorrect: 10
 
-A revealed solution caps evidence at 45. Each explicit hint reduces the raw value by 12%, up to four hints and never below a 55% multiplier. Extraction confidence then pulls uncertain evidence toward neutral 50:
+Each non-final **Ask Sensei for help** step subtracts 15 from the raw evidence value,
+never below zero. If the progressive help sequence reaches its final-answer step, the
+attempt contributes zero mastery evidence. Otherwise extraction confidence pulls
+uncertain evidence toward neutral 50:
 
 ```text
 adjusted = 50 + (raw - 50) * confidence

@@ -50,14 +50,17 @@ class ProgressionRuleTests(unittest.TestCase):
             xp_award(event()),
         )
         self.assertEqual(5, xp_award(event(outcome=Outcome.INCORRECT))[0])
+        self.assertEqual(20, xp_award(event(hints_used=1))[0])
+        self.assertEqual(15, xp_award(event(hints_used=2))[0])
+        self.assertEqual(0, xp_award(event(hints_used=3, solution_revealed=True))[0])
         self.assertEqual((2, 0, 200), xp_level(100))
 
     def test_low_confidence_pulls_mastery_evidence_toward_neutral(self) -> None:
         self.assertEqual(100.0, evidence_score(event()))
         self.assertEqual(50.0, evidence_score(event(confidence=0.0)))
-        self.assertEqual(
-            45.0, evidence_score(event(solution_revealed=True, confidence=1.0))
-        )
+        self.assertEqual(85.0, evidence_score(event(hints_used=1)))
+        self.assertEqual(70.0, evidence_score(event(hints_used=2)))
+        self.assertEqual(0.0, evidence_score(event(solution_revealed=True)))
 
 
 class LearningStoreTests(unittest.TestCase):

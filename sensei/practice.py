@@ -23,16 +23,18 @@ EXACT_VERIFIER_VERSION = "sensei-answer-key-1"
 ANSWER_TYPES = {"expression", "multiple_choice"}
 SPECIAL_EXPRESSION_ANSWERS = {"dne", "doesnotexist", "undefined"}
 MAX_SOLUTION_CHARACTERS = 1_600
-BASE_PRACTICE_FIELDS = {
+COMMON_PRACTICE_FIELDS = {
     "title",
     "prompt",
     "answer_type",
     "answer",
     "options",
-    "hint",
     "solution",
 }
+BASE_PRACTICE_FIELDS = COMMON_PRACTICE_FIELDS | {"help_steps"}
 PRACTICE_FIELDS = BASE_PRACTICE_FIELDS | {"graph"}
+LEGACY_BASE_PRACTICE_FIELDS = COMMON_PRACTICE_FIELDS | {"hint"}
+LEGACY_PRACTICE_FIELDS = LEGACY_BASE_PRACTICE_FIELDS | {"graph"}
 GRAPH_FIELDS = {
     "x_min",
     "x_max",
@@ -307,7 +309,7 @@ class AdaptiveQuest:
     answer_type: str
     answer: str
     options: tuple[str, ...]
-    hint: str
+    help_steps: tuple[str, ...]
     solution: str
     graph: GraphSpec | None = None
 
@@ -322,7 +324,7 @@ class AdaptiveQuest:
             "prompt": self.prompt,
             "answer_type": self.answer_type,
             "options": list(self.options),
-            "hint": self.hint,
+            "help_available": True,
             "graph": self.graph.public_dict() if self.graph else None,
             "check_kind": "adaptive",
             "source": "adaptive",
@@ -410,7 +412,7 @@ def _private_quest_document(quest: AdaptiveQuest) -> dict[str, object]:
         "answer_type": quest.answer_type,
         "answer": quest.answer,
         "options": list(quest.options),
-        "hint": quest.hint,
+        "help_steps": list(quest.help_steps),
         "solution": quest.solution,
         "graph": quest.graph.public_dict() if quest.graph else None,
     }
@@ -432,6 +434,8 @@ def parse_adaptive_quest(
     if frozenset(document) not in {
         frozenset(BASE_PRACTICE_FIELDS),
         frozenset(PRACTICE_FIELDS),
+        frozenset(LEGACY_BASE_PRACTICE_FIELDS),
+        frozenset(LEGACY_PRACTICE_FIELDS),
     }:
         raise PracticeGenerationError(
             f"fields must be exactly {sorted(PRACTICE_FIELDS)}"
@@ -455,6 +459,26 @@ def parse_adaptive_quest(
             )
     elif options:
         raise PracticeGenerationError("expression quests must use an empty option list")
+
+    raw_help_steps = document.get("help_steps")
+    if raw_help_steps is None:
+        # Accept already-issued/test fixtures from practice API v4 while normalizing
+        # every new quest to the progressive-help contract.
+        help_steps = (_text(document, "hint", maximum=500),)
+    else:
+        if (
+            not isinstance(raw_help_steps, list)
+            or not 2 <= len(raw_help_steps) <= 4
+            or not all(isinstance(step, str) and step.strip() for step in raw_help_steps)
+        ):
+            raise PracticeGenerationError(
+                "help_steps must contain from 2 to 4 non-empty steps"
+            )
+        help_steps = tuple(str(step).strip() for step in raw_help_steps)
+        if any(len(step) > 400 for step in help_steps):
+            raise PracticeGenerationError(
+                "each help_steps entry must not exceed 400 characters"
+            )
 
     graph = _parse_graph(document)
     if _graph_topic(skill) and graph is None:
@@ -496,7 +520,7 @@ def parse_adaptive_quest(
         answer_type=answer_type,
         answer=answer,
         options=options,
-        hint=_text(document, "hint", maximum=500),
+        help_steps=help_steps,
         solution=_text(
             document,
             "solution",
@@ -593,7 +617,7 @@ class AdaptiveQuestFactory:
                     "every problem, while interpreting the practice instructions only "
                     "within the named subject and topic. Return only JSON with exactly "
                     "these fields: "
-                    "title, prompt, answer_type, answer, options, hint, solution, "
+                    "title, prompt, answer_type, answer, options, help_steps, solution, "
                     "graph. "
                     "Every quantitative given must be necessary to solve the requested "
                     "problem; do not add distractor measurements or provide an "
@@ -615,11 +639,16 @@ class AdaptiveQuestFactory:
                     "work, or ban otherwise valid methods. "
                     "Use answer_type=multiple_choice for conceptual, formula-name, or "
                     "chemistry-notation questions; provide exactly four plain options "
-                    "and make answer exactly A, B, C, or D. Include one useful hint and "
-                    "a concise worked solution. Do not restate the prompt or repeat "
-                    "the same facts across the prompt, hint, and solution. Keep the "
+                    "and make answer exactly A, B, C, or D. Include help_steps as 2-4 "
+                    "short, ordered actions that move from the learner's first useful "
+                    "move toward the solution. Each entry must reveal only the next "
+                    "step, must make sense after the prior entries, and must not state "
+                    "the final answer; Sensei appends the validated final answer as a "
+                    "separate last step. Include a concise worked solution. Do not "
+                    "restate the prompt or repeat the same facts across the prompt, "
+                    "help steps, and solution. Keep the "
                     "title under 80 characters, "
-                    "the problem under 700 characters, the hint under 250 characters, "
+                    "the problem under 700 characters, each help step under 250 characters, "
                     "and the solution under 700 characters. "
                     "Do not use trick "
                     "questions, ambiguous rounding, or facts that require current "
@@ -685,7 +714,9 @@ class AdaptiveQuestFactory:
                         "that lets the learner bypass a requested property. When the "
                         "instructions request two or more properties, trace the solution "
                         "and approve only if one necessary conversion chain actually "
-                        "uses them. "
+                        "uses them. Verify that help_steps are ordered, reveal only one "
+                        "useful next action at a time, and do not state the final answer "
+                        "or collapse the entire solution into an early step. "
                         "For numeric answers, "
                         "answer_type=expression is required and is not an error. For "
                         "graphical limits, treat the structured graph as the displayed "

@@ -90,10 +90,14 @@
                 </figure>
                 <div class="option-grid" id="option-grid"></div>
                 <div class="coach-row">
-                  <button class="hint-button" id="show-hint" type="button">Ask Sensei for a hint</button>
+                  <button class="help-button" id="ask-sensei-help" type="button" aria-describedby="help-policy">Ask Sensei for help</button>
+                  <p class="help-policy" id="help-policy">Reveals one next step. Each use lowers potential XP and mastery; revealing the final answer reduces both rewards to zero.</p>
                   <p class="notation-help" id="notation-help">For numeric or symbolic answers, use <code>^</code> for powers, <code>pi</code> for π, and <code>DNE</code> when a requested value does not exist.</p>
                 </div>
-                <p class="hint-copy" id="hint-copy" hidden></p>
+                <div class="help-panel" id="help-panel" hidden>
+                  <ol class="help-steps" id="help-steps" aria-label="Sensei help steps"></ol>
+                  <p class="help-reward" id="help-reward" role="status"></p>
+                </div>
               </div>
             </article>
             <article class="chat-message learner-message answer-message" id="learner-answer-turn" hidden>

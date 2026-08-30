@@ -70,6 +70,10 @@ stay in the dashboard process until the attempt is checked and recorded. Every A
 topic also has a confirmed delete action that removes its topic-specific learning data
 from the active database.
 
+During a generated problem, **Ask Sensei for help** reveals one solution step at a
+time. Each request lowers the available XP and mastery evidence; reaching the final
+answer makes both rewards zero for that attempt.
+
 The terminal supports `/quest`, `/answer`, `/hint`, `/solve`, `/done`, `/profile`,
 `/skills`, `/review`, `/new`, `/status`, `/errors`, `/export`, `/backup`,
 `/delete-data`, `/help`, and `/quit`.

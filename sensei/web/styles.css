@@ -515,7 +515,7 @@ button:disabled {
 }
 
 .prompt-examples button,
-.hint-button {
+.help-button {
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--jade-bright);
@@ -529,7 +529,7 @@ button:disabled {
 }
 
 .prompt-examples button:hover,
-.hint-button:hover {
+.help-button:hover {
   border-color: var(--jade);
   background: rgba(123, 198, 164, 0.1);
 }
@@ -986,11 +986,24 @@ button:disabled {
   margin: 0;
 }
 
-.hint-button {
+.help-policy {
+  flex: 1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.help-button {
   padding: 7px 11px;
 }
 
-.hint-copy {
+.help-button:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.help-panel {
   margin: 15px 0 0;
   padding: 14px 16px;
   border-left: 2px solid var(--gold);
@@ -998,6 +1011,33 @@ button:disabled {
   background: rgba(217, 167, 74, 0.05);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.help-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.help-steps li::marker {
+  color: var(--gold);
+  font-family: ui-monospace, "Cascadia Mono", monospace;
+}
+
+.help-reward {
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid rgba(217, 167, 74, 0.16);
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.help-reward.final {
+  color: var(--gold);
 }
 
 .solution-copy {

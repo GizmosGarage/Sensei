@@ -42,7 +42,7 @@ class DashboardTests(unittest.TestCase):
             self.assertNotIn("sample_answer", quest)
             self.assertNotIn("verification", quest)
         self.assertEqual("Local SQLite", state["runtime"]["storage"])
-        self.assertEqual(4, state["runtime"]["practice_api_version"])
+        self.assertEqual(5, state["runtime"]["practice_api_version"])
         self.assertEqual(40, state["catalog"]["quest_count"])
         self.assertEqual(20, state["catalog"]["courses"]["precalculus"])
         self.assertEqual(37, state["catalog"]["generated_skill_count"])
@@ -98,6 +98,8 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn("Sensei // Adaptive Dojo", html)
                 self.assertIn("Forge a questline", html)
                 self.assertIn("Start practice chat", html)
+                self.assertIn("Ask Sensei for help", html)
+                self.assertNotIn("Ask Sensei for a hint", html)
                 self.assertIn("Your study brief", html)
                 self.assertIn("Practice instructions", html)
                 self.assertIn("Next problem", html)
@@ -351,6 +353,99 @@ class DashboardTests(unittest.TestCase):
                     "generated-precalc-linear-equations-"
                 )
             )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_progressive_help_reveals_one_step_and_zeroes_final_answer_rewards(
+        self,
+    ) -> None:
+        seed = 919
+        expected_quest = GeneratedQuestFactory(
+            random.Random(seed)
+        ).generate("precalc_linear_equations")
+        server = create_server(
+            self.service,
+            port=0,
+            quest_factory=GeneratedQuestFactory(random.Random(seed)),
+            error_recorder=self.error_recorder,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://{LOOPBACK_HOST}:{server.server_address[1]}"
+
+        def post(path: str, document: dict[str, str], token: str) -> dict[str, object]:
+            request = Request(
+                f"{base_url}{path}",
+                data=json.dumps(document).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Origin": base_url,
+                    "X-Sensei-CSRF": token,
+                },
+                method="POST",
+            )
+            with urlopen(request, timeout=5) as response:
+                return json.load(response)
+
+        try:
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                csrf_token = json.load(response)["csrf_token"]
+            generated = post(
+                "/api/quest/generate",
+                {"skill_id": "precalc_linear_equations"},
+                csrf_token,
+            )
+            challenge_token = generated["challenge_token"]
+
+            first = post(
+                "/api/quest/help",
+                {"challenge_token": challenge_token},
+                csrf_token,
+            )
+            self.assertEqual(1, first["step_number"])
+            self.assertEqual(2, first["total_steps"])
+            self.assertFalse(first["final_answer"])
+            self.assertNotIn(expected_quest.sample_answer, first["step"])
+            self.assertEqual(20, first["reward"]["xp_if_correct"])
+            self.assertEqual(
+                85.0,
+                first["reward"]["mastery_evidence_if_correct"],
+            )
+
+            final = post(
+                "/api/quest/help",
+                {"challenge_token": challenge_token},
+                csrf_token,
+            )
+            self.assertTrue(final["final_answer"])
+            self.assertIn(expected_quest.sample_answer, final["step"])
+            self.assertEqual(0, final["reward"]["xp_if_correct"])
+            self.assertEqual(0.0, final["reward"]["mastery_evidence_if_correct"])
+
+            checked = post(
+                "/api/quest/check",
+                {
+                    "challenge_token": challenge_token,
+                    "answer": expected_quest.sample_answer,
+                },
+                csrf_token,
+            )
+            recorded = post(
+                "/api/quest/record",
+                {"attempt_token": checked["attempt_token"]},
+                csrf_token,
+            )
+            self.assertEqual(0, recorded["progress"]["xp_awarded"])
+            self.assertEqual(0.0, recorded["progress"]["mastery_evidence"])
+            self.assertEqual(0.0, recorded["progress"]["mastery_score"])
+            with LearningStore(self.database) as store:
+                attempt = store.connection.execute(
+                    "SELECT hints_used, solution_revealed FROM attempts"
+                ).fetchone()
+            self.assertEqual(2, attempt["hints_used"])
+            self.assertEqual(1, attempt["solution_revealed"])
         finally:
             server.shutdown()
             server.server_close()
