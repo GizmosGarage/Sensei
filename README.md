@@ -66,7 +66,9 @@ python -m sensei.dashboard --model "gpt-5.4-mini" --api-base-url "https://api.op
 
 The dashboard lets a learner name a subject, topic, and practice instructions. The
 configured LLM drafts and reviews one problem at a time, while protected answer keys
-stay in the dashboard process until the attempt is checked and recorded.
+stay in the dashboard process until the attempt is checked and recorded. Every Atlas
+topic also has a confirmed delete action that removes its topic-specific learning data
+from the active database.
 
 The terminal supports `/quest`, `/answer`, `/hint`, `/solve`, `/done`, `/profile`,
 `/skills`, `/review`, `/new`, `/status`, `/errors`, `/export`, `/backup`,

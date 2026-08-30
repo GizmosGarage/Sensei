@@ -9,14 +9,19 @@ from urllib.request import Request, urlopen
 
 from sensei.dashboard import (
     LOOPBACK_HOST,
+    ChallengeStore,
     DashboardService,
+    PendingAttemptStore,
     create_server,
     rank_name,
 )
 from sensei.errorlog import ErrorRecorder
 from sensei.generation import GeneratedQuestFactory
+from sensei.learning import LearningEvent, Outcome
 from sensei.practice import AdaptiveQuestFactory
 from sensei.providers import CompletionResult
+from sensei.storage import LearningStore
+from sensei.verification import CalculusVerifier
 
 
 class DashboardTests(unittest.TestCase):
@@ -49,6 +54,23 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual("Dojo Adept", rank_name(4))
         self.assertEqual("Realm Scholar", rank_name(7))
         self.assertEqual("Grand Sensei", rank_name(10))
+
+    def test_deleted_topic_is_purged_from_in_process_quest_memory(self) -> None:
+        skill_id = "precalc_linear_equations"
+        challenges = ChallengeStore(GeneratedQuestFactory(random.Random(443)))
+        attempts = PendingAttemptStore()
+        challenge_token, quest = challenges.issue(skill_id)
+        result = quest.check(quest.sample_answer, CalculusVerifier())
+        attempt_token = attempts.issue(quest, result)
+
+        challenges.discard_skill(skill_id)
+        attempts.discard_skill(skill_id)
+
+        with self.assertRaisesRegex(ValueError, "missing or expired"):
+            challenges.get(challenge_token)
+        with self.assertRaisesRegex(ValueError, "missing, expired"):
+            attempts.consume(attempt_token)
+        self.assertNotIn(skill_id, challenges._last_prompts)
 
     def test_loopback_server_serves_health_api_and_dashboard_assets(self) -> None:
         server = create_server(
@@ -83,8 +105,80 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn('data-view="past-quest"', html)
                 self.assertIn('id="subject-filters"', html)
                 self.assertIn("Choose all subjects", html)
+                self.assertIn('class="delete-topic-button"', html)
                 self.assertNotIn("Name the quest.", html)
                 self.assertIn("/assets/app.js", html)
+            with urlopen(f"{base_url}/assets/app.js", timeout=5) as response:
+                javascript = response.read().decode("utf-8")
+                self.assertIn("It cannot be recovered once deleted.", javascript)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_dashboard_deletes_one_topic_and_all_of_its_learning_data(self) -> None:
+        with LearningStore(self.database) as store:
+            topic = store.create_study_topic(
+                subject="Chemistry",
+                topic="Stoichiometry",
+                context="Mole ratios",
+            )
+            store.record_event(
+                LearningEvent(
+                    skill_id=topic["id"],
+                    outcome=Outcome.INCORRECT,
+                    misconception="Skipped the mole ratio.",
+                    evidence="The response used a 1:1 ratio.",
+                    confidence=1.0,
+                    problem="Convert reactant moles to product moles.",
+                    hints_used=0,
+                    solution_revealed=False,
+                    tutor_turns=1,
+                )
+            )
+
+        server = create_server(
+            self.service,
+            port=0,
+            error_recorder=self.error_recorder,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://{LOOPBACK_HOST}:{server.server_address[1]}"
+        try:
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                csrf_token = json.load(response)["csrf_token"]
+            request = Request(
+                f"{base_url}/api/study/delete",
+                data=json.dumps({"skill_id": topic["id"]}).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Origin": base_url,
+                    "X-Sensei-CSRF": csrf_token,
+                },
+                method="POST",
+            )
+            with urlopen(request, timeout=5) as response:
+                deletion = json.load(response)["deleted_topic"]
+            self.assertEqual(topic["id"], deletion["skill_id"])
+            self.assertEqual(1, deletion["deleted_attempts"])
+
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                state = json.load(response)
+            self.assertEqual([], state["study_topics"])
+            self.assertEqual([], state["recent_attempts"])
+            self.assertEqual(0, state["profile"]["attempts"])
+            self.assertEqual(0, state["profile"]["total_xp"])
+            with LearningStore(self.database) as store:
+                self.assertEqual(
+                    0,
+                    store.connection.execute(
+                        "SELECT COUNT(*) FROM skills WHERE id = ?", (topic["id"],)
+                    ).fetchone()[0],
+                )
+                self.assertEqual(
+                    [], list(store.connection.execute("PRAGMA foreign_key_check"))
+                )
         finally:
             server.shutdown()
             server.server_close()

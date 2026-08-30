@@ -122,6 +122,18 @@ class PendingAttemptStore:
                     "This checked attempt is missing, expired, or already recorded."
                 ) from error
 
+    def discard_skill(self, skill_id: str) -> None:
+        """Forget every checked, unrecorded attempt for one deleted topic."""
+
+        with self._lock:
+            tokens = [
+                token
+                for token, attempt in self._attempts.items()
+                if attempt.quest.skill_id == skill_id
+            ]
+            for token in tokens:
+                del self._attempts[token]
+
     def _prune(self, now: float) -> None:
         expired = [
             token
@@ -232,6 +244,21 @@ class ChallengeStore:
                     "This generated question is missing or expired. Request a new one."
                 ) from error
 
+    def discard_skill(self, skill_id: str) -> None:
+        """Forget generated questions and duplicate history for one deleted topic."""
+
+        with self._lock:
+            tokens = [
+                token
+                for token, challenge in self._challenges.items()
+                if challenge.quest.skill_id == skill_id
+            ]
+            for token in tokens:
+                del self._challenges[token]
+            self._last_prompts.pop(skill_id, None)
+            self._adaptive_prompts.pop(skill_id, None)
+            self._adaptive_fingerprints.pop(skill_id, None)
+
     def _prune(self, now: float) -> None:
         expired = [
             token
@@ -310,6 +337,10 @@ class DashboardService:
     def study_topic(self, skill_id: str) -> dict[str, Any]:
         with LearningStore(self.database_path, self.skills_path) as store:
             return store.study_topic(skill_id)
+
+    def delete_study_topic(self, skill_id: str) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.delete_study_topic(skill_id)
 
     def recent_topic_prompts(self, skill_id: str) -> tuple[str, ...]:
         with LearningStore(self.database_path, self.skills_path) as store:
@@ -406,6 +437,7 @@ class SenseiDashboardServer(ThreadingHTTPServer):
         self.challenges = ChallengeStore(quest_factory, adaptive_factory)
         self.adaptive_available = adaptive_factory is not None
         self.pending_attempts = PendingAttemptStore()
+        self.topic_state_lock = threading.RLock()
         self.assets = {
             path: (asset_path.read_bytes(), content_type)
             for path, (asset_path, content_type) in ASSETS.items()
@@ -639,23 +671,36 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 document = self._read_json({"subject", "topic", "context"})
                 if not all(isinstance(value, str) for value in document.values()):
                     raise ValueError("Study-focus fields must be text.")
-                skill = self.server.service.create_study_topic(
-                    subject=str(document["subject"]),
-                    topic=str(document["topic"]),
-                    context=str(document["context"]),
-                )
+                with self.server.topic_state_lock:
+                    skill = self.server.service.create_study_topic(
+                        subject=str(document["subject"]),
+                        topic=str(document["topic"]),
+                        context=str(document["context"]),
+                    )
                 self._send_json(200, {"study_topic": skill})
+                return
+            if path == "/api/study/delete":
+                document = self._read_json({"skill_id"})
+                skill_id = document["skill_id"]
+                if not isinstance(skill_id, str) or len(skill_id) > 80:
+                    raise ValueError("Study topic ID must be valid text.")
+                with self.server.topic_state_lock:
+                    deletion = self.server.service.delete_study_topic(skill_id)
+                    self.server.challenges.discard_skill(skill_id)
+                    self.server.pending_attempts.discard_skill(skill_id)
+                self._send_json(200, {"deleted_topic": deletion})
                 return
             if path == "/api/study/generate":
                 document = self._read_json({"skill_id"})
                 skill_id = document["skill_id"]
                 if not isinstance(skill_id, str) or len(skill_id) > 80:
                     raise ValueError("Study topic ID must be valid text.")
-                skill = self.server.service.study_topic(skill_id)
-                challenge_token, quest = self.server.challenges.issue_adaptive(
-                    skill,
-                    avoid_prompts=self.server.service.recent_topic_prompts(skill_id),
-                )
+                with self.server.topic_state_lock:
+                    skill = self.server.service.study_topic(skill_id)
+                    challenge_token, quest = self.server.challenges.issue_adaptive(
+                        skill,
+                        avoid_prompts=self.server.service.recent_topic_prompts(skill_id),
+                    )
                 self._send_json(
                     200,
                     {
@@ -669,7 +714,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 skill_id = document["skill_id"]
                 if not isinstance(skill_id, str) or len(skill_id) > 80:
                     raise ValueError("Skill ID must be valid text.")
-                challenge_token, quest = self.server.challenges.issue(skill_id)
+                with self.server.topic_state_lock:
+                    challenge_token, quest = self.server.challenges.issue(skill_id)
                 self._send_json(
                     200,
                     {
@@ -688,13 +734,14 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     or not isinstance(answer, str)
                 ):
                     raise ValueError("Challenge token and answer must be text.")
-                quest = self.server.challenges.get(challenge_token)
-                result = self.server.service.check_quest(quest, answer)
-                attempt_token = (
-                    None
-                    if result.status is VerificationStatus.INCONCLUSIVE
-                    else self.server.pending_attempts.issue(quest, result)
-                )
+                with self.server.topic_state_lock:
+                    quest = self.server.challenges.get(challenge_token)
+                    result = self.server.service.check_quest(quest, answer)
+                    attempt_token = (
+                        None
+                        if result.status is VerificationStatus.INCONCLUSIVE
+                        else self.server.pending_attempts.issue(quest, result)
+                    )
                 self._send_json(
                     200,
                     {
@@ -711,10 +758,12 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 token = document["attempt_token"]
                 if not isinstance(token, str) or len(token) > 200:
                     raise ValueError("Attempt token must be valid text.")
-                attempt = self.server.pending_attempts.consume(token)
+                with self.server.topic_state_lock:
+                    attempt = self.server.pending_attempts.consume(token)
+                    recorded = self.server.service.record_attempt(attempt)
                 self._send_json(
                     200,
-                    self.server.service.record_attempt(attempt),
+                    recorded,
                 )
                 return
         except PracticeGenerationError as error:
@@ -761,6 +810,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             message = (
                 "Sensei could not generate a new encounter. Please try again."
                 if path in {"/api/study/generate", "/api/quest/generate"}
+                else "The topic and its learning data could not be deleted."
+                if path == "/api/study/delete"
                 else "The local attempt could not be recorded."
             )
             self._send_json(

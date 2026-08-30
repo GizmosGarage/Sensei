@@ -192,7 +192,8 @@ footer {
 
 .primary-button,
 .secondary-button,
-.practice-button {
+.practice-button,
+.delete-topic-button {
   border-radius: 10px;
   cursor: pointer;
   font-weight: 700;
@@ -227,9 +228,20 @@ footer {
   text-transform: uppercase;
 }
 
+.delete-topic-button {
+  padding: 9px 11px;
+  border: 1px solid rgba(219, 110, 98, 0.35);
+  color: var(--danger);
+  background: rgba(219, 110, 98, 0.035);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .primary-button:hover,
 .secondary-button:hover,
-.practice-button:hover {
+.practice-button:hover,
+.delete-topic-button:hover {
   transform: translateY(-1px);
 }
 
@@ -237,6 +249,12 @@ footer {
 .practice-button:hover {
   border-color: var(--jade);
   background: rgba(123, 198, 164, 0.08);
+}
+
+.delete-topic-button:hover {
+  border-color: var(--danger);
+  color: #f09085;
+  background: rgba(219, 110, 98, 0.09);
 }
 
 button:disabled {
@@ -1348,6 +1366,18 @@ body.generating .brand-mark {
 
 .skill-footer {
   text-transform: none;
+}
+
+.topic-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.topic-actions .practice-button {
+  flex: 1;
+  width: auto;
+  margin-top: 0;
 }
 
 .card-generation-status {

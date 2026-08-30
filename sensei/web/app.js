@@ -19,6 +19,7 @@ let attemptRecorded = false;
 let generatingQuestion = false;
 let activeSubjectFilter = "all";
 const generationStatuses = new Map();
+const deletingTopicIds = new Set();
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const CLIENT_ERROR_STORAGE_KEY = "sensei.pending-client-errors.v1";
 const MAX_PENDING_CLIENT_ERRORS = 25;
@@ -328,12 +329,46 @@ function topicCard(topic) {
   card.querySelector(".skill-review").textContent = relativeDate(topic.next_review_at);
   const generationStatus = card.querySelector(".card-generation-status");
   restoreGenerationStatus(generationStatus, topic.id);
-  card.querySelector(".practice-button").addEventListener("click", () => startAdaptiveQuest(
+  const practiceButton = card.querySelector(".practice-button");
+  const deleteButton = card.querySelector(".delete-topic-button");
+  deleteButton.setAttribute("aria-label", `Delete ${topic.name} and its saved data`);
+  practiceButton.addEventListener("click", () => startAdaptiveQuest(
     topic.id,
     generationStatus,
     { resetSession: true },
   ));
+  deleteButton.addEventListener("click", () => deleteTopic(
+    topic,
+    deleteButton,
+    practiceButton,
+    generationStatus,
+  ));
   return card;
+}
+
+async function deleteTopic(topic, deleteButton, practiceButton, statusTarget) {
+  const confirmed = window.confirm(
+    `Delete “${topic.name}” from your Atlas?\n\nThis permanently deletes all saved attempts, XP, mastery, misconceptions, and other Atlas data for this topic. It cannot be recovered once deleted.`,
+  );
+  if (!confirmed) return;
+
+  deletingTopicIds.add(topic.id);
+  deleteButton.disabled = true;
+  practiceButton.disabled = true;
+  setGenerationStatus(statusTarget, "Permanently deleting this topic and its learning data…", "working", topic.id);
+  try {
+    await postJson("/api/study/delete", { skill_id: topic.id });
+    generationStatuses.delete(topic.id);
+    if (activeSessionSkillId === topic.id) closeArena();
+    await loadDashboard();
+  } catch (error) {
+    void reportClientProblem(error, "deleteTopic");
+    setGenerationStatus(statusTarget, error.message, "error", topic.id);
+  } finally {
+    deletingTopicIds.delete(topic.id);
+    deleteButton.disabled = false;
+    practiceButton.disabled = false;
+  }
 }
 
 function renderTopics(topics) {
@@ -541,7 +576,7 @@ async function startAdaptiveQuest(
   statusTarget = byId("form-status"),
   { resetSession = false } = {},
 ) {
-  if (!dashboardState || generatingQuestion) return;
+  if (!dashboardState || generatingQuestion || deletingTopicIds.has(skillId)) return;
   if (dashboardState.runtime.practice_api_version !== 4) {
     setGenerationStatus(
       statusTarget,
@@ -577,6 +612,7 @@ async function startAdaptiveQuest(
         ),
       },
     );
+    if (deletingTopicIds.has(skillId) || !studyTopicById(skillId)) return;
     openArena({ ...response.quest, challenge_token: response.challenge_token });
     setGenerationStatus(statusTarget, "Problem validated. Your practice chat is ready.", "success", skillId);
   } catch (error) {

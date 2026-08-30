@@ -34,6 +34,12 @@ The dashboard requires API credentials at startup. See [API setup](API_SETUP.md)
 6. The protected answer remains process-local until submission.
 7. Recording an attempt atomically updates the SQLite mastery and XP records.
 
+Each topic card has its own **Delete** action. After a permanent-deletion warning,
+Sensei removes that topic's attempts, XP events, mastery, misconceptions, and pending
+in-process questions. Learner-created topic metadata is removed as well. Bundled
+catalog definitions remain available, but a deleted practiced catalog topic leaves the
+Atlas when its personal learning records are cleared.
+
 Curated and deterministic generators remain available for their supported skills.
 Symbolic math answers are checked with the restricted SymPy verifier.
 

@@ -231,6 +231,62 @@ class LearningStoreTests(unittest.TestCase):
             [], list(self.store.connection.execute("PRAGMA foreign_key_check"))
         )
 
+    def test_delete_learner_topic_removes_every_related_learning_record(self) -> None:
+        topic = self.store.create_study_topic(
+            subject="Chemistry",
+            topic="Stoichiometry",
+            context="Mole ratios and limiting reagents",
+        )
+        self.store.record_event(
+            LearningEvent(
+                skill_id=topic["id"],
+                outcome=Outcome.INCORRECT,
+                misconception="Used mass as though it were moles.",
+                evidence="The conversion skipped molar mass.",
+                confidence=1.0,
+                problem="Convert 18 g H2O to moles.",
+                hints_used=0,
+                solution_revealed=False,
+                tutor_turns=1,
+            ),
+            now=NOW,
+        )
+
+        deletion = self.store.delete_study_topic(topic["id"])
+
+        self.assertEqual(topic["id"], deletion["skill_id"])
+        self.assertEqual(1, deletion["deleted_attempts"])
+        self.assertEqual(0, self.store.profile()["attempts"])
+        for table in ("skills", "attempts", "misconceptions", "mastery"):
+            count = self.store.connection.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE "
+                + ("id = ?" if table == "skills" else "skill_id = ?"),
+                (topic["id"],),
+            ).fetchone()[0]
+            self.assertEqual(0, count, table)
+        self.assertEqual(
+            0,
+            self.store.connection.execute("SELECT COUNT(*) FROM xp_events").fetchone()[0],
+        )
+        self.assertEqual(
+            [], list(self.store.connection.execute("PRAGMA foreign_key_check"))
+        )
+        with self.assertRaisesRegex(ValueError, "does not exist"):
+            self.store.study_topic(topic["id"])
+
+    def test_delete_practiced_catalog_topic_keeps_only_catalog_definition(self) -> None:
+        self.store.record_event(event(), now=NOW)
+
+        self.store.delete_study_topic("chain_rule")
+
+        self.assertIn("chain_rule", self.store.skill_names())
+        self.assertNotIn(
+            "chain_rule", {topic["id"] for topic in self.store.study_topics()}
+        )
+        self.assertEqual(0, self.store.profile()["attempts"])
+        with self.assertRaisesRegex(ValueError, "Atlas topic does not exist"):
+            self.store.delete_study_topic("chain_rule")
+
     def test_record_event_updates_xp_mastery_and_review(self) -> None:
         first = self.store.record_event(event(), now=NOW)
         self.assertEqual(25, first.xp_awarded)

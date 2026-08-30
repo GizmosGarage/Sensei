@@ -477,6 +477,53 @@ class LearningStore:
             raise ValueError("That study topic does not exist.")
         return dict(row)
 
+    def delete_study_topic(self, skill_id: str) -> dict[str, Any]:
+        """Permanently remove one Atlas topic and all learner data tied to it."""
+
+        row = self.connection.execute(
+            """SELECT s.id, s.name, s.source,
+                      EXISTS(
+                          SELECT 1 FROM attempts a WHERE a.skill_id = s.id
+                      ) AS has_attempts
+                 FROM skills s
+                WHERE s.id = ?""",
+            (skill_id,),
+        ).fetchone()
+        if row is None or (row["source"] != "learner" and not row["has_attempts"]):
+            raise ValueError("That Atlas topic does not exist.")
+
+        deleted_attempts = int(
+            self.connection.execute(
+                "SELECT COUNT(*) AS count FROM attempts WHERE skill_id = ?",
+                (skill_id,),
+            ).fetchone()["count"]
+        )
+        with self.connection:
+            self.connection.execute(
+                """DELETE FROM xp_events
+                    WHERE attempt_id IN (
+                        SELECT id FROM attempts WHERE skill_id = ?
+                    )""",
+                (skill_id,),
+            )
+            self.connection.execute(
+                "DELETE FROM attempts WHERE skill_id = ?", (skill_id,)
+            )
+            self.connection.execute(
+                "DELETE FROM misconceptions WHERE skill_id = ?", (skill_id,)
+            )
+            self.connection.execute(
+                "DELETE FROM mastery WHERE skill_id = ?", (skill_id,)
+            )
+            if row["source"] == "learner":
+                self.connection.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
+
+        return {
+            "skill_id": str(row["id"]),
+            "topic": str(row["name"]),
+            "deleted_attempts": deleted_attempts,
+        }
+
     def _upsert_misconception(
         self, event: LearningEvent, timestamp: str
     ) -> int | None:
