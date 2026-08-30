@@ -299,6 +299,7 @@ class DashboardService:
                 "quests": deck.public_quests(),
                 "skills": skills,
                 "study_topics": study_topics,
+                "topic_folders": store.topic_folders(),
                 "recent_attempts": store.recent_attempts(limit=50),
                 "catalog": {
                     "quest_count": len(deck.quests),
@@ -341,6 +342,26 @@ class DashboardService:
     def delete_study_topic(self, skill_id: str) -> dict[str, Any]:
         with LearningStore(self.database_path, self.skills_path) as store:
             return store.delete_study_topic(skill_id)
+
+    def create_topic_folder(
+        self, *, subject: str, name: str, skill_ids: Collection[str]
+    ) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.create_topic_folder(
+                subject=subject, name=name, skill_ids=skill_ids
+            )
+
+    def update_topic_folder(
+        self, folder_id: str, *, name: str, skill_ids: Collection[str]
+    ) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.update_topic_folder(
+                folder_id, name=name, skill_ids=skill_ids
+            )
+
+    def delete_topic_folder(self, folder_id: str) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.delete_topic_folder(folder_id)
 
     def recent_topic_prompts(self, skill_id: str) -> tuple[str, ...]:
         with LearningStore(self.database_path, self.skills_path) as store:
@@ -690,6 +711,52 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     self.server.pending_attempts.discard_skill(skill_id)
                 self._send_json(200, {"deleted_topic": deletion})
                 return
+            if path == "/api/folders/create":
+                document = self._read_json({"subject", "name", "skill_ids"})
+                subject = document["subject"]
+                name = document["name"]
+                skill_ids = document["skill_ids"]
+                if (
+                    not isinstance(subject, str)
+                    or not isinstance(name, str)
+                    or not isinstance(skill_ids, list)
+                    or not all(isinstance(skill_id, str) for skill_id in skill_ids)
+                ):
+                    raise ValueError("Folder details and topic selections are invalid.")
+                with self.server.topic_state_lock:
+                    folder = self.server.service.create_topic_folder(
+                        subject=subject, name=name, skill_ids=skill_ids
+                    )
+                self._send_json(200, {"topic_folder": folder})
+                return
+            if path == "/api/folders/update":
+                document = self._read_json({"folder_id", "name", "skill_ids"})
+                folder_id = document["folder_id"]
+                name = document["name"]
+                skill_ids = document["skill_ids"]
+                if (
+                    not isinstance(folder_id, str)
+                    or len(folder_id) > 80
+                    or not isinstance(name, str)
+                    or not isinstance(skill_ids, list)
+                    or not all(isinstance(skill_id, str) for skill_id in skill_ids)
+                ):
+                    raise ValueError("Folder details and topic selections are invalid.")
+                with self.server.topic_state_lock:
+                    folder = self.server.service.update_topic_folder(
+                        folder_id, name=name, skill_ids=skill_ids
+                    )
+                self._send_json(200, {"topic_folder": folder})
+                return
+            if path == "/api/folders/delete":
+                document = self._read_json({"folder_id"})
+                folder_id = document["folder_id"]
+                if not isinstance(folder_id, str) or len(folder_id) > 80:
+                    raise ValueError("Folder ID must be valid text.")
+                with self.server.topic_state_lock:
+                    folder = self.server.service.delete_topic_folder(folder_id)
+                self._send_json(200, {"deleted_folder": folder})
+                return
             if path == "/api/study/generate":
                 document = self._read_json({"skill_id"})
                 skill_id = document["skill_id"]
@@ -812,6 +879,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 if path in {"/api/study/generate", "/api/quest/generate"}
                 else "The topic and its learning data could not be deleted."
                 if path == "/api/study/delete"
+                else "The Atlas folder could not be saved."
+                if path.startswith("/api/folders/")
                 else "The local attempt could not be recorded."
             )
             self._send_json(

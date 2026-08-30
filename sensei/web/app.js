@@ -18,6 +18,8 @@ let activeFeedback = null;
 let attemptRecorded = false;
 let generatingQuestion = false;
 let activeSubjectFilter = "all";
+let editingFolderId = null;
+let editingFolderSubject = "";
 const generationStatuses = new Map();
 const deletingTopicIds = new Set();
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
@@ -268,19 +270,24 @@ function subjectKey(subject) {
   return String(subject || "Uncategorized").trim().replace(/\s+/g, " ").toLocaleLowerCase();
 }
 
-function groupTopicsBySubject(topics) {
+function groupTopicsBySubject(topics, folders = []) {
   const groups = new Map();
-  topics.forEach((topic) => {
-    const subject = String(topic.course || "Uncategorized").trim().replace(/\s+/g, " ") || "Uncategorized";
+  const ensureGroup = (subjectValue) => {
+    const subject = String(subjectValue || "Uncategorized").trim().replace(/\s+/g, " ") || "Uncategorized";
     const key = subjectKey(subject);
-    if (!groups.has(key)) groups.set(key, { key, subject, topics: [] });
-    groups.get(key).topics.push(topic);
+    if (!groups.has(key)) groups.set(key, { key, subject, topics: [], folders: [] });
+    return groups.get(key);
+  };
+  topics.forEach((topic) => {
+    ensureGroup(topic.course).topics.push(topic);
   });
+  folders.forEach((folder) => ensureGroup(folder.subject).folders.push(folder));
   return Array.from(groups.values())
     .map((group) => ({
       ...group,
       practiced: group.topics.some((topic) => Number(topic.attempts_count) > 0),
       topics: group.topics.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" })),
+      folders: group.folders.sort((left, right) => Number(left.sort_order) - Number(right.sort_order)),
     }))
     .sort((left, right) => left.subject.localeCompare(right.subject, undefined, { sensitivity: "base" }));
 }
@@ -291,7 +298,6 @@ function renderSubjectFilters(groups) {
   const options = [
     { key: "all", label: "All subjects", count: groups.reduce((total, group) => total + group.topics.length, 0) },
     ...groups
-      .filter((group) => group.practiced)
       .map((group) => ({ key: group.key, label: group.subject, count: group.topics.length })),
   ];
   options.forEach((option) => {
@@ -346,6 +352,118 @@ function topicCard(topic) {
   return card;
 }
 
+function folderById(folderId) {
+  return (dashboardState?.topic_folders || []).find((folder) => folder.id === folderId) || null;
+}
+
+function closeFolderDialog() {
+  const dialog = byId("folder-dialog");
+  if (dialog.open) dialog.close();
+  editingFolderId = null;
+  editingFolderSubject = "";
+  byId("folder-dialog-status").textContent = "";
+}
+
+function openFolderDialog(subject, folder = null) {
+  editingFolderId = folder?.id || null;
+  editingFolderSubject = subject;
+  byId("folder-dialog-subject").textContent = subject;
+  byId("folder-dialog-title").textContent = folder ? "Edit folder" : "Create a folder";
+  byId("folder-name").value = folder?.name || "";
+  byId("folder-save").textContent = folder ? "Save folder" : "Create folder";
+  byId("folder-delete").hidden = !folder;
+  byId("folder-dialog-status").textContent = "";
+
+  const selected = new Set(folder?.topic_ids || []);
+  const topicList = byId("folder-topic-list");
+  topicList.replaceChildren();
+  const topics = (dashboardState?.study_topics || [])
+    .filter((topic) => subjectKey(topic.course) === subjectKey(subject))
+    .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+  topics.forEach((topic) => {
+    const label = document.createElement("label");
+    label.className = "folder-topic-option";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.name = "folder-topic";
+    checkbox.value = topic.id;
+    checkbox.checked = selected.has(topic.id);
+    const copy = document.createElement("span");
+    const name = document.createElement("strong");
+    name.textContent = topic.name;
+    copy.append(name);
+    const currentFolder = folderById(topic.folder_id);
+    if (currentFolder && currentFolder.id !== folder?.id) {
+      const location = document.createElement("small");
+      location.textContent = `Currently in ${currentFolder.name}`;
+      copy.append(location);
+    }
+    label.append(checkbox, copy);
+    topicList.append(label);
+  });
+  if (!topics.length) {
+    const empty = document.createElement("p");
+    empty.className = "folder-topic-empty";
+    empty.textContent = "Add a topic to this subject before filing it.";
+    topicList.append(empty);
+  }
+
+  const dialog = byId("folder-dialog");
+  dialog.showModal();
+  requestAnimationFrame(() => byId("folder-name").focus());
+}
+
+async function saveFolder(event) {
+  event.preventDefault();
+  const name = byId("folder-name").value.trim();
+  if (!name) {
+    byId("folder-dialog-status").textContent = "Give this folder a name.";
+    byId("folder-name").focus();
+    return;
+  }
+  const skillIds = Array.from(byId("folder-topic-list").querySelectorAll('input[type="checkbox"]:checked'))
+    .map((checkbox) => checkbox.value);
+  const saveButton = byId("folder-save");
+  saveButton.disabled = true;
+  byId("folder-dialog-status").textContent = "Saving your folder…";
+  try {
+    if (editingFolderId) {
+      await postJson("/api/folders/update", { folder_id: editingFolderId, name, skill_ids: skillIds });
+    } else {
+      await postJson("/api/folders/create", { subject: editingFolderSubject, name, skill_ids: skillIds });
+    }
+    closeFolderDialog();
+    await loadDashboard();
+  } catch (error) {
+    void reportClientProblem(error, "saveFolder");
+    byId("folder-dialog-status").textContent = error.message;
+  } finally {
+    saveButton.disabled = false;
+  }
+}
+
+async function deleteFolder() {
+  const folder = folderById(editingFolderId);
+  if (!folder) return;
+  const confirmed = window.confirm(
+    `Remove the folder “${folder.name}”?\n\nIts topics will become unfiled. No topic or learning progress will be deleted.`,
+  );
+  if (!confirmed) return;
+  const deleteButton = byId("folder-delete");
+  deleteButton.disabled = true;
+  byId("folder-dialog-status").textContent = "Removing the folder…";
+  try {
+    await postJson("/api/folders/delete", { folder_id: folder.id });
+    closeFolderDialog();
+    await loadDashboard();
+  } catch (error) {
+    void reportClientProblem(error, "deleteFolder");
+    byId("folder-dialog-status").textContent = error.message;
+  } finally {
+    deleteButton.disabled = false;
+  }
+}
+
 async function deleteTopic(topic, deleteButton, practiceButton, statusTarget) {
   const confirmed = window.confirm(
     `Delete “${topic.name}” from your Atlas?\n\nThis permanently deletes all saved attempts, XP, mastery, misconceptions, and other Atlas data for this topic. It cannot be recovered once deleted.`,
@@ -374,17 +492,19 @@ async function deleteTopic(topic, deleteButton, practiceButton, statusTarget) {
 function renderTopics(topics) {
   const atlas = byId("skill-grid");
   atlas.replaceChildren();
-  byId("empty-atlas").hidden = topics.length > 0;
-  byId("atlas-controls").hidden = topics.length === 0;
-  if (!topics.length) {
+  const folders = dashboardState?.topic_folders || [];
+  const hasAtlasContent = topics.length > 0 || folders.length > 0;
+  byId("empty-atlas").hidden = hasAtlasContent;
+  byId("atlas-controls").hidden = !hasAtlasContent;
+  if (!hasAtlasContent) {
     activeSubjectFilter = "all";
     byId("subject-filters").replaceChildren();
     byId("atlas-summary").textContent = "No fixed curriculum. Add only what matters to you.";
     return;
   }
 
-  const groups = groupTopicsBySubject(topics);
-  const availableFilters = new Set(groups.filter((group) => group.practiced).map((group) => group.key));
+  const groups = groupTopicsBySubject(topics, folders);
+  const availableFilters = new Set(groups.map((group) => group.key));
   if (activeSubjectFilter !== "all" && !availableFilters.has(activeSubjectFilter)) activeSubjectFilter = "all";
   renderSubjectFilters(groups);
   const visibleGroups = activeSubjectFilter === "all"
@@ -392,8 +512,8 @@ function renderTopics(topics) {
     : groups.filter((group) => group.key === activeSubjectFilter);
   const visibleTopicCount = visibleGroups.reduce((total, group) => total + group.topics.length, 0);
   byId("atlas-summary").textContent = activeSubjectFilter === "all"
-    ? `${topics.length} topic${topics.length === 1 ? "" : "s"} grouped across ${groups.length} subject${groups.length === 1 ? "" : "s"}.`
-    : `Showing ${visibleTopicCount} ${visibleGroups[0].subject} topic${visibleTopicCount === 1 ? "" : "s"}.`;
+    ? `${topics.length} topic${topics.length === 1 ? "" : "s"} across ${groups.length} subject${groups.length === 1 ? "" : "s"}, organized into ${folders.length} folder${folders.length === 1 ? "" : "s"}.`
+    : `Showing ${visibleTopicCount} ${visibleGroups[0].subject} topic${visibleTopicCount === 1 ? "" : "s"} in ${visibleGroups[0].folders.length} folder${visibleGroups[0].folders.length === 1 ? "" : "s"}.`;
 
   visibleGroups.forEach((group, index) => {
     const section = document.createElement("section");
@@ -406,11 +526,69 @@ function renderTopics(topics) {
     section.setAttribute("aria-labelledby", title.id);
     const count = document.createElement("span");
     count.textContent = `${group.topics.length} topic${group.topics.length === 1 ? "" : "s"}`;
-    heading.append(title, count);
-    const grid = document.createElement("div");
-    grid.className = "skill-grid";
-    group.topics.forEach((topic) => grid.append(topicCard(topic)));
-    section.append(heading, grid);
+    const createButton = document.createElement("button");
+    createButton.className = "new-folder-button";
+    createButton.type = "button";
+    createButton.textContent = "+ New folder";
+    createButton.addEventListener("click", () => openFolderDialog(group.subject));
+    heading.append(title, count, createButton);
+    section.append(heading);
+
+    group.folders.forEach((folder) => {
+      const folderTopics = group.topics.filter((topic) => topic.folder_id === folder.id);
+      const container = document.createElement("details");
+      container.className = "topic-folder";
+      container.open = true;
+      const summary = document.createElement("summary");
+      const icon = document.createElement("span");
+      icon.className = "folder-icon";
+      icon.setAttribute("aria-hidden", "true");
+      const folderCopy = document.createElement("span");
+      folderCopy.className = "folder-copy";
+      const folderName = document.createElement("strong");
+      folderName.textContent = folder.name;
+      const folderCount = document.createElement("small");
+      folderCount.textContent = `${folderTopics.length} topic${folderTopics.length === 1 ? "" : "s"}`;
+      folderCopy.append(folderName, folderCount);
+      const editButton = document.createElement("button");
+      editButton.type = "button";
+      editButton.className = "folder-edit-button";
+      editButton.textContent = "Edit";
+      editButton.setAttribute("aria-label", `Edit ${folder.name} folder`);
+      editButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openFolderDialog(group.subject, folder);
+      });
+      summary.append(icon, folderCopy, editButton);
+      container.append(summary);
+      if (folderTopics.length) {
+        const folderGrid = document.createElement("div");
+        folderGrid.className = "skill-grid folder-skill-grid";
+        folderTopics.forEach((topic) => folderGrid.append(topicCard(topic)));
+        container.append(folderGrid);
+      } else {
+        const emptyFolder = document.createElement("p");
+        emptyFolder.className = "empty-folder-copy";
+        emptyFolder.textContent = "This folder is empty. Choose Edit to add topics.";
+        container.append(emptyFolder);
+      }
+      section.append(container);
+    });
+
+    const unfiledTopics = group.topics.filter((topic) => !topic.folder_id || !folderById(topic.folder_id));
+    if (unfiledTopics.length) {
+      if (group.folders.length) {
+        const unfiledHeading = document.createElement("p");
+        unfiledHeading.className = "unfiled-heading";
+        unfiledHeading.textContent = "Unfiled topics";
+        section.append(unfiledHeading);
+      }
+      const grid = document.createElement("div");
+      grid.className = "skill-grid";
+      unfiledTopics.forEach((topic) => grid.append(topicCard(topic)));
+      section.append(grid);
+    }
     atlas.append(section);
   });
 }
@@ -836,6 +1014,13 @@ byId("check-answer").addEventListener("click", checkAnswer);
 byId("record-attempt").addEventListener("click", recordAttempt);
 byId("quest-answer").addEventListener("keydown", (event) => { if (event.key === "Enter") checkAnswer(); });
 byId("refresh-button").addEventListener("click", loadDashboard);
+byId("folder-form").addEventListener("submit", saveFolder);
+byId("folder-cancel").addEventListener("click", closeFolderDialog);
+byId("folder-dialog-close").addEventListener("click", closeFolderDialog);
+byId("folder-delete").addEventListener("click", deleteFolder);
+byId("folder-dialog").addEventListener("click", (event) => {
+  if (event.target === byId("folder-dialog")) closeFolderDialog();
+});
 showView(viewFromHash());
 loadDashboard();
 setInterval(() => { if (!document.hidden && !generatingQuestion) loadDashboard(); }, 30000);

@@ -75,14 +75,14 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(7, version)
+        self.assertEqual(8, version)
         self.assertEqual(37, len(self.store.skill_names()))
         self.store.close()
         self.store = LearningStore(self.database)
         migration_count = self.store.connection.execute(
             "SELECT COUNT(*) AS count FROM schema_migrations"
         ).fetchone()["count"]
-        self.assertEqual(7, migration_count)
+        self.assertEqual(8, migration_count)
 
     def test_schema_v1_database_migrates_and_backfills_provenance(self) -> None:
         self.store.close()
@@ -121,7 +121,7 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(7, version)
+        self.assertEqual(8, version)
         self.assertIsNone(attempt["quest_id"])
 
     def test_schema_v2_database_migrates_quest_provenance(self) -> None:
@@ -146,7 +146,7 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(7, version)
+        self.assertEqual(8, version)
 
     def test_schema_v3_database_migrates_course_and_preserves_old_skills(self) -> None:
         self.store.close()
@@ -175,7 +175,7 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(7, version)
+        self.assertEqual(8, version)
 
     def test_schema_v6_removes_obsolete_skill_metadata_without_losing_topics(self) -> None:
         self.store.close()
@@ -231,11 +231,79 @@ class LearningStoreTests(unittest.TestCase):
             [], list(self.store.connection.execute("PRAGMA foreign_key_check"))
         )
 
+    def test_named_subject_folders_persist_and_move_topics_without_deleting_them(self) -> None:
+        stoichiometry = self.store.create_study_topic(
+            subject="Chemistry", topic="Stoichiometry", context="Mole ratios"
+        )
+        lewis = self.store.create_study_topic(
+            subject="Chemistry", topic="Lewis structures", context="Valence electrons"
+        )
+        quadratic = self.store.create_study_topic(
+            subject="Mathematics", topic="Quadratic equations", context="Factoring"
+        )
+
+        review = self.store.create_topic_folder(
+            subject="Chemistry",
+            name="Exam Review",
+            skill_ids=[stoichiometry["id"], lewis["id"]],
+        )
+        self.assertEqual(
+            [stoichiometry["id"], lewis["id"]], review["topic_ids"]
+        )
+        self.assertEqual(
+            review["id"], self.store.study_topic(stoichiometry["id"])["folder_id"]
+        )
+
+        renamed = self.store.update_topic_folder(
+            review["id"], name="Final Review", skill_ids=[lewis["id"]]
+        )
+        self.assertEqual("Final Review", renamed["name"])
+        self.assertIsNone(self.store.study_topic(stoichiometry["id"])["folder_id"])
+
+        priority = self.store.create_topic_folder(
+            subject="Chemistry", name="Priority", skill_ids=[lewis["id"]]
+        )
+        self.assertEqual([], self.store.topic_folders()[0]["topic_ids"])
+        self.assertEqual(
+            priority["id"], self.store.study_topic(lewis["id"])["folder_id"]
+        )
+        with self.assertRaisesRegex(ValueError, "must belong to its subject"):
+            self.store.update_topic_folder(
+                priority["id"], name="Priority", skill_ids=[quadratic["id"]]
+            )
+
+        deletion = self.store.delete_topic_folder(priority["id"])
+        self.assertEqual(1, deletion["topic_count"])
+        self.assertIsNone(self.store.study_topic(lewis["id"])["folder_id"])
+        self.assertEqual("Lewis structures", self.store.study_topic(lewis["id"])["name"])
+        self.assertEqual(
+            [], list(self.store.connection.execute("PRAGMA foreign_key_check"))
+        )
+
+        self.store.close()
+        self.store = LearningStore(self.database)
+        self.assertEqual("Final Review", self.store.topic_folders()[0]["name"])
+
+    def test_folder_names_are_unique_within_a_subject(self) -> None:
+        self.store.create_study_topic(
+            subject="Chemistry", topic="Stoichiometry", context="Mole ratios"
+        )
+        self.store.create_topic_folder(
+            subject="Chemistry", name="Exam Review", skill_ids=[]
+        )
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            self.store.create_topic_folder(
+                subject="Chemistry", name="  EXAM   REVIEW  ", skill_ids=[]
+            )
+
     def test_delete_learner_topic_removes_every_related_learning_record(self) -> None:
         topic = self.store.create_study_topic(
             subject="Chemistry",
             topic="Stoichiometry",
             context="Mole ratios and limiting reagents",
+        )
+        folder = self.store.create_topic_folder(
+            subject="Chemistry", name="Review", skill_ids=[topic["id"]]
         )
         self.store.record_event(
             LearningEvent(
@@ -268,6 +336,8 @@ class LearningStoreTests(unittest.TestCase):
             0,
             self.store.connection.execute("SELECT COUNT(*) FROM xp_events").fetchone()[0],
         )
+        self.assertEqual([], self.store.topic_folders()[0]["topic_ids"])
+        self.assertEqual(folder["id"], self.store.topic_folders()[0]["id"])
         self.assertEqual(
             [], list(self.store.connection.execute("PRAGMA foreign_key_check"))
         )

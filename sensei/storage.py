@@ -6,6 +6,7 @@ import json
 import hashlib
 import re
 import sqlite3
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,7 +18,7 @@ from sensei.learning import LearningEvent, Outcome
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = REPOSITORY_ROOT / "data" / "sensei.db"
 DEFAULT_SKILLS_PATH = REPOSITORY_ROOT / "config" / "skills.json"
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 MIGRATION_1 = """
@@ -165,6 +166,30 @@ SELECT id, name, unit, description, prerequisites_json, sort_order, course,
 FROM skills;
 DROP TABLE skills;
 ALTER TABLE skills_v7 RENAME TO skills;
+"""
+
+MIGRATION_8 = """
+CREATE TABLE atlas_folders (
+    id TEXT PRIMARY KEY,
+    subject TEXT NOT NULL CHECK (length(trim(subject)) > 0),
+    name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    normalized_name TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (subject, normalized_name)
+);
+
+CREATE TABLE atlas_folder_topics (
+    folder_id TEXT NOT NULL REFERENCES atlas_folders(id) ON DELETE CASCADE,
+    skill_id TEXT NOT NULL UNIQUE REFERENCES skills(id) ON DELETE CASCADE,
+    PRIMARY KEY (folder_id, skill_id)
+);
+
+CREATE INDEX idx_atlas_folders_subject_order
+    ON atlas_folders(subject, sort_order);
+CREATE INDEX idx_atlas_folder_topics_folder
+    ON atlas_folder_topics(folder_id);
 """
 
 
@@ -348,6 +373,14 @@ class LearningStore:
                 self.connection.commit()
             finally:
                 self.connection.execute("PRAGMA foreign_keys = ON")
+            applied.add(7)
+        if 8 not in applied:
+            self.connection.executescript(MIGRATION_8)
+            self.connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (8, utc_now().isoformat()),
+            )
+            self.connection.commit()
         current = self.connection.execute(
             "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations"
         ).fetchone()["version"]
@@ -468,9 +501,11 @@ class LearningStore:
 
     def study_topic(self, skill_id: str) -> dict[str, Any]:
         row = self.connection.execute(
-            """SELECT id, course, name, unit, description, source, created_at
-                 FROM skills
-                WHERE id = ?""",
+            """SELECT s.id, s.course, s.name, s.unit, s.description,
+                      s.source, s.created_at, aft.folder_id
+                 FROM skills s
+                 LEFT JOIN atlas_folder_topics aft ON aft.skill_id = s.id
+                WHERE s.id = ?""",
             (skill_id,),
         ).fetchone()
         if row is None:
@@ -730,12 +765,14 @@ class LearningStore:
         rows = self.connection.execute(
             """SELECT s.id, s.course, s.name, s.unit, s.description,
                       s.source, s.created_at, s.sort_order,
+                      aft.folder_id,
                       COALESCE(m.mastery_score, 0) AS mastery_score,
                       COALESCE(m.attempts_count, 0) AS attempts_count,
                       COALESCE(m.correct_count, 0) AS correct_count,
                       m.next_review_at
                FROM skills s
                LEFT JOIN mastery m ON m.skill_id = s.id
+               LEFT JOIN atlas_folder_topics aft ON aft.skill_id = s.id
                ORDER BY s.sort_order"""
         )
         return [
@@ -756,6 +793,160 @@ class LearningStore:
             for skill in self.skill_progress()
             if skill["source"] == "learner" or skill["attempts_count"] > 0
         ]
+
+    @staticmethod
+    def _folder_name(value: str) -> tuple[str, str]:
+        name = " ".join(value.split())
+        if not name:
+            raise ValueError("Folder name cannot be empty.")
+        if len(name) > 80:
+            raise ValueError("Folder name must be 80 characters or fewer.")
+        return name, name.casefold()
+
+    def _atlas_subject(self, value: str) -> str:
+        subject = self._study_text(value, "Subject", 80)
+        rows = self.connection.execute(
+            """SELECT DISTINCT s.course
+                 FROM skills s
+                WHERE s.source = 'learner'
+                   OR EXISTS(SELECT 1 FROM attempts a WHERE a.skill_id = s.id)"""
+        )
+        for row in rows:
+            course = str(row["course"])
+            if course.casefold() == subject.casefold():
+                return course
+        raise ValueError("A folder's subject must already exist in the Atlas.")
+
+    def topic_folders(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """SELECT f.id, f.subject, f.name, f.sort_order,
+                      f.created_at, f.updated_at,
+                      COUNT(aft.skill_id) AS topic_count
+                 FROM atlas_folders f
+                 LEFT JOIN atlas_folder_topics aft ON aft.folder_id = f.id
+                GROUP BY f.id
+                ORDER BY f.subject COLLATE NOCASE, f.sort_order, f.name COLLATE NOCASE"""
+        )
+        folders = [dict(row) for row in rows]
+        topic_rows = self.connection.execute(
+            """SELECT folder_id, skill_id
+                 FROM atlas_folder_topics
+                ORDER BY rowid"""
+        )
+        topic_ids: dict[str, list[str]] = {}
+        for row in topic_rows:
+            topic_ids.setdefault(str(row["folder_id"]), []).append(str(row["skill_id"]))
+        for folder in folders:
+            folder["topic_ids"] = topic_ids.get(str(folder["id"]), [])
+        return folders
+
+    def _validate_folder_topics(self, subject: str, skill_ids: Collection[str]) -> list[str]:
+        unique_ids = list(dict.fromkeys(skill_ids))
+        if len(unique_ids) > 250:
+            raise ValueError("A folder cannot contain more than 250 topics.")
+        if not unique_ids:
+            return []
+        placeholders = ",".join("?" for _ in unique_ids)
+        rows = list(
+            self.connection.execute(
+                f"""SELECT s.id, s.course, s.source,
+                           EXISTS(SELECT 1 FROM attempts a WHERE a.skill_id = s.id) AS practiced
+                      FROM skills s
+                     WHERE s.id IN ({placeholders})""",
+                unique_ids,
+            )
+        )
+        by_id = {str(row["id"]): row for row in rows}
+        if len(by_id) != len(unique_ids):
+            raise ValueError("One or more selected topics do not exist in the Atlas.")
+        for skill_id in unique_ids:
+            row = by_id[skill_id]
+            if row["source"] != "learner" and not row["practiced"]:
+                raise ValueError("Only topics in the learner's Atlas can be filed.")
+            if str(row["course"]).casefold() != subject.casefold():
+                raise ValueError("Every topic in a folder must belong to its subject.")
+        return unique_ids
+
+    def create_topic_folder(
+        self, *, subject: str, name: str, skill_ids: Collection[str]
+    ) -> dict[str, Any]:
+        subject = self._atlas_subject(subject)
+        name, normalized_name = self._folder_name(name)
+        topic_ids = self._validate_folder_topics(subject, skill_ids)
+        folder_id = f"folder-{uuid.uuid4().hex}"
+        timestamp = utc_now().isoformat()
+        sort_order = int(
+            self.connection.execute(
+                """SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
+                     FROM atlas_folders WHERE subject = ? COLLATE NOCASE""",
+                (subject,),
+            ).fetchone()["next_order"]
+        )
+        try:
+            with self.connection:
+                self.connection.execute(
+                    """INSERT INTO atlas_folders(
+                           id, subject, name, normalized_name, sort_order, created_at, updated_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (folder_id, subject, name, normalized_name, sort_order, timestamp, timestamp),
+                )
+                self.connection.executemany(
+                    """INSERT INTO atlas_folder_topics(folder_id, skill_id)
+                       VALUES (?, ?)
+                       ON CONFLICT(skill_id) DO UPDATE SET folder_id = excluded.folder_id""",
+                    ((folder_id, skill_id) for skill_id in topic_ids),
+                )
+        except sqlite3.IntegrityError as error:
+            raise ValueError(f'A folder named “{name}” already exists in {subject}.') from error
+        return next(folder for folder in self.topic_folders() if folder["id"] == folder_id)
+
+    def update_topic_folder(
+        self, folder_id: str, *, name: str, skill_ids: Collection[str]
+    ) -> dict[str, Any]:
+        folder = self.connection.execute(
+            "SELECT id, subject FROM atlas_folders WHERE id = ?", (folder_id,)
+        ).fetchone()
+        if folder is None:
+            raise ValueError("That Atlas folder does not exist.")
+        name, normalized_name = self._folder_name(name)
+        topic_ids = self._validate_folder_topics(str(folder["subject"]), skill_ids)
+        try:
+            with self.connection:
+                self.connection.execute(
+                    """UPDATE atlas_folders
+                          SET name = ?, normalized_name = ?, updated_at = ?
+                        WHERE id = ?""",
+                    (name, normalized_name, utc_now().isoformat(), folder_id),
+                )
+                self.connection.execute(
+                    "DELETE FROM atlas_folder_topics WHERE folder_id = ?", (folder_id,)
+                )
+                self.connection.executemany(
+                    """INSERT INTO atlas_folder_topics(folder_id, skill_id)
+                       VALUES (?, ?)
+                       ON CONFLICT(skill_id) DO UPDATE SET folder_id = excluded.folder_id""",
+                    ((folder_id, skill_id) for skill_id in topic_ids),
+                )
+        except sqlite3.IntegrityError as error:
+            raise ValueError(
+                f'A folder named “{name}” already exists in {folder["subject"]}.'
+            ) from error
+        return next(folder for folder in self.topic_folders() if folder["id"] == folder_id)
+
+    def delete_topic_folder(self, folder_id: str) -> dict[str, Any]:
+        folder = self.connection.execute(
+            """SELECT f.id, f.subject, f.name, COUNT(aft.skill_id) AS topic_count
+                 FROM atlas_folders f
+                 LEFT JOIN atlas_folder_topics aft ON aft.folder_id = f.id
+                WHERE f.id = ?
+                GROUP BY f.id""",
+            (folder_id,),
+        ).fetchone()
+        if folder is None:
+            raise ValueError("That Atlas folder does not exist.")
+        with self.connection:
+            self.connection.execute("DELETE FROM atlas_folders WHERE id = ?", (folder_id,))
+        return dict(folder)
 
     def _practiced_skill_rows(self) -> list[sqlite3.Row]:
         return list(
@@ -865,6 +1056,7 @@ class LearningStore:
             "exported_at": utc_now().isoformat(),
             "profile": self.profile(),
             "skills": self.skill_progress(),
+            "topic_folders": self.topic_folders(),
             "attempts": rows("SELECT * FROM attempts ORDER BY id"),
             "misconceptions": rows("SELECT * FROM misconceptions ORDER BY id"),
             "xp_events": rows("SELECT * FROM xp_events ORDER BY id"),

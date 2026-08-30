@@ -151,7 +151,7 @@
           <div class="atlas-controls" id="atlas-controls" hidden>
             <div class="atlas-filter-copy">
               <p class="atlas-filter-label" id="atlas-filter-label">Show topics</p>
-              <p>Choose all subjects, or focus on a subject after your first saved encounter.</p>
+              <p>Choose a subject, then file its topics into named folders like a desktop.</p>
             </div>
             <div class="unit-filters" id="subject-filters" role="group" aria-labelledby="atlas-filter-label"></div>
           </div>
@@ -170,6 +170,33 @@
         <div class="history-list panel" id="history-list"></div>
       </section>
     </main>
+
+    <dialog class="folder-dialog" id="folder-dialog" aria-labelledby="folder-dialog-title">
+      <form method="dialog" id="folder-form">
+        <div class="folder-dialog-heading">
+          <div>
+            <p class="eyebrow" id="folder-dialog-subject">Subject</p>
+            <h2 id="folder-dialog-title">Create a folder</h2>
+          </div>
+          <button class="dialog-close" id="folder-dialog-close" type="button" aria-label="Close folder editor">×</button>
+        </div>
+        <label class="folder-name-label" for="folder-name">Folder name
+          <input id="folder-name" name="folder-name" maxlength="80" autocomplete="off" placeholder="Exam review" required>
+        </label>
+        <fieldset class="folder-topic-fieldset">
+          <legend>Choose topics</legend>
+          <p>Topics can belong to one folder at a time. Selecting a filed topic moves it here.</p>
+          <div class="folder-topic-list" id="folder-topic-list"></div>
+        </fieldset>
+        <p class="folder-dialog-status" id="folder-dialog-status" role="status"></p>
+        <div class="folder-dialog-actions">
+          <button class="delete-topic-button folder-delete-button" id="folder-delete" type="button" hidden>Remove folder</button>
+          <span></span>
+          <button class="secondary-button" id="folder-cancel" type="button">Cancel</button>
+          <button class="primary-button" id="folder-save" type="submit">Create folder</button>
+        </div>
+      </form>
+    </dialog>
 
     <footer>
       <p><span class="footer-mark">S</span> Sensei keeps your learning memory on this machine.</p>

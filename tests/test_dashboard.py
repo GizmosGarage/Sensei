@@ -104,8 +104,9 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn('data-view="profile"', html)
                 self.assertIn('data-view="past-quest"', html)
                 self.assertIn('id="subject-filters"', html)
-                self.assertIn("Choose all subjects", html)
+                self.assertIn("file its topics into named folders", html)
                 self.assertIn('class="delete-topic-button"', html)
+                self.assertIn('id="folder-dialog"', html)
                 self.assertNotIn("Name the quest.", html)
                 self.assertIn("/assets/app.js", html)
             with urlopen(f"{base_url}/assets/app.js", timeout=5) as response:
@@ -179,6 +180,86 @@ class DashboardTests(unittest.TestCase):
                 self.assertEqual(
                     [], list(store.connection.execute("PRAGMA foreign_key_check"))
                 )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_dashboard_creates_edits_and_removes_subject_folders(self) -> None:
+        with LearningStore(self.database) as store:
+            first = store.create_study_topic(
+                subject="Chemistry", topic="Stoichiometry", context="Mole ratios"
+            )
+            second = store.create_study_topic(
+                subject="Chemistry", topic="Lewis structures", context="Valence electrons"
+            )
+
+        server = create_server(
+            self.service,
+            port=0,
+            error_recorder=self.error_recorder,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://{LOOPBACK_HOST}:{server.server_address[1]}"
+        try:
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                csrf_token = json.load(response)["csrf_token"]
+
+            def post(path: str, document: dict[str, object]) -> dict[str, object]:
+                request = Request(
+                    f"{base_url}{path}",
+                    data=json.dumps(document).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "Origin": base_url,
+                        "X-Sensei-CSRF": csrf_token,
+                    },
+                    method="POST",
+                )
+                with urlopen(request, timeout=5) as response:
+                    return json.load(response)
+
+            created = post(
+                "/api/folders/create",
+                {
+                    "subject": "Chemistry",
+                    "name": "Exam review",
+                    "skill_ids": [first["id"]],
+                },
+            )["topic_folder"]
+            self.assertEqual([first["id"]], created["topic_ids"])
+
+            updated = post(
+                "/api/folders/update",
+                {
+                    "folder_id": created["id"],
+                    "name": "Final review",
+                    "skill_ids": [first["id"], second["id"]],
+                },
+            )["topic_folder"]
+            self.assertEqual("Final review", updated["name"])
+            self.assertEqual(2, updated["topic_count"])
+
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                state = json.load(response)
+            self.assertEqual("Final review", state["topic_folders"][0]["name"])
+            self.assertEqual(
+                {created["id"]},
+                {topic["folder_id"] for topic in state["study_topics"]},
+            )
+
+            removed = post(
+                "/api/folders/delete", {"folder_id": created["id"]}
+            )["deleted_folder"]
+            self.assertEqual(2, removed["topic_count"])
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                state = json.load(response)
+            self.assertEqual([], state["topic_folders"])
+            self.assertEqual(2, len(state["study_topics"]))
+            self.assertEqual(
+                {None}, {topic["folder_id"] for topic in state["study_topics"]}
+            )
         finally:
             server.shutdown()
             server.server_close()
