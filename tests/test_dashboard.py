@@ -81,6 +81,8 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn("Next problem", html)
                 self.assertIn('data-view="profile"', html)
                 self.assertIn('data-view="past-quest"', html)
+                self.assertIn('id="subject-filters"', html)
+                self.assertIn("Choose all subjects", html)
                 self.assertNotIn("Name the quest.", html)
                 self.assertIn("/assets/app.js", html)
         finally:

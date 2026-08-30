@@ -17,6 +17,7 @@ let activeAnswer = "";
 let activeFeedback = null;
 let attemptRecorded = false;
 let generatingQuestion = false;
+let activeSubjectFilter = "all";
 const generationStatuses = new Map();
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const CLIENT_ERROR_STORAGE_KEY = "sensei.pending-client-errors.v1";
@@ -262,30 +263,120 @@ function renderProfile(profile) {
   byId("rank-ring").style.setProperty("--xp-angle", `${progress * 360}deg`);
 }
 
-function renderTopics(topics) {
-  const grid = byId("skill-grid");
-  grid.replaceChildren();
-  byId("empty-atlas").hidden = topics.length > 0;
-  byId("atlas-summary").textContent = topics.length
-    ? `${topics.length} self-directed topic${topics.length === 1 ? "" : "s"} in your atlas.`
-    : "No fixed curriculum. Add only what matters to you.";
+function subjectKey(subject) {
+  return String(subject || "Uncategorized").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function groupTopicsBySubject(topics) {
+  const groups = new Map();
   topics.forEach((topic) => {
-    const card = skillTemplate.content.firstElementChild.cloneNode(true);
-    card.querySelector(".skill-subject").textContent = topic.course;
-    card.querySelector(".skill-score").textContent = `${Math.round(topic.mastery_score)} / 100`;
-    card.querySelector(".skill-name").textContent = topic.name;
-    card.querySelector(".skill-label").textContent = topic.mastery_label;
-    card.querySelector(".skill-track i").style.width = `${clamp(topic.mastery_score, 0, 100)}%`;
-    card.querySelector(".skill-attempts").textContent = `${topic.attempts_count} encounter${topic.attempts_count === 1 ? "" : "s"}`;
-    card.querySelector(".skill-review").textContent = relativeDate(topic.next_review_at);
-    const generationStatus = card.querySelector(".card-generation-status");
-    restoreGenerationStatus(generationStatus, topic.id);
-    card.querySelector(".practice-button").addEventListener("click", () => startAdaptiveQuest(
-      topic.id,
-      generationStatus,
-      { resetSession: true },
-    ));
-    grid.append(card);
+    const subject = String(topic.course || "Uncategorized").trim().replace(/\s+/g, " ") || "Uncategorized";
+    const key = subjectKey(subject);
+    if (!groups.has(key)) groups.set(key, { key, subject, topics: [] });
+    groups.get(key).topics.push(topic);
+  });
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      practiced: group.topics.some((topic) => Number(topic.attempts_count) > 0),
+      topics: group.topics.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" })),
+    }))
+    .sort((left, right) => left.subject.localeCompare(right.subject, undefined, { sensitivity: "base" }));
+}
+
+function renderSubjectFilters(groups) {
+  const filters = byId("subject-filters");
+  filters.replaceChildren();
+  const options = [
+    { key: "all", label: "All subjects", count: groups.reduce((total, group) => total + group.topics.length, 0) },
+    ...groups
+      .filter((group) => group.practiced)
+      .map((group) => ({ key: group.key, label: group.subject, count: group.topics.length })),
+  ];
+  options.forEach((option) => {
+    const button = document.createElement("button");
+    const selected = activeSubjectFilter === option.key;
+    button.type = "button";
+    button.dataset.subjectKey = option.key;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+    const label = document.createElement("span");
+    label.textContent = option.label;
+    const count = document.createElement("span");
+    count.className = "filter-count";
+    count.textContent = option.count;
+    button.append(label, count);
+    button.addEventListener("click", () => {
+      activeSubjectFilter = option.key;
+      renderTopics(dashboardState?.study_topics || []);
+      const selectedButton = Array.from(byId("subject-filters").querySelectorAll("button"))
+        .find((item) => item.dataset.subjectKey === activeSubjectFilter);
+      selectedButton?.focus();
+    });
+    filters.append(button);
+  });
+}
+
+function topicCard(topic) {
+  const card = skillTemplate.content.firstElementChild.cloneNode(true);
+  card.querySelector(".skill-subject").textContent = topic.course;
+  card.querySelector(".skill-score").textContent = `${Math.round(topic.mastery_score)} / 100`;
+  card.querySelector(".skill-name").textContent = topic.name;
+  card.querySelector(".skill-label").textContent = topic.mastery_label;
+  card.querySelector(".skill-track i").style.width = `${clamp(topic.mastery_score, 0, 100)}%`;
+  card.querySelector(".skill-attempts").textContent = `${topic.attempts_count} encounter${topic.attempts_count === 1 ? "" : "s"}`;
+  card.querySelector(".skill-review").textContent = relativeDate(topic.next_review_at);
+  const generationStatus = card.querySelector(".card-generation-status");
+  restoreGenerationStatus(generationStatus, topic.id);
+  card.querySelector(".practice-button").addEventListener("click", () => startAdaptiveQuest(
+    topic.id,
+    generationStatus,
+    { resetSession: true },
+  ));
+  return card;
+}
+
+function renderTopics(topics) {
+  const atlas = byId("skill-grid");
+  atlas.replaceChildren();
+  byId("empty-atlas").hidden = topics.length > 0;
+  byId("atlas-controls").hidden = topics.length === 0;
+  if (!topics.length) {
+    activeSubjectFilter = "all";
+    byId("subject-filters").replaceChildren();
+    byId("atlas-summary").textContent = "No fixed curriculum. Add only what matters to you.";
+    return;
+  }
+
+  const groups = groupTopicsBySubject(topics);
+  const availableFilters = new Set(groups.filter((group) => group.practiced).map((group) => group.key));
+  if (activeSubjectFilter !== "all" && !availableFilters.has(activeSubjectFilter)) activeSubjectFilter = "all";
+  renderSubjectFilters(groups);
+  const visibleGroups = activeSubjectFilter === "all"
+    ? groups
+    : groups.filter((group) => group.key === activeSubjectFilter);
+  const visibleTopicCount = visibleGroups.reduce((total, group) => total + group.topics.length, 0);
+  byId("atlas-summary").textContent = activeSubjectFilter === "all"
+    ? `${topics.length} topic${topics.length === 1 ? "" : "s"} grouped across ${groups.length} subject${groups.length === 1 ? "" : "s"}.`
+    : `Showing ${visibleTopicCount} ${visibleGroups[0].subject} topic${visibleTopicCount === 1 ? "" : "s"}.`;
+
+  visibleGroups.forEach((group, index) => {
+    const section = document.createElement("section");
+    section.className = "subject-group";
+    const heading = document.createElement("div");
+    heading.className = "subject-group-heading";
+    const title = document.createElement("h3");
+    title.id = `atlas-subject-${index}`;
+    title.textContent = group.subject;
+    section.setAttribute("aria-labelledby", title.id);
+    const count = document.createElement("span");
+    count.textContent = `${group.topics.length} topic${group.topics.length === 1 ? "" : "s"}`;
+    heading.append(title, count);
+    const grid = document.createElement("div");
+    grid.className = "skill-grid";
+    group.topics.forEach((topic) => grid.append(topicCard(topic)));
+    section.append(heading, grid);
+    atlas.append(section);
   });
 }
 

@@ -148,7 +148,14 @@
             <div><p class="eyebrow">Your growing atlas</p><h2 id="mastery-heading">Practiced realms</h2></div>
             <p class="atlas-summary" id="atlas-summary">No fixed curriculum. Add only what matters to you.</p>
           </div>
-          <div class="skill-grid" id="skill-grid" aria-live="polite"></div>
+          <div class="atlas-controls" id="atlas-controls" hidden>
+            <div class="atlas-filter-copy">
+              <p class="atlas-filter-label" id="atlas-filter-label">Show topics</p>
+              <p>Choose all subjects, or focus on a subject after your first saved encounter.</p>
+            </div>
+            <div class="unit-filters" id="subject-filters" role="group" aria-labelledby="atlas-filter-label"></div>
+          </div>
+          <div class="atlas-groups" id="skill-grid" aria-live="polite"></div>
           <div class="empty-atlas panel" id="empty-atlas">
             <span aria-hidden="true">＋</span><p>Your first topic will appear here with its own mastery score, review schedule, and quest history.</p>
           </div>

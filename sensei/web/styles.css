@@ -1122,6 +1122,41 @@ button:disabled {
   text-align: right;
 }
 
+.atlas-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin: -4px 0 30px;
+  padding: 15px 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.atlas-controls[hidden] {
+  display: none;
+}
+
+.atlas-filter-copy p {
+  margin: 0;
+}
+
+.atlas-filter-copy .atlas-filter-label {
+  margin-bottom: 4px;
+  color: var(--paper);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.atlas-filter-copy p:last-child {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .unit-filters {
   display: flex;
   justify-content: flex-end;
@@ -1131,9 +1166,70 @@ button:disabled {
 }
 
 .unit-filters button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   padding: 7px 11px;
   border-radius: 999px;
   font-size: 10px;
+}
+
+.unit-filters button.active {
+  color: var(--ink);
+  border-color: var(--jade);
+  background: var(--jade);
+}
+
+.unit-filters .filter-count {
+  min-width: 17px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.07);
+  font-family: ui-monospace, "Cascadia Mono", monospace;
+  font-size: 8px;
+  text-align: center;
+}
+
+.unit-filters button.active .filter-count {
+  color: var(--ink-soft);
+  background: rgba(8, 13, 13, 0.15);
+}
+
+.atlas-groups {
+  display: grid;
+  gap: 38px;
+}
+
+.subject-group-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.subject-group-heading::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  order: 2;
+  background: linear-gradient(90deg, var(--line-bright), transparent);
+}
+
+.subject-group-heading h3 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 23px;
+  font-weight: 400;
+}
+
+.subject-group-heading span {
+  order: 3;
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .skill-grid {
@@ -1494,6 +1590,10 @@ footer p {
   .atlas-summary {
     margin-top: 12px;
     text-align: left;
+  }
+
+  .atlas-controls {
+    display: block;
   }
 
   .unit-filters {
