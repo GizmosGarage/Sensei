@@ -154,6 +154,16 @@ class DashboardTests(unittest.TestCase):
                     'container.addEventListener("toggle", () => rememberFolderState',
                     javascript,
                 )
+                self.assertIn("function prepareTopicForPractice(topic)", javascript)
+                self.assertIn(
+                    'practiceButton.addEventListener("click", () => '
+                    "prepareTopicForPractice(topic));",
+                    javascript,
+                )
+                self.assertIn(
+                    'byId("context-input").value = topic.description || "";',
+                    javascript,
+                )
                 self.assertIn("function renderNotation(target)", javascript)
                 self.assertIn("setNotationText(byId(\"arena-prompt\")", javascript)
                 self.assertIn('badge.className = "option-letter"', javascript)

@@ -431,6 +431,20 @@ function renderSubjectFilters(groups) {
   });
 }
 
+function prepareTopicForPractice(topic) {
+  closeArena();
+  byId("subject-input").value = topic.course;
+  byId("topic-input").value = topic.name;
+  byId("context-input").value = topic.description || "";
+  setGenerationStatus(
+    byId("form-status"),
+    `Review the practice instructions for ${topic.name}, then start the practice chat.`,
+  );
+  showView("dojo");
+  byId("focus-form").scrollIntoView({ behavior: "smooth", block: "center" });
+  byId("context-input").focus({ preventScroll: true });
+}
+
 function topicCard(topic) {
   const card = skillTemplate.content.firstElementChild.cloneNode(true);
   card.querySelector(".skill-subject").textContent = topic.course;
@@ -445,11 +459,7 @@ function topicCard(topic) {
   const practiceButton = card.querySelector(".practice-button");
   const deleteButton = card.querySelector(".delete-topic-button");
   deleteButton.setAttribute("aria-label", `Delete ${topic.name} and its saved data`);
-  practiceButton.addEventListener("click", () => startAdaptiveQuest(
-    topic.id,
-    generationStatus,
-    { resetSession: true },
-  ));
+  practiceButton.addEventListener("click", () => prepareTopicForPractice(topic));
   deleteButton.addEventListener("click", () => deleteTopic(
     topic,
     deleteButton,
