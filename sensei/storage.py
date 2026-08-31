@@ -733,9 +733,7 @@ class LearningStore:
             raise ValueError("That study topic does not exist.")
         return dict(row)
 
-    def delete_study_topic(self, skill_id: str) -> dict[str, Any]:
-        """Permanently remove one Atlas topic and all learner data tied to it."""
-
+    def _atlas_topic_for_progress_change(self, skill_id: str) -> sqlite3.Row:
         row = self.connection.execute(
             """SELECT s.id, s.name, s.source,
                       EXISTS(
@@ -747,30 +745,58 @@ class LearningStore:
         ).fetchone()
         if row is None or (row["source"] != "learner" and not row["has_attempts"]):
             raise ValueError("That Atlas topic does not exist.")
+        return row
 
-        deleted_attempts = int(
-            self.connection.execute(
-                "SELECT COUNT(*) AS count FROM attempts WHERE skill_id = ?",
-                (skill_id,),
-            ).fetchone()["count"]
+    def _topic_progress_summary(self, skill_id: str) -> tuple[int, int]:
+        row = self.connection.execute(
+            """SELECT COUNT(a.id) AS attempts,
+                      COALESCE(SUM(x.points), 0) AS xp
+                 FROM attempts a
+                 LEFT JOIN xp_events x ON x.attempt_id = a.id
+                WHERE a.skill_id = ?""",
+            (skill_id,),
+        ).fetchone()
+        return int(row["attempts"]), int(row["xp"])
+
+    def _clear_topic_progress(self, skill_id: str) -> None:
+        self.connection.execute(
+            """DELETE FROM xp_events
+                WHERE attempt_id IN (
+                    SELECT id FROM attempts WHERE skill_id = ?
+                )""",
+            (skill_id,),
         )
+        self.connection.execute(
+            "DELETE FROM attempts WHERE skill_id = ?", (skill_id,)
+        )
+        self.connection.execute(
+            "DELETE FROM misconceptions WHERE skill_id = ?", (skill_id,)
+        )
+        self.connection.execute(
+            "DELETE FROM mastery WHERE skill_id = ?", (skill_id,)
+        )
+
+    def restart_study_topic(self, skill_id: str) -> dict[str, Any]:
+        """Reset one Atlas topic's progress while preserving the topic itself."""
+
+        row = self._atlas_topic_for_progress_change(skill_id)
+        deleted_attempts, removed_xp = self._topic_progress_summary(skill_id)
         with self.connection:
-            self.connection.execute(
-                """DELETE FROM xp_events
-                    WHERE attempt_id IN (
-                        SELECT id FROM attempts WHERE skill_id = ?
-                    )""",
-                (skill_id,),
-            )
-            self.connection.execute(
-                "DELETE FROM attempts WHERE skill_id = ?", (skill_id,)
-            )
-            self.connection.execute(
-                "DELETE FROM misconceptions WHERE skill_id = ?", (skill_id,)
-            )
-            self.connection.execute(
-                "DELETE FROM mastery WHERE skill_id = ?", (skill_id,)
-            )
+            self._clear_topic_progress(skill_id)
+        return {
+            "skill_id": str(row["id"]),
+            "topic": str(row["name"]),
+            "deleted_attempts": deleted_attempts,
+            "removed_xp": removed_xp,
+        }
+
+    def delete_study_topic(self, skill_id: str) -> dict[str, Any]:
+        """Permanently remove one Atlas topic and all learner data tied to it."""
+
+        row = self._atlas_topic_for_progress_change(skill_id)
+        deleted_attempts, removed_xp = self._topic_progress_summary(skill_id)
+        with self.connection:
+            self._clear_topic_progress(skill_id)
             if row["source"] == "learner":
                 self.connection.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
 
@@ -778,6 +804,7 @@ class LearningStore:
             "skill_id": str(row["id"]),
             "topic": str(row["name"]),
             "deleted_attempts": deleted_attempts,
+            "removed_xp": removed_xp,
         }
 
     def _upsert_misconception(

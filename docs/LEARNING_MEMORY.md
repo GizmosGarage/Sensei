@@ -159,6 +159,8 @@ No old problem transcript is replayed. This keeps personalization approximately 
 | `/export [path]` | Writes a new JSON export and refuses to overwrite an existing file. |
 | `/backup [path]` | Uses SQLite's backup API and refuses to overwrite an existing file. |
 | `/delete-data` | Requires exact `DELETE` confirmation, clears personal records, and keeps the empty schema and skill catalog. |
+| Dashboard **Restart** | Clears one topic's attempts, XP, mastery, misconceptions, and review progress while keeping the topic and folder. |
+| Dashboard **Delete** | Clears the same topic-specific learning data and removes learner-created topic metadata. |
 | `--database PATH` | Uses another local database. |
 | `--no-memory` | Runs without opening or writing a learning database. |
 

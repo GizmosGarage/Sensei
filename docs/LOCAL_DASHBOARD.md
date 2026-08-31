@@ -55,11 +55,13 @@ folder, topic names, and practice briefs become durable learning data.
 9. Submitting an answer captures the server-counted help use, and recording the attempt
    atomically updates the SQLite mastery and XP records.
 
-Each topic card has its own **Delete** action. After a permanent-deletion warning,
-Sensei removes that topic's attempts, XP events, mastery, misconceptions, and pending
-in-process questions. Learner-created topic metadata is removed as well. Bundled
-catalog definitions remain available, but a deleted practiced catalog topic leaves the
-Atlas when its personal learning records are cleared.
+Each topic card has **Restart** and **Delete** actions. After a reset warning,
+**Restart** removes that topic's attempts, XP events, mastery, misconceptions, review
+progress, and pending in-process questions while preserving the learner-created topic
+and its folder. The card returns to 0/100 with no encounters. **Delete** clears the same
+learning data and also removes learner-created topic metadata. Bundled catalog
+definitions remain available, but a deleted practiced catalog topic leaves the Atlas
+when its personal learning records are cleared.
 
 Curated and deterministic generators remain available for their supported skills.
 Symbolic math answers are checked with the restricted SymPy verifier.

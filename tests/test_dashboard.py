@@ -123,6 +123,7 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn('data-view="past-quest"', html)
                 self.assertIn('id="subject-filters"', html)
                 self.assertIn("file its topics into named folders", html)
+                self.assertIn('class="restart-topic-button"', html)
                 self.assertIn('class="delete-topic-button"', html)
                 self.assertIn('id="folder-dialog"', html)
                 self.assertIn('id="pdf-import-form"', html)
@@ -135,6 +136,8 @@ class DashboardTests(unittest.TestCase):
             with urlopen(f"{base_url}/assets/app.js", timeout=5) as response:
                 javascript = response.read().decode("utf-8")
                 self.assertIn("It cannot be recovered once deleted.", javascript)
+                self.assertIn('postJson("/api/study/restart"', javascript)
+                self.assertIn("The topic and its folder will stay in your Atlas.", javascript)
                 self.assertIn(
                     'function openArena(quest) {\n  byId("chat-history").replaceChildren();',
                     javascript,
@@ -256,6 +259,74 @@ class DashboardTests(unittest.TestCase):
                 self.assertEqual(
                     [], list(store.connection.execute("PRAGMA foreign_key_check"))
                 )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_dashboard_restarts_topic_progress_without_deleting_topic(self) -> None:
+        with LearningStore(self.database) as store:
+            topic = store.create_study_topic(
+                subject="Chemistry",
+                topic="Stoichiometry",
+                context="Mole ratios",
+            )
+            folder = store.create_topic_folder(
+                subject="Chemistry", name="Exam review", skill_ids=[topic["id"]]
+            )
+            store.record_event(
+                LearningEvent(
+                    skill_id=topic["id"],
+                    outcome=Outcome.CORRECT,
+                    misconception=None,
+                    evidence="The response used the correct mole ratio.",
+                    confidence=1.0,
+                    problem="Convert reactant moles to product moles.",
+                    hints_used=0,
+                    solution_revealed=False,
+                    tutor_turns=1,
+                )
+            )
+
+        server = create_server(
+            self.service,
+            port=0,
+            error_recorder=self.error_recorder,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://{LOOPBACK_HOST}:{server.server_address[1]}"
+        try:
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                csrf_token = json.load(response)["csrf_token"]
+            request = Request(
+                f"{base_url}/api/study/restart",
+                data=json.dumps({"skill_id": topic["id"]}).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Origin": base_url,
+                    "X-Sensei-CSRF": csrf_token,
+                },
+                method="POST",
+            )
+            with urlopen(request, timeout=5) as response:
+                restart = json.load(response)["restarted_topic"]
+            self.assertEqual(topic["id"], restart["skill_id"])
+            self.assertEqual(1, restart["deleted_attempts"])
+            self.assertEqual(25, restart["removed_xp"])
+
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                state = json.load(response)
+            self.assertEqual(1, len(state["study_topics"]))
+            self.assertEqual(topic["id"], state["study_topics"][0]["id"])
+            self.assertEqual(0, state["study_topics"][0]["attempts_count"])
+            self.assertEqual(0.0, state["study_topics"][0]["mastery_score"])
+            self.assertEqual("not started", state["study_topics"][0]["mastery_label"])
+            self.assertEqual([], state["recent_attempts"])
+            self.assertEqual(0, state["profile"]["attempts"])
+            self.assertEqual(0, state["profile"]["total_xp"])
+            self.assertEqual([topic["id"]], state["topic_folders"][0]["topic_ids"])
+            self.assertEqual(folder["id"], state["topic_folders"][0]["id"])
         finally:
             server.shutdown()
             server.server_close()

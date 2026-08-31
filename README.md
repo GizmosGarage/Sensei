@@ -83,8 +83,10 @@ python -m sensei.dashboard --model "gpt-5.4-mini" --scanner-model "gpt-5.4-mini"
 The dashboard lets a learner name a subject, topic, and practice instructions. The
 configured LLM drafts and reviews one problem at a time, while protected answer keys
 stay in the dashboard process until the attempt is checked and recorded. Every Atlas
-topic also has a confirmed delete action that removes its topic-specific learning data
-from the active database.
+topic also has two confirmed data controls: **Restart** clears that topic's attempts,
+mastery, misconceptions, review progress, and earned XP while keeping the topic in the
+Atlas; **Delete** removes the topic and its topic-specific learning data from the active
+database.
 
 The **Import textbook pages** path accepts a PDF up to 20 MB. A separately selectable
 scanner LLM reads the supplied text, diagrams, tables, and page images, then creates an

@@ -232,7 +232,7 @@ class PendingAttemptStore:
                 ) from error
 
     def discard_skill(self, skill_id: str) -> None:
-        """Forget every checked, unrecorded attempt for one deleted topic."""
+        """Forget every checked, unrecorded attempt for one topic."""
 
         with self._lock:
             tokens = [
@@ -442,7 +442,7 @@ class ChallengeStore:
             return challenge.quest, challenge.help_used, solution_revealed
 
     def discard_skill(self, skill_id: str) -> None:
-        """Forget generated questions and duplicate history for one deleted topic."""
+        """Forget generated questions and duplicate history for one topic."""
 
         with self._lock:
             tokens = [
@@ -539,6 +539,10 @@ class DashboardService:
     def delete_study_topic(self, skill_id: str) -> dict[str, Any]:
         with LearningStore(self.database_path, self.skills_path) as store:
             return store.delete_study_topic(skill_id)
+
+    def restart_study_topic(self, skill_id: str) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.restart_study_topic(skill_id)
 
     def create_topic_folder(
         self, *, subject: str, name: str, skill_ids: Collection[str]
@@ -1042,6 +1046,17 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     self.server.pending_attempts.discard_skill(skill_id)
                 self._send_json(200, {"deleted_topic": deletion})
                 return
+            if path == "/api/study/restart":
+                document = self._read_json({"skill_id"})
+                skill_id = document["skill_id"]
+                if not isinstance(skill_id, str) or len(skill_id) > 80:
+                    raise ValueError("Study topic ID must be valid text.")
+                with self.server.topic_state_lock:
+                    restart = self.server.service.restart_study_topic(skill_id)
+                    self.server.challenges.discard_skill(skill_id)
+                    self.server.pending_attempts.discard_skill(skill_id)
+                self._send_json(200, {"restarted_topic": restart})
+                return
             if path == "/api/folders/create":
                 document = self._read_json({"subject", "name", "skill_ids"})
                 subject = document["subject"]
@@ -1245,6 +1260,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 if path in {"/api/study/generate", "/api/quest/generate"}
                 else "The topic and its learning data could not be deleted."
                 if path == "/api/study/delete"
+                else "The topic's progress could not be restarted."
+                if path == "/api/study/restart"
                 else "The Atlas folder could not be saved."
                 if path.startswith("/api/folders/")
                 else "The local attempt could not be recorded."

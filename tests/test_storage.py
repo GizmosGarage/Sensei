@@ -369,6 +369,60 @@ class LearningStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not exist"):
             self.store.study_topic(topic["id"])
 
+    def test_restart_topic_clears_its_progress_but_preserves_topic_and_folder(self) -> None:
+        topic = self.store.create_study_topic(
+            subject="Chemistry",
+            topic="Stoichiometry",
+            context="Mole ratios and limiting reagents",
+        )
+        folder = self.store.create_topic_folder(
+            subject="Chemistry", name="Review", skill_ids=[topic["id"]]
+        )
+        self.store.record_event(event(), now=NOW)
+        self.store.record_event(
+            LearningEvent(
+                skill_id=topic["id"],
+                outcome=Outcome.INCORRECT,
+                misconception="Used mass as though it were moles.",
+                evidence="The conversion skipped molar mass.",
+                confidence=1.0,
+                problem="Convert 18 g H2O to moles.",
+                hints_used=0,
+                solution_revealed=False,
+                tutor_turns=1,
+            ),
+            now=NOW,
+        )
+
+        restart = self.store.restart_study_topic(topic["id"])
+
+        self.assertEqual(topic["id"], restart["skill_id"])
+        self.assertEqual(1, restart["deleted_attempts"])
+        self.assertEqual(5, restart["removed_xp"])
+        self.assertEqual(folder["id"], self.store.study_topic(topic["id"])["folder_id"])
+        progress = next(
+            item for item in self.store.study_topics() if item["id"] == topic["id"]
+        )
+        self.assertEqual(0, progress["attempts_count"])
+        self.assertEqual(0.0, progress["mastery_score"])
+        self.assertEqual("not started", progress["mastery_label"])
+        self.assertEqual(1, self.store.profile()["attempts"])
+        self.assertEqual(25, self.store.profile()["total_xp"])
+        for table in ("attempts", "misconceptions", "mastery"):
+            self.assertEqual(
+                0,
+                self.store.connection.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE skill_id = ?", (topic["id"],)
+                ).fetchone()[0],
+                table,
+            )
+        second_restart = self.store.restart_study_topic(topic["id"])
+        self.assertEqual(0, second_restart["deleted_attempts"])
+        self.assertEqual(0, second_restart["removed_xp"])
+        self.assertEqual(
+            [], list(self.store.connection.execute("PRAGMA foreign_key_check"))
+        )
+
     def test_imported_topic_collection_is_created_inside_one_folder(self) -> None:
         imported = self.store.create_topic_collection(
             subject="Physics",
