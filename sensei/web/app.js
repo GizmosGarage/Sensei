@@ -28,10 +28,38 @@ const generationStatuses = new Map();
 const deletingTopicIds = new Set();
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const CLIENT_ERROR_STORAGE_KEY = "sensei.pending-client-errors.v1";
+const FOLDER_STATE_STORAGE_KEY = "sensei.closed-topic-folders.v1";
 const MODEL_STORAGE_KEY = "sensei.model-routing.v1";
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const MAX_PENDING_CLIENT_ERRORS = 25;
 const reportedClientErrors = new WeakSet();
+const closedFolderIds = readClosedFolderIds();
+
+function readClosedFolderIds() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(FOLDER_STATE_STORAGE_KEY) || "[]");
+    return new Set(Array.isArray(stored) ? stored.filter((folderId) => typeof folderId === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function rememberFolderState(folderId, isOpen) {
+  if (isOpen) {
+    closedFolderIds.delete(folderId);
+  } else {
+    closedFolderIds.add(folderId);
+  }
+  try {
+    if (closedFolderIds.size) {
+      localStorage.setItem(FOLDER_STATE_STORAGE_KEY, JSON.stringify(Array.from(closedFolderIds)));
+    } else {
+      localStorage.removeItem(FOLDER_STATE_STORAGE_KEY);
+    }
+  } catch {
+    // Folder state still survives dashboard refreshes when storage is unavailable.
+  }
+}
 
 function readModelRouting() {
   try {
@@ -504,6 +532,7 @@ async function deleteFolder() {
   byId("folder-dialog-status").textContent = "Removing the folder…";
   try {
     await postJson("/api/folders/delete", { folder_id: folder.id });
+    rememberFolderState(folder.id, true);
     closeFolderDialog();
     await loadDashboard();
   } catch (error) {
@@ -589,7 +618,8 @@ function renderTopics(topics) {
       const container = document.createElement("details");
       container.className = "topic-folder";
       container.dataset.folderId = folder.id;
-      container.open = true;
+      container.open = !closedFolderIds.has(folder.id);
+      container.addEventListener("toggle", () => rememberFolderState(folder.id, container.open));
       const summary = document.createElement("summary");
       const icon = document.createElement("span");
       icon.className = "folder-icon";

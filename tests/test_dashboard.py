@@ -140,6 +140,18 @@ class DashboardTests(unittest.TestCase):
                 self.assertNotIn("function archiveActiveTurn()", javascript)
                 self.assertIn("scanner_model: selectedScannerModel()", javascript)
                 self.assertIn("model: selectedPracticeModel()", javascript)
+                self.assertIn(
+                    'const FOLDER_STATE_STORAGE_KEY = "sensei.closed-topic-folders.v1";',
+                    javascript,
+                )
+                self.assertIn(
+                    "container.open = !closedFolderIds.has(folder.id);",
+                    javascript,
+                )
+                self.assertIn(
+                    'container.addEventListener("toggle", () => rememberFolderState',
+                    javascript,
+                )
         finally:
             server.shutdown()
             server.server_close()
