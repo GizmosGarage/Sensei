@@ -444,10 +444,7 @@ button:disabled {
 }
 
 .forge-section {
-  display: grid;
-  grid-template-columns: minmax(270px, 0.72fr) minmax(0, 1.28fr);
-  gap: 54px;
-  max-width: 1080px;
+  max-width: 700px;
   margin: 0 auto 76px;
   padding: clamp(34px, 5vw, 58px);
   border-color: rgba(123, 198, 164, 0.25);
@@ -456,65 +453,6 @@ button:disabled {
     linear-gradient(145deg, rgba(21, 34, 31, 0.96), var(--panel));
 }
 
-.forge-intro h1 {
-  margin: 0;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(42px, 5.2vw, 62px);
-  font-weight: 400;
-  letter-spacing: -0.045em;
-  line-height: 0.98;
-}
-
-.sensei-message {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-  max-width: 430px;
-  margin-top: 27px;
-}
-
-.sensei-avatar {
-  width: 38px;
-  height: 38px;
-  display: grid;
-  place-items: center;
-  border: 1px solid rgba(123, 198, 164, 0.38);
-  border-radius: 50%;
-  color: var(--jade-bright);
-  background: rgba(123, 198, 164, 0.08);
-  font-family: Georgia, serif;
-}
-
-.sensei-message p {
-  margin: 0;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 4px 14px 14px 14px;
-  color: var(--muted);
-  background: rgba(0, 0, 0, 0.14);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.sensei-message strong {
-  display: block;
-  margin-bottom: 3px;
-  color: var(--jade-bright);
-  font-family: ui-monospace, "Cascadia Mono", monospace;
-  font-size: 9px;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-}
-
-.prompt-examples {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  margin-top: 24px;
-}
-
-.prompt-examples button,
 .help-button {
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -524,11 +462,6 @@ button:disabled {
   font-size: 10px;
 }
 
-.prompt-examples button {
-  padding: 7px 10px;
-}
-
-.prompt-examples button:hover,
 .help-button:hover {
   border-color: var(--jade);
   background: rgba(123, 198, 164, 0.1);
@@ -1835,15 +1768,6 @@ footer p {
 }
 
 @media (max-width: 980px) {
-  .forge-section {
-    grid-template-columns: 1fr;
-    gap: 30px;
-  }
-
-  .sensei-message {
-    max-width: 650px;
-  }
-
   .skill-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -1992,10 +1916,6 @@ footer p {
   .forge-section,
   .arena-section {
     padding: 22px;
-  }
-
-  .forge-intro h1 {
-    font-size: 42px;
   }
 
   .focus-form {

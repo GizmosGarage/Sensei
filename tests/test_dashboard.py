@@ -96,7 +96,7 @@ class DashboardTests(unittest.TestCase):
             with urlopen(f"{base_url}/", timeout=5) as response:
                 html = response.read().decode("utf-8")
                 self.assertIn("Sensei // Adaptive Dojo", html)
-                self.assertIn("Forge a questline", html)
+                self.assertNotIn("Forge a questline", html)
                 self.assertIn("Start practice chat", html)
                 self.assertIn("Ask Sensei for help", html)
                 self.assertNotIn("Ask Sensei for a hint", html)

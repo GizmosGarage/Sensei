@@ -1004,13 +1004,6 @@ document.querySelector(".brand").addEventListener("click", (event) => {
   showView("dojo");
 });
 window.addEventListener("hashchange", () => showView(viewFromHash(), { updateHash: false }));
-document.querySelectorAll(".prompt-examples button").forEach((button) => {
-  button.addEventListener("click", () => {
-    byId("subject-input").value = button.dataset.subject;
-    byId("topic-input").value = button.dataset.topic;
-    byId("topic-input").focus();
-  });
-});
 byId("new-question").addEventListener("click", () => {
   if (activeQuest) startAdaptiveQuest(activeQuest.skill_id, byId("arena-generation-status"));
 });
