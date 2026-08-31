@@ -252,13 +252,17 @@ function renderNotation(target) {
   }
 }
 
+function normalizeNotationEscapes(copy) {
+  return String(copy || "").replace(/\\{2,}(?=[A-Za-z()[\]])/g, "\\");
+}
+
 function setNotationText(target, copy) {
-  target.textContent = copy || "";
+  target.textContent = normalizeNotationEscapes(copy);
   renderNotation(target);
 }
 
 function inlineOptionNotation(copy) {
-  return String(copy || "")
+  return normalizeNotationEscapes(copy)
     .replaceAll("\\[", "\\(")
     .replaceAll("\\]", "\\)")
     .replace(/^\s*[A-D][.)]\s+/i, "");

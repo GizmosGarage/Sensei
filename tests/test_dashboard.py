@@ -171,6 +171,7 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn("setNotationText(byId(\"arena-prompt\")", javascript)
                 self.assertIn('badge.className = "option-letter"', javascript)
                 self.assertIn("function inlineOptionNotation(copy)", javascript)
+                self.assertIn("function normalizeNotationEscapes(copy)", javascript)
             with urlopen(f"{base_url}/assets/styles.css", timeout=5) as response:
                 stylesheet = response.read().decode("utf-8")
                 self.assertIn(".option-grid .option-letter", stylesheet)

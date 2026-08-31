@@ -82,6 +82,10 @@ class AdaptivePracticeTests(unittest.TestCase):
             "use inline \\(...\\) notation only",
             provider.requests[0][0]["content"],
         )
+        self.assertIn(
+            "every LaTeX command and delimiter must have one backslash",
+            provider.requests[0][0]["content"],
+        )
         self.assertIn("Requested subject: Chemistry", provider.requests[1][-1]["content"])
         self.assertIn(
             "Requested topic or skill: Stoichiometry",
@@ -287,6 +291,55 @@ class AdaptivePracticeTests(unittest.TestCase):
             "graph": None,
         }
         with self.assertRaisesRegex(PracticeGenerationError, "500 characters"):
+            parse_adaptive_quest(json.dumps(document), skill=SKILL)
+
+    def test_double_escaped_display_notation_is_repaired(self) -> None:
+        document = {
+            "title": "Constant limit",
+            "prompt": (
+                r"For \\(f(x)=6\\), determine "
+                r"\\(\\lim_{x \\to 13} f(x)\\)."
+            ),
+            "answer_type": "multiple_choice",
+            "answer": "B",
+            "options": [r"\\(-6\\)", r"\\(6\\)", r"\\(0\\)", "DNE"],
+            "help_steps": [
+                r"Use the constant-function rule for \\(f(x)=6\\).",
+                r"The output stays \\(6\\) as \\(x\\) approaches any value.",
+            ],
+            "solution": r"A constant function remains \\(6\\), so the limit is \\(6\\).",
+            "graph": None,
+        }
+
+        quest = parse_adaptive_quest(json.dumps(document), skill=SKILL)
+
+        self.assertEqual(
+            r"For \(f(x)=6\), determine \(\lim_{x \to 13} f(x)\).",
+            quest.prompt,
+        )
+        self.assertEqual((r"\(-6\)", r"\(6\)", r"\(0\)", "DNE"), quest.options)
+        self.assertEqual(
+            r"Use the constant-function rule for \(f(x)=6\).",
+            quest.help_steps[0],
+        )
+        self.assertEqual(
+            r"A constant function remains \(6\), so the limit is \(6\).",
+            quest.solution,
+        )
+
+    def test_unmatched_display_notation_is_rejected(self) -> None:
+        document = {
+            "title": "Broken notation",
+            "prompt": r"Evaluate \(x^2.",
+            "answer_type": "expression",
+            "answer": "4",
+            "options": [],
+            "hint": "Substitute the value.",
+            "solution": r"The value is \(4\).",
+            "graph": None,
+        }
+
+        with self.assertRaisesRegex(PracticeGenerationError, "unclosed notation"):
             parse_adaptive_quest(json.dumps(document), skill=SKILL)
 
     def test_dne_expression_key_is_checked_by_normalized_exact_match(self) -> None:

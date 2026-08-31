@@ -97,6 +97,43 @@ def _text(
     return value
 
 
+def _normalize_display_notation(value: str) -> str:
+    """Repair model output that JSON-escaped LaTeX more than once."""
+
+    return re.sub(
+        r"\\{2,}(?=[A-Za-z()\[\]])",
+        lambda _match: "\\",
+        value,
+    )
+
+
+def _display_text(
+    document: Mapping[str, object], field: str, *, maximum: int
+) -> str:
+    value = _normalize_display_notation(_text(document, field, maximum=maximum))
+    active_delimiter: str | None = None
+    for match in re.finditer(r"\\([()\[\]])", value):
+        token = match.group(1)
+        if token in {"(", "["}:
+            if active_delimiter is not None:
+                raise PracticeGenerationError(
+                    f"{field} contains nested or unclosed notation delimiters"
+                )
+            active_delimiter = token
+            continue
+        expected = "(" if token == ")" else "["
+        if active_delimiter != expected:
+            raise PracticeGenerationError(
+                f"{field} contains unmatched notation delimiters"
+            )
+        active_delimiter = None
+    if active_delimiter is not None:
+        raise PracticeGenerationError(
+            f"{field} contains an unclosed notation delimiter"
+        )
+    return value
+
+
 def _number(value: object, field: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise PracticeGenerationError(f"{field} must be a finite number")
@@ -455,7 +492,12 @@ def parse_adaptive_quest(
     ):
         raise PracticeGenerationError("options must be a list of non-empty strings")
     options = tuple(
-        re.sub(r"^[A-D][.)]\s+", "", str(option).strip(), flags=re.IGNORECASE)
+        re.sub(
+            r"^[A-D][.)]\s+",
+            "",
+            _display_text({"option": option}, "option", maximum=500),
+            flags=re.IGNORECASE,
+        )
         for option in raw_options
     )
     if any(len(option) > 500 for option in options):
@@ -474,7 +516,7 @@ def parse_adaptive_quest(
     if raw_help_steps is None:
         # Accept already-issued/test fixtures from practice API v4 while normalizing
         # every new quest to the progressive-help contract.
-        help_steps = (_text(document, "hint", maximum=500),)
+        help_steps = (_display_text(document, "hint", maximum=500),)
     else:
         if (
             not isinstance(raw_help_steps, list)
@@ -484,7 +526,10 @@ def parse_adaptive_quest(
             raise PracticeGenerationError(
                 "help_steps must contain from 2 to 4 non-empty steps"
             )
-        help_steps = tuple(str(step).strip() for step in raw_help_steps)
+        help_steps = tuple(
+            _display_text({"step": step}, "step", maximum=400)
+            for step in raw_help_steps
+        )
         if any(len(step) > 400 for step in help_steps):
             raise PracticeGenerationError(
                 "each help_steps entry must not exceed 400 characters"
@@ -495,7 +540,9 @@ def parse_adaptive_quest(
         raise PracticeGenerationError(
             "graphical topics require structured graph data, not a text-only description"
         )
-    prompt = _answer_only_prompt(_text(document, "prompt", maximum=1_000))
+    prompt = _answer_only_prompt(
+        _display_text(document, "prompt", maximum=1_000)
+    )
     if graph is not None and _graph_limit_topic(skill):
         prompt = _concise_graph_limit_prompt(prompt, answer_type)
     if graph is not None and re.search(r"\bgraph\s+description\s*:", prompt, re.I):
@@ -531,7 +578,7 @@ def parse_adaptive_quest(
         answer=answer,
         options=options,
         help_steps=help_steps,
-        solution=_text(
+        solution=_display_text(
             document,
             "solution",
             maximum=MAX_SOLUTION_CHARACTERS,
@@ -650,7 +697,10 @@ class AdaptiveQuestFactory:
                     "\\int instead of spelling formulas in ASCII. For chemical formulas, "
                     "ions, quantities, and reactions, use mhchem inside the delimiters, "
                     "for example \\(\\ce{2H2 + O2 -> 2H2O}\\). Escape every backslash "
-                    "correctly for valid JSON. Never use dollar-sign math delimiters. "
+                    "exactly once for valid JSON. After JSON decoding, every LaTeX "
+                    "command and delimiter must have one backslash, never two. Never "
+                    "double-escape delimiters into visible text such as \\\\( or \\\\). "
+                    "Never use dollar-sign math delimiters. "
                     "Keep prose outside the notation delimiters. Tell the learner "
                     "in the prompt to enter only the requested value when units apply. "
                     "Never tell the learner how many stages to use, ask them to show "
@@ -746,7 +796,9 @@ class AdaptiveQuestFactory:
                         "H2O, or reaction arrows in learner-visible fields. The hidden "
                         "answer field must remain in the restricted plain syntax. Reject "
                         "an option that uses display delimiters \\[...\\] or starts with "
-                        "an A-D label; the interface adds its own choice labels. "
+                        "an A-D label; the interface adds its own choice labels. Reject "
+                        "decoded fields with doubled LaTeX backslashes or unmatched "
+                        "notation delimiters. "
                         "For numeric answers, "
                         "answer_type=expression is required and is not an error. For "
                         "graphical limits, treat the structured graph as the displayed "
