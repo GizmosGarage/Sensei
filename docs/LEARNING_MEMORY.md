@@ -101,7 +101,7 @@ Each result begins with an evidence value:
 
 - correct: 100
 - partial: 55
-- incorrect: 10
+- incorrect: 0
 
 Each non-final **Ask Sensei for help** step subtracts 15 from the raw evidence value,
 never below zero. If the progressive help sequence reaches its final-answer step, the
@@ -112,7 +112,25 @@ uncertain evidence toward neutral 50:
 adjusted = 50 + (raw - 50) * confidence
 ```
 
-The first attempt sets the skill score. Later attempts blend 70% of the previous score with 30% of new evidence. Labels require repeated success:
+Mastery uses every recorded attempt and stays separate from XP. The evidence average
+captures how consistently the learner answers correctly, including reductions for help,
+partial answers, wrong answers, and low-confidence evaluation. A practice-confidence
+factor prevents a tiny sample from looking like mastery:
+
+```text
+accuracy = total evidence / attempts
+practice confidence = sqrt(min(attempts / 10, 1))
+mastery = accuracy * practice confidence
+```
+
+One perfect first attempt is therefore `31.62/100`, five perfect attempts are
+`70.71/100`, and seven perfect attempts reach `83.67/100`. Ten attempts provide full
+practice confidence; from then on, the score is the quality-adjusted evidence average.
+Because every attempt remains in that average, high-quality correct answers strengthen
+the score while partial and incorrect answers reduce its accuracy component. Incorrect
+attempts still earn effort XP, but they add no mastery evidence.
+
+Labels require repeated success:
 
 - `mastered`: score at least 80 and at least three correct attempts
 - `proficient`: score at least 65 and at least two correct attempts

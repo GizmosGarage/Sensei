@@ -1026,11 +1026,11 @@ async function askSenseiForHelp() {
     byId("help-panel").hidden = false;
     const reward = byId("help-reward");
     if (response.final_answer) {
-      reward.textContent = "Final answer revealed — this attempt can earn 0 XP and 0 mastery evidence.";
+      reward.textContent = "Final answer revealed — this attempt can earn 0 XP and contribute 0 mastery evidence.";
       reward.classList.add("final");
       button.textContent = "Final answer revealed";
     } else {
-      reward.textContent = `${response.reward.xp_if_correct} XP and ${Math.round(response.reward.mastery_evidence_if_correct)} mastery evidence remain for a correct answer. Step ${response.step_number} of ${response.total_steps}.`;
+      reward.textContent = `${response.reward.xp_if_correct} XP remain; a correct answer can contribute ${Math.round(response.reward.mastery_evidence_if_correct)}/100 mastery evidence. Your topic score also reflects practice volume and all saved answers. Step ${response.step_number} of ${response.total_steps}.`;
       reward.classList.remove("final");
       button.textContent = "Ask Sensei for help";
     }
@@ -1144,7 +1144,7 @@ async function recordAttempt() {
     const response = await postJson("/api/quest/record", { attempt_token: attemptToken });
     attemptToken = null;
     attemptRecorded = true;
-    byId("feedback-expected").textContent = `Recorded: +${response.progress.xp_awarded} XP · ${Math.round(response.progress.mastery_evidence)} mastery evidence · ${Math.round(response.progress.mastery_score)}/100 topic mastery.`;
+    byId("feedback-expected").textContent = `Recorded: +${response.progress.xp_awarded} XP · ${Math.round(response.progress.mastery_evidence)}/100 attempt evidence · ${Math.round(response.progress.mastery_score)}/100 topic mastery.`;
     button.hidden = true;
     byId("continue-practice").hidden = false;
     await loadDashboard();

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import re
 import sqlite3
 import uuid
@@ -18,7 +19,8 @@ from sensei.learning import LearningEvent, Outcome
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = REPOSITORY_ROOT / "data" / "sensei.db"
 DEFAULT_SKILLS_PATH = REPOSITORY_ROOT / "config" / "skills.json"
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
+FULL_MASTERY_PRACTICE_ATTEMPTS = 10
 
 
 MIGRATION_1 = """
@@ -192,6 +194,29 @@ CREATE INDEX idx_atlas_folder_topics_folder
     ON atlas_folder_topics(folder_id);
 """
 
+MIGRATION_9 = """
+ALTER TABLE attempts ADD COLUMN mastery_evidence REAL NOT NULL DEFAULT 0
+    CHECK (mastery_evidence >= 0 AND mastery_evidence <= 100);
+
+UPDATE attempts
+   SET mastery_evidence = ROUND(
+       CASE
+           WHEN solution_revealed = 1 THEN 0
+           ELSE 50 + (
+               MAX(
+                   0,
+                   CASE outcome
+                       WHEN 'correct' THEN 100.0
+                       WHEN 'partial' THEN 55.0
+                       ELSE 0.0
+                   END - 15.0 * hints_used
+               ) - 50
+           ) * confidence
+       END,
+       2
+   );
+"""
+
 
 @dataclass(frozen=True)
 class ProgressUpdate:
@@ -241,6 +266,25 @@ def mastery_label(score: float, correct_count: int, attempts_count: int) -> str:
     return "beginning"
 
 
+def mastery_score(total_evidence: float, attempts_count: int) -> float:
+    """Combine demonstrated accuracy with confidence earned through repetition.
+
+    Evidence is the quality-adjusted result of each attempt. Its running average
+    represents accuracy, while the square-root practice factor keeps a small
+    sample from claiming full mastery. Ten attempts provide full sample confidence.
+    """
+
+    if attempts_count < 0:
+        raise ValueError("attempts_count cannot be negative")
+    if attempts_count == 0:
+        return 0.0
+    bounded_average = max(0.0, min(100.0, total_evidence / attempts_count))
+    practice_factor = math.sqrt(
+        min(1.0, attempts_count / FULL_MASTERY_PRACTICE_ATTEMPTS)
+    )
+    return round(bounded_average * practice_factor, 2)
+
+
 def evidence_score(event: LearningEvent) -> float:
     if event.solution_revealed:
         # Seeing the final answer is useful for learning, but it is not evidence of
@@ -249,7 +293,7 @@ def evidence_score(event: LearningEvent) -> float:
     raw_score = {
         Outcome.CORRECT: 100.0,
         Outcome.PARTIAL: 55.0,
-        Outcome.INCORRECT: 10.0,
+        Outcome.INCORRECT: 0.0,
     }[event.outcome]
     if event.hints_used:
         raw_score = max(0.0, raw_score - 15.0 * event.hints_used)
@@ -408,12 +452,45 @@ class LearningStore:
                 (8, utc_now().isoformat()),
             )
             self.connection.commit()
+            applied.add(8)
+        if 9 not in applied:
+            self.connection.executescript(MIGRATION_9)
+            self._recalculate_mastery_scores()
+            self.connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (9, utc_now().isoformat()),
+            )
+            self.connection.commit()
         current = self.connection.execute(
             "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations"
         ).fetchone()["version"]
         if current != SCHEMA_VERSION:
             raise RuntimeError(
                 f"Unsupported database schema version {current}; expected {SCHEMA_VERSION}."
+            )
+
+    def _recalculate_mastery_scores(self) -> None:
+        """Apply the current scoring rule to migrated attempt history."""
+
+        totals = {
+            str(row["skill_id"]): (
+                float(row["total_evidence"]),
+                int(row["attempts_count"]),
+            )
+            for row in self.connection.execute(
+                """SELECT skill_id, SUM(mastery_evidence) AS total_evidence,
+                          COUNT(*) AS attempts_count
+                     FROM attempts
+                    GROUP BY skill_id"""
+            )
+        }
+        for row in self.connection.execute("SELECT skill_id FROM mastery"):
+            total_evidence, attempts_count = totals.get(
+                str(row["skill_id"]), (0.0, 0)
+            )
+            self.connection.execute(
+                "UPDATE mastery SET mastery_score = ? WHERE skill_id = ?",
+                (mastery_score(total_evidence, attempts_count), row["skill_id"]),
             )
 
     def _load_skills(self) -> list[dict[str, Any]]:
@@ -749,6 +826,7 @@ class LearningStore:
         if now.tzinfo is None:
             raise ValueError("now must be timezone-aware")
         timestamp = now.astimezone(timezone.utc).isoformat()
+        score = evidence_score(event)
 
         with self.connection:
             misconception_id = self._upsert_misconception(event, timestamp)
@@ -759,9 +837,10 @@ class LearningStore:
                        verification_kind, verifier_version, verification_submitted,
                        verification_expected, verification_detail,
                        quest_id, misconception_id, evidence,
-                       confidence, hints_used, solution_revealed, tutor_turns, created_at
+                       confidence, hints_used, solution_revealed, tutor_turns,
+                       created_at, mastery_evidence
                    ) VALUES (
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                    )""",
                 (
                     event.skill_id,
@@ -784,6 +863,7 @@ class LearningStore:
                     int(event.solution_revealed),
                     event.tutor_turns,
                     timestamp,
+                    score,
                 ),
             )
             attempt_id = int(cursor.lastrowid)
@@ -791,7 +871,6 @@ class LearningStore:
                 "SELECT * FROM mastery WHERE skill_id = ?", (event.skill_id,)
             ).fetchone()
             prior_attempts = int(previous["attempts_count"]) if previous else 0
-            prior_score = float(previous["mastery_score"]) if previous else 0.0
             prior_correct = int(previous["correct_count"]) if previous else 0
             prior_partial = int(previous["partial_count"]) if previous else 0
             prior_incorrect = int(previous["incorrect_count"]) if previous else 0
@@ -805,10 +884,15 @@ class LearningStore:
                 and event.hints_used == 0
                 and not event.solution_revealed
             )
-            score = evidence_score(event)
-            updated_score = score if prior_attempts == 0 else 0.7 * prior_score + 0.3 * score
-            updated_score = round(max(0.0, min(100.0, updated_score)), 2)
             attempts_count = prior_attempts + 1
+            total_evidence = float(
+                self.connection.execute(
+                    """SELECT COALESCE(SUM(mastery_evidence), 0) AS total
+                         FROM attempts WHERE skill_id = ?""",
+                    (event.skill_id,),
+                ).fetchone()["total"]
+            )
+            updated_score = mastery_score(total_evidence, attempts_count)
             correct_count = prior_correct + int(event.outcome is Outcome.CORRECT)
             partial_count = prior_partial + int(event.outcome is Outcome.PARTIAL)
             incorrect_count = prior_incorrect + int(event.outcome is Outcome.INCORRECT)

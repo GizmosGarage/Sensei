@@ -14,6 +14,7 @@ from sensei.storage import (
     MIGRATION_5,
     LearningStore,
     evidence_score,
+    mastery_score,
     xp_award,
     xp_level,
 )
@@ -60,7 +61,15 @@ class ProgressionRuleTests(unittest.TestCase):
         self.assertEqual(50.0, evidence_score(event(confidence=0.0)))
         self.assertEqual(85.0, evidence_score(event(hints_used=1)))
         self.assertEqual(70.0, evidence_score(event(hints_used=2)))
+        self.assertEqual(0.0, evidence_score(event(outcome=Outcome.INCORRECT)))
         self.assertEqual(0.0, evidence_score(event(solution_revealed=True)))
+
+    def test_mastery_combines_accuracy_with_practice_volume(self) -> None:
+        self.assertEqual(31.62, mastery_score(100.0, 1))
+        self.assertEqual(70.71, mastery_score(500.0, 5))
+        self.assertEqual(83.67, mastery_score(700.0, 7))
+        self.assertEqual(90.0, mastery_score(900.0, 10))
+        self.assertEqual(0.0, mastery_score(0.0, 0))
 
 
 class LearningStoreTests(unittest.TestCase):
@@ -78,14 +87,14 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(8, version)
+        self.assertEqual(9, version)
         self.assertEqual(37, len(self.store.skill_names()))
         self.store.close()
         self.store = LearningStore(self.database)
         migration_count = self.store.connection.execute(
             "SELECT COUNT(*) AS count FROM schema_migrations"
         ).fetchone()["count"]
-        self.assertEqual(8, migration_count)
+        self.assertEqual(9, migration_count)
 
     def test_schema_v1_database_migrates_and_backfills_provenance(self) -> None:
         self.store.close()
@@ -111,6 +120,14 @@ class LearningStoreTests(unittest.TestCase):
                )""",
             (NOW.isoformat(),),
         )
+        connection.execute(
+            """INSERT INTO mastery(
+                   skill_id, mastery_score, attempts_count, correct_count,
+                   partial_count, incorrect_count, independent_correct_count,
+                   success_streak, last_practiced_at, next_review_at, updated_at
+               ) VALUES ('chain_rule', 100, 1, 1, 0, 0, 1, 1, ?, ?, ?)""",
+            (NOW.isoformat(), NOW.isoformat(), NOW.isoformat()),
+        )
         connection.commit()
         connection.close()
 
@@ -124,8 +141,13 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(8, version)
+        self.assertEqual(9, version)
         self.assertIsNone(attempt["quest_id"])
+        self.assertEqual(100.0, attempt["mastery_evidence"])
+        progress = self.store.connection.execute(
+            "SELECT mastery_score FROM mastery WHERE skill_id = 'chain_rule'"
+        ).fetchone()
+        self.assertEqual(31.62, progress["mastery_score"])
 
     def test_schema_v2_database_migrates_quest_provenance(self) -> None:
         self.store.close()
@@ -149,7 +171,7 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(8, version)
+        self.assertEqual(9, version)
 
     def test_schema_v3_database_migrates_course_and_preserves_old_skills(self) -> None:
         self.store.close()
@@ -178,7 +200,7 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(8, version)
+        self.assertEqual(9, version)
 
     def test_schema_v6_removes_obsolete_skill_metadata_without_losing_topics(self) -> None:
         self.store.close()
@@ -396,17 +418,32 @@ class LearningStoreTests(unittest.TestCase):
     def test_record_event_updates_xp_mastery_and_review(self) -> None:
         first = self.store.record_event(event(), now=NOW)
         self.assertEqual(25, first.xp_awarded)
-        self.assertEqual(100.0, first.mastery_score)
-        self.assertEqual("developing", first.mastery_label)
+        self.assertEqual(31.62, first.mastery_score)
+        self.assertEqual("beginning", first.mastery_label)
         self.assertEqual("2026-08-23", first.next_review_at[:10])
 
-        self.store.record_event(event(), now=NOW)
-        third = self.store.record_event(event(), now=NOW)
-        self.assertEqual("mastered", third.mastery_label)
-        self.assertEqual("2026-08-29", third.next_review_at[:10])
+        for _ in range(5):
+            self.store.record_event(event(), now=NOW)
+        seventh = self.store.record_event(event(), now=NOW)
+        self.assertEqual(83.67, seventh.mastery_score)
+        self.assertEqual("mastered", seventh.mastery_label)
+        self.assertEqual("2026-09-22", seventh.next_review_at[:10])
         profile = self.store.profile()
-        self.assertEqual(75, profile["total_xp"])
+        self.assertEqual(175, profile["total_xp"])
         self.assertEqual(1, profile["skills_mastered"])
+
+    def test_wrong_answers_lower_mastery_without_deducting_xp(self) -> None:
+        for _ in range(5):
+            self.store.record_event(event(), now=NOW)
+        for _ in range(5):
+            update = self.store.record_event(
+                event(outcome=Outcome.INCORRECT), now=NOW
+            )
+
+        self.assertEqual(50.0, update.mastery_score)
+        self.assertEqual("developing", update.mastery_label)
+        self.assertEqual(5, update.xp_awarded)
+        self.assertEqual(150, update.total_xp)
 
     def test_record_event_preserves_report_and_verifier_provenance(self) -> None:
         verified = LearningEvent(
