@@ -9,7 +9,10 @@ description = "An API-backed tutor with learner-owned local SQLite memory"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "GizmosGarage" }]
-dependencies = ["sympy==1.14.0"]
+dependencies = [
+    "python-dotenv>=1.0,<2",
+    "sympy==1.14.0",
+]
 
 [project.scripts]
 sensei = "sensei.cli:main"

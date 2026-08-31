@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Collection
+from typing import Any, Collection, Mapping
 
 from sensei.learning import LearningEvent, Outcome
 
@@ -493,10 +493,7 @@ class LearningStore:
         context = " ".join(context.split())
         if len(context) > 2_000:
             raise ValueError("Study material must be 2,000 characters or fewer.")
-        identity = f"{subject.casefold()}\0{topic.casefold()}"
-        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
-        slug = re.sub(r"[^a-z0-9]+", "-", topic.casefold()).strip("-")[:40]
-        skill_id = f"focus-{slug or 'topic'}-{digest}"
+        skill_id = self._study_topic_id(subject, topic)
         timestamp = utc_now().isoformat()
         description = context or "No additional practice instructions were provided."
         sort_order = int(
@@ -525,6 +522,126 @@ class LearningStore:
                 ),
             )
         return self.study_topic(skill_id)
+
+    @staticmethod
+    def _study_topic_id(subject: str, topic: str) -> str:
+        identity = f"{subject.casefold()}\0{topic.casefold()}"
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+        slug = re.sub(r"[^a-z0-9]+", "-", topic.casefold()).strip("-")[:40]
+        return f"focus-{slug or 'topic'}-{digest}"
+
+    def create_topic_collection(
+        self,
+        *,
+        subject: str,
+        folder_name: str,
+        topics: Collection[Mapping[str, str]],
+    ) -> dict[str, Any]:
+        """Atomically add an imported topic set and file it in one Atlas folder."""
+
+        subject = self._study_text(subject, "Subject", 80)
+        for row in self.connection.execute("SELECT DISTINCT course FROM skills"):
+            existing = str(row["course"])
+            if existing.casefold() == subject.casefold():
+                subject = existing
+                break
+        folder_name, normalized_name = self._folder_name(folder_name)
+        if not topics:
+            raise ValueError("An imported folder must contain at least one topic.")
+        if len(topics) > 80:
+            raise ValueError("An imported folder cannot contain more than 80 topics.")
+
+        prepared: list[tuple[str, str, str]] = []
+        seen_names: set[str] = set()
+        for topic in topics:
+            name = self._study_text(str(topic.get("name", "")), "Topic", 120)
+            description = " ".join(str(topic.get("description", "")).split())
+            if not description:
+                raise ValueError(f"Imported topic {name!r} needs a practice brief.")
+            if len(description) > 2_000:
+                raise ValueError("Study material must be 2,000 characters or fewer.")
+            if name.casefold() in seen_names:
+                raise ValueError(f"Imported topic {name!r} appears more than once.")
+            seen_names.add(name.casefold())
+            prepared.append((self._study_topic_id(subject, name), name, description))
+
+        duplicate = self.connection.execute(
+            """SELECT 1 FROM atlas_folders
+                WHERE subject = ? COLLATE NOCASE AND normalized_name = ?""",
+            (subject, normalized_name),
+        ).fetchone()
+        if duplicate is not None:
+            raise ValueError(
+                f'A folder named “{folder_name}” already exists in {subject}.'
+            )
+
+        next_skill_order = int(
+            self.connection.execute(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM skills"
+            ).fetchone()["next_order"]
+        )
+        next_folder_order = int(
+            self.connection.execute(
+                """SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
+                     FROM atlas_folders WHERE subject = ? COLLATE NOCASE""",
+                (subject,),
+            ).fetchone()["next_order"]
+        )
+        folder_id = f"folder-{uuid.uuid4().hex}"
+        timestamp = utc_now().isoformat()
+        try:
+            with self.connection:
+                for offset, (skill_id, name, description) in enumerate(prepared):
+                    self.connection.execute(
+                        """INSERT INTO skills(
+                               id, course, name, unit, description,
+                               prerequisites_json, sort_order, source, created_at
+                           ) VALUES (?, ?, ?, ?, ?, '[]', ?, 'learner', ?)
+                           ON CONFLICT(id) DO UPDATE SET
+                               course = excluded.course,
+                               name = excluded.name,
+                               description = excluded.description""",
+                        (
+                            skill_id,
+                            subject,
+                            name,
+                            f"{subject} questline",
+                            description,
+                            next_skill_order + offset,
+                            timestamp,
+                        ),
+                    )
+                self.connection.execute(
+                    """INSERT INTO atlas_folders(
+                           id, subject, name, normalized_name, sort_order,
+                           created_at, updated_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        folder_id,
+                        subject,
+                        folder_name,
+                        normalized_name,
+                        next_folder_order,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                self.connection.executemany(
+                    """INSERT INTO atlas_folder_topics(folder_id, skill_id)
+                       VALUES (?, ?)
+                       ON CONFLICT(skill_id) DO UPDATE SET folder_id = excluded.folder_id""",
+                    ((folder_id, skill_id) for skill_id, _, _ in prepared),
+                )
+        except sqlite3.IntegrityError as error:
+            raise ValueError("The imported Atlas folder could not be created.") from error
+
+        folder = next(
+            item for item in self.topic_folders() if item["id"] == folder_id
+        )
+        return {
+            "folder": folder,
+            "topics": [self.study_topic(skill_id) for skill_id, _, _ in prepared],
+        }
 
     def study_topic(self, skill_id: str) -> dict[str, Any]:
         row = self.connection.execute(

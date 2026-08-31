@@ -1,3 +1,4 @@
+import base64
 import json
 import random
 import tempfile
@@ -11,15 +12,17 @@ from sensei.dashboard import (
     LOOPBACK_HOST,
     ChallengeStore,
     DashboardService,
+    HostedModelRouter,
     PendingAttemptStore,
     create_server,
     rank_name,
 )
 from sensei.errorlog import ErrorRecorder
 from sensei.generation import GeneratedQuestFactory
+from sensei.imports import CurriculumPlan, TopicProposal
 from sensei.learning import LearningEvent, Outcome
 from sensei.practice import AdaptiveQuestFactory
-from sensei.providers import CompletionResult
+from sensei.providers import APISettings, CompletionResult
 from sensei.storage import LearningStore
 from sensei.verification import CalculusVerifier
 
@@ -54,6 +57,19 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual("Dojo Adept", rank_name(4))
         self.assertEqual("Realm Scholar", rank_name(7))
         self.assertEqual("Grand Sensei", rank_name(10))
+
+    def test_model_router_builds_separate_selected_model_clients(self) -> None:
+        router = HostedModelRouter(
+            APISettings("test-key", "practice-default", "https://example.test/v1"),
+            "scanner-default",
+        )
+
+        practice = router.practice_factory("practice-specialist")
+        scanner = router.curriculum_scanner("scanner-specialist")
+
+        self.assertEqual("practice-specialist", practice.provider.model)
+        self.assertEqual("scanner-specialist", scanner.provider.model)
+        self.assertIsNot(practice.provider, scanner.provider)
 
     def test_deleted_topic_is_purged_from_in_process_quest_memory(self) -> None:
         skill_id = "precalc_linear_equations"
@@ -109,6 +125,9 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn("file its topics into named folders", html)
                 self.assertIn('class="delete-topic-button"', html)
                 self.assertIn('id="folder-dialog"', html)
+                self.assertIn('id="pdf-import-form"', html)
+                self.assertIn('id="practice-model-input"', html)
+                self.assertIn('id="scanner-model-input"', html)
                 self.assertNotIn("Name the quest.", html)
                 self.assertIn("/assets/app.js", html)
             with urlopen(f"{base_url}/assets/app.js", timeout=5) as response:
@@ -119,6 +138,8 @@ class DashboardTests(unittest.TestCase):
                     javascript,
                 )
                 self.assertNotIn("function archiveActiveTurn()", javascript)
+                self.assertIn("scanner_model: selectedScannerModel()", javascript)
+                self.assertIn("model: selectedPracticeModel()", javascript)
         finally:
             server.shutdown()
             server.server_close()
@@ -266,6 +287,93 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(2, len(state["study_topics"]))
             self.assertEqual(
                 {None}, {topic["folder_id"] for topic in state["study_topics"]}
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_dashboard_scans_pdf_into_a_new_topic_folder(self) -> None:
+        class Scanner:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def scan(
+                self,
+                pdf_bytes,
+                *,
+                filename,
+                subject_hint="",
+                folder_hint="",
+            ):
+                self.calls.append(
+                    (pdf_bytes, filename, subject_hint, folder_hint)
+                )
+                return CurriculumPlan(
+                    subject_hint or "Physics",
+                    folder_hint or "Motion chapter",
+                    (
+                        TopicProposal(
+                            "Position and displacement",
+                            "Interpret position, distance, and displacement.",
+                        ),
+                        TopicProposal(
+                            "Velocity graphs",
+                            "Read slope and signed area on motion graphs.",
+                        ),
+                    ),
+                )
+
+        scanner = Scanner()
+        server = create_server(
+            self.service,
+            port=0,
+            pdf_scanner=scanner,
+            error_recorder=self.error_recorder,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://{LOOPBACK_HOST}:{server.server_address[1]}"
+        pdf_bytes = b"%PDF-1.7\ntextbook-pages"
+        try:
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                state = json.load(response)
+                csrf_token = state["csrf_token"]
+                self.assertEqual("ready", state["runtime"]["pdf_import"])
+            request = Request(
+                f"{base_url}/api/study/import-pdf",
+                data=json.dumps(
+                    {
+                        "filename": "motion.pdf",
+                        "pdf_base64": base64.b64encode(pdf_bytes).decode("ascii"),
+                        "subject_hint": "Physics",
+                        "folder_hint": "Unit 1 motion",
+                        "scanner_model": "scanner-specialist",
+                    }
+                ).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Origin": base_url,
+                    "X-Sensei-CSRF": csrf_token,
+                },
+                method="POST",
+            )
+            with urlopen(request, timeout=5) as response:
+                imported = json.load(response)
+
+            self.assertEqual("scanner-specialist", imported["scanner_model"])
+            self.assertEqual("Unit 1 motion", imported["topic_folder"]["name"])
+            self.assertEqual(2, imported["topic_folder"]["topic_count"])
+            self.assertEqual(
+                [(pdf_bytes, "motion.pdf", "Physics", "Unit 1 motion")],
+                scanner.calls,
+            )
+            with urlopen(f"{base_url}/api/dashboard", timeout=5) as response:
+                state = json.load(response)
+            self.assertEqual(2, len(state["study_topics"]))
+            self.assertEqual(
+                {state["topic_folders"][0]["id"]},
+                {topic["folder_id"] for topic in state["study_topics"]},
             )
         finally:
             server.shutdown()
@@ -501,10 +609,26 @@ class DashboardTests(unittest.TestCase):
                 return CompletionResult(self.responses.pop(0), "stop")
 
         provider = Provider()
+
+        class Router:
+            default_practice_model = "practice-default"
+            default_scanner_model = "scanner-default"
+
+            def __init__(self) -> None:
+                self.practice_models = []
+
+            def practice_factory(self, requested_model):
+                self.practice_models.append(requested_model)
+                return AdaptiveQuestFactory(provider)
+
+            def curriculum_scanner(self, requested_model):
+                raise AssertionError("practice requests must not use the PDF scanner")
+
+        router = Router()
         server = create_server(
             self.service,
             port=0,
-            adaptive_factory=AdaptiveQuestFactory(provider),
+            model_router=router,
             error_recorder=self.error_recorder,
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -540,7 +664,7 @@ class DashboardTests(unittest.TestCase):
             skill_id = focus["study_topic"]["id"]
             generated = post(
                 "/api/study/generate",
-                {"skill_id": skill_id},
+                {"skill_id": skill_id, "model": "practice-specialist"},
                 csrf_token,
             )
             self.assertEqual("Chemistry", generated["quest"]["subject"])
@@ -548,7 +672,7 @@ class DashboardTests(unittest.TestCase):
             self.assertNotIn("answer", generated["quest"])
             generated_again = post(
                 "/api/study/generate",
-                {"skill_id": skill_id},
+                {"skill_id": skill_id, "model": "practice-specialist"},
                 csrf_token,
             )
             self.assertNotEqual(
@@ -586,6 +710,10 @@ class DashboardTests(unittest.TestCase):
             self.assertIn(
                 "Topic or skill: Stoichiometry",
                 provider.requests[2][-1]["content"],
+            )
+            self.assertEqual(
+                ["practice-specialist", "practice-specialist"],
+                router.practice_models,
             )
         finally:
             server.shutdown()

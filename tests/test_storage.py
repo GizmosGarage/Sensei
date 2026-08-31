@@ -347,6 +347,39 @@ class LearningStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not exist"):
             self.store.study_topic(topic["id"])
 
+    def test_imported_topic_collection_is_created_inside_one_folder(self) -> None:
+        imported = self.store.create_topic_collection(
+            subject="Physics",
+            folder_name="Motion chapter",
+            topics=[
+                {
+                    "name": "Position and displacement",
+                    "description": "Interpret position, distance, and displacement.",
+                },
+                {
+                    "name": "Velocity graphs",
+                    "description": "Read slope and signed area on motion graphs.",
+                },
+            ],
+        )
+
+        self.assertEqual("Motion chapter", imported["folder"]["name"])
+        self.assertEqual(2, imported["folder"]["topic_count"])
+        self.assertEqual(
+            {imported["folder"]["id"]},
+            {topic["folder_id"] for topic in imported["topics"]},
+        )
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            self.store.create_topic_collection(
+                subject="physics",
+                folder_name="motion chapter",
+                topics=[{"name": "Acceleration", "description": "Define acceleration."}],
+            )
+        self.assertEqual(2, len(self.store.study_topics()))
+        self.assertEqual(
+            [], list(self.store.connection.execute("PRAGMA foreign_key_check"))
+        )
+
     def test_delete_practiced_catalog_topic_keeps_only_catalog_definition(self) -> None:
         self.store.record_event(event(), now=NOW)
 

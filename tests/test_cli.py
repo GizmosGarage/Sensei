@@ -45,7 +45,11 @@ class CliTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             error_log = Path(directory) / "errors.jsonl"
             stderr = StringIO()
-            with redirect_stderr(stderr), patch.dict("os.environ", {}, clear=True):
+            with (
+                redirect_stderr(stderr),
+                patch("sensei.providers.load_dotenv"),
+                patch.dict("os.environ", {}, clear=True),
+            ):
                 status = main(["--error-log", str(error_log)])
 
             self.assertEqual(1, status)

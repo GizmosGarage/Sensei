@@ -8,7 +8,10 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Protocol, Sequence
+
+from dotenv import load_dotenv
 
 
 DEFAULT_API_BASE_URL = "https://api.openai.com/v1"
@@ -16,8 +19,10 @@ DEFAULT_API_MODEL = "gpt-5.4-mini"
 API_KEY_ENVIRONMENTS = ("SENSEI_LLM_API_KEY", "OPENAI_API_KEY")
 MODEL_ENVIRONMENT = "SENSEI_LLM_MODEL"
 BASE_URL_ENVIRONMENT = "SENSEI_LLM_BASE_URL"
+LOCAL_ENV_FILENAME = ".env"
 
-Message = dict[str, str]
+# Responses messages may contain either plain text or multimodal content blocks.
+Message = dict[str, object]
 TokenCallback = Callable[[str], None]
 
 
@@ -57,7 +62,9 @@ def api_settings_from_environment(
     model: str | None = None,
     base_url: str | None = None,
 ) -> APISettings:
-    """Resolve required API credentials and optional endpoint/model overrides."""
+    """Resolve credentials and overrides after loading a project-local .env file."""
+
+    load_dotenv(Path.cwd() / LOCAL_ENV_FILENAME, override=False)
 
     api_key = next(
         (

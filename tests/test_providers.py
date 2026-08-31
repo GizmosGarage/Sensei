@@ -1,5 +1,7 @@
 import json
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from sensei.providers import (
@@ -83,10 +85,12 @@ class ProviderTests(unittest.TestCase):
         )
 
     def test_environment_requires_a_key_and_supports_overrides(self) -> None:
-        with patch.dict("os.environ", {}, clear=True):
+        with patch("sensei.providers.load_dotenv"), patch.dict(
+            "os.environ", {}, clear=True
+        ):
             with self.assertRaisesRegex(ValueError, "API key is required"):
                 api_settings_from_environment()
-        with patch.dict(
+        with patch("sensei.providers.load_dotenv"), patch.dict(
             "os.environ",
             {
                 "OPENAI_API_KEY": "test-key",
@@ -99,6 +103,27 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual("test-key", settings.api_key)
         self.assertEqual("test-model", settings.model)
         self.assertEqual("https://example.test/v1", settings.base_url)
+
+    def test_environment_loads_dotenv_without_overriding_process_values(self) -> None:
+        with TemporaryDirectory() as directory:
+            dotenv_path = Path(directory) / ".env"
+            dotenv_path.write_text(
+                "OPENAI_API_KEY=file-key\n"
+                "SENSEI_LLM_MODEL=file-model\n"
+                "SENSEI_LLM_BASE_URL=https://file.example/v1\n",
+                encoding="utf-8",
+            )
+            with patch("sensei.providers.Path.cwd", return_value=Path(directory)):
+                with patch.dict(
+                    "os.environ",
+                    {"SENSEI_LLM_MODEL": "process-model"},
+                    clear=True,
+                ):
+                    settings = api_settings_from_environment()
+
+        self.assertEqual("file-key", settings.api_key)
+        self.assertEqual("process-model", settings.model)
+        self.assertEqual("https://file.example/v1", settings.base_url)
 
 
 if __name__ == "__main__":
