@@ -16,6 +16,7 @@ from sensei.verification import (
     VerificationKind,
     VerificationResult,
     VerificationStatus,
+    math_expression_latex,
 )
 
 
@@ -136,6 +137,7 @@ def _concise_graph_limit_prompt(prompt: str, answer_type: str) -> str:
             "a graphical-limit prompt must state the target x-value"
         )
     point = re.sub(r"\s+", "", target.group(1))
+    point_latex = math_expression_latex(point)
     lowered = prompt.casefold()
     mentions_left = "from the left" in lowered or "left-hand" in lowered
     mentions_right = (
@@ -156,10 +158,11 @@ def _concise_graph_limit_prompt(prompt: str, answer_type: str) -> str:
         if answer_type == "multiple_choice"
         else "Enter only the value of the limit."
     )
-    return (
-        "Use the displayed graph to determine the limit of f(x) as x approaches "
-        f"{point}{direction}. {instruction}"
-    )
+    direction_symbol = "^-" if direction else ""
+    if direction == " from the right":
+        direction_symbol = "^+"
+    limit = rf"\(\displaystyle \lim_{{x \to {point_latex}{direction_symbol}}} f(x)\)"
+    return f"Use the displayed graph to determine {limit}. {instruction}"
 
 
 def _answer_only_prompt(prompt: str) -> str:
@@ -451,7 +454,14 @@ def parse_adaptive_quest(
         isinstance(option, str) and option.strip() for option in raw_options
     ):
         raise PracticeGenerationError("options must be a list of non-empty strings")
-    options = tuple(str(option).strip() for option in raw_options)
+    options = tuple(
+        re.sub(r"^[A-D][.)]\s+", "", str(option).strip(), flags=re.IGNORECASE)
+        for option in raw_options
+    )
+    if any(len(option) > 500 for option in options):
+        raise PracticeGenerationError(
+            "each multiple-choice option must not exceed 500 characters"
+        )
     if answer_type == "multiple_choice":
         if len(options) != 4 or answer not in {"A", "B", "C", "D"}:
             raise PracticeGenerationError(
@@ -631,15 +641,27 @@ class AdaptiveQuestFactory:
                     "answer must use plain restricted math syntax such as 3/4, x^2, "
                     "sqrt(2), 6.02*10^23, or oo for positive infinity, and options "
                     "must be []. DNE is also accepted as an expression key when a "
-                    "requested value does not exist. Use plain-text "
-                    "math everywhere; never use LaTeX, dollar-sign math delimiters, or "
-                    "backslash commands. Tell the learner "
+                    "requested value does not exist. Keep only the hidden answer field "
+                    "in that restricted syntax. In every learner-visible field (prompt, "
+                    "options, help_steps, and solution), typeset mathematical notation "
+                    "with valid KaTeX-compatible LaTeX: wrap inline notation in \\(...\\) "
+                    "and a standalone equation in \\[...\\]. Use real constructs such "
+                    "as \\frac{a}{b}, x^{2}, \\sqrt{x}, \\lim, \\frac{d}{dx}, and "
+                    "\\int instead of spelling formulas in ASCII. For chemical formulas, "
+                    "ions, quantities, and reactions, use mhchem inside the delimiters, "
+                    "for example \\(\\ce{2H2 + O2 -> 2H2O}\\). Escape every backslash "
+                    "correctly for valid JSON. Never use dollar-sign math delimiters. "
+                    "Keep prose outside the notation delimiters. Tell the learner "
                     "in the prompt to enter only the requested value when units apply. "
                     "Never tell the learner how many stages to use, ask them to show "
                     "work, or ban otherwise valid methods. "
                     "Use answer_type=multiple_choice for conceptual, formula-name, or "
-                    "chemistry-notation questions; provide exactly four plain options "
-                    "and make answer exactly A, B, C, or D. Include help_steps as 2-4 "
+                    "chemistry-notation questions; provide exactly four concise options "
+                    "and make answer exactly A, B, C, or D. Do not prefix option text "
+                    "with A, B, C, or D because the interface supplies those labels. "
+                    "Within options, use inline \\(...\\) notation only—never standalone "
+                    "\\[...\\] notation—and keep each option as one compact paragraph. "
+                    "Include help_steps as 2-4 "
                     "short, ordered actions that move from the learner's first useful "
                     "move toward the solution. Each entry must reveal only the next "
                     "step, must make sense after the prior entries, and must not state "
@@ -653,8 +675,9 @@ class AdaptiveQuestFactory:
                     "Do not use trick "
                     "questions, ambiguous rounding, or facts that require current "
                     "events. Before emitting JSON, silently solve the exact final "
-                    "prompt from scratch and make the answer field equal the final "
-                    "line of the worked solution. Never include scratch work, false "
+                    "prompt from scratch and make the restricted-syntax answer field "
+                    "represent the same mathematical result as the final typeset line "
+                    "of the worked solution. Never include scratch work, false "
                     "starts, self-corrections, or alternate abandoned problems in any "
                     "field. Every encounter "
                     "must be materially new: vary the underlying function, graph "
@@ -717,6 +740,13 @@ class AdaptiveQuestFactory:
                         "uses them. Verify that help_steps are ordered, reveal only one "
                         "useful next action at a time, and do not state the final answer "
                         "or collapse the entire solution into an early step. "
+                        "Check that learner-visible mathematics is written as valid "
+                        "KaTeX LaTeX inside \\(...\\) or \\[...\\], and that chemistry "
+                        "notation uses \\ce{...}; reject raw ASCII formulas such as x^2, "
+                        "H2O, or reaction arrows in learner-visible fields. The hidden "
+                        "answer field must remain in the restricted plain syntax. Reject "
+                        "an option that uses display delimiters \\[...\\] or starts with "
+                        "an A-D label; the interface adds its own choice labels. "
                         "For numeric answers, "
                         "answer_type=expression is required and is not an error. For "
                         "graphical limits, treat the structured graph as the displayed "

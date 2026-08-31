@@ -130,6 +130,8 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn('id="scanner-model-input"', html)
                 self.assertNotIn("Name the quest.", html)
                 self.assertIn("/assets/app.js", html)
+                self.assertIn("/assets/vendor/katex/katex.min.js", html)
+                self.assertIn("/assets/vendor/katex/contrib/mhchem.min.js", html)
             with urlopen(f"{base_url}/assets/app.js", timeout=5) as response:
                 javascript = response.read().decode("utf-8")
                 self.assertIn("It cannot be recovered once deleted.", javascript)
@@ -152,6 +154,30 @@ class DashboardTests(unittest.TestCase):
                     'container.addEventListener("toggle", () => rememberFolderState',
                     javascript,
                 )
+                self.assertIn("function renderNotation(target)", javascript)
+                self.assertIn("setNotationText(byId(\"arena-prompt\")", javascript)
+                self.assertIn('badge.className = "option-letter"', javascript)
+                self.assertIn("function inlineOptionNotation(copy)", javascript)
+            with urlopen(f"{base_url}/assets/styles.css", timeout=5) as response:
+                stylesheet = response.read().decode("utf-8")
+                self.assertIn(".option-grid .option-letter", stylesheet)
+                self.assertIn(".option-grid.has-notation", stylesheet)
+                self.assertNotIn(".option-grid span {", stylesheet)
+            with urlopen(
+                f"{base_url}/assets/vendor/katex/katex.min.js",
+                timeout=5,
+            ) as response:
+                self.assertEqual(
+                    "text/javascript; charset=utf-8",
+                    response.headers["Content-Type"],
+                )
+                self.assertGreater(len(response.read()), 250_000)
+            with urlopen(
+                f"{base_url}/assets/vendor/katex/fonts/KaTeX_Main-Regular.woff2",
+                timeout=5,
+            ) as response:
+                self.assertEqual("font/woff2", response.headers["Content-Type"])
+                self.assertGreater(len(response.read()), 20_000)
         finally:
             server.shutdown()
             server.server_close()
@@ -447,6 +473,8 @@ class DashboardTests(unittest.TestCase):
             )
             self.assertEqual(200, status)
             self.assertEqual("verified_correct", checked["result"]["status"])
+            self.assertTrue(checked["result"]["submitted_latex"])
+            self.assertTrue(checked["result"]["expected_latex"])
             self.assertTrue(checked["attempt_token"])
 
             status, recorded = post(
@@ -540,7 +568,8 @@ class DashboardTests(unittest.TestCase):
                 csrf_token,
             )
             self.assertTrue(final["final_answer"])
-            self.assertIn(expected_quest.sample_answer, final["step"])
+            self.assertIn(r"\(", final["step"])
+            self.assertIn(r"\)", final["step"])
             self.assertEqual(0, final["reward"]["xp_if_correct"])
             self.assertEqual(0.0, final["reward"]["mastery_evidence_if_correct"])
 

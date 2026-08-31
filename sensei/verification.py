@@ -291,6 +291,15 @@ def parse_math_expression(
     return converted
 
 
+def math_expression_latex(expression: str) -> str:
+    """Render a validated answer expression as learner-facing LaTeX."""
+
+    normalized_word = re.sub(r"[^a-z]", "", expression.casefold())
+    if normalized_word in {"dne", "doesnotexist", "undefined"}:
+        return r"\mathrm{DNE}"
+    return sp.latex(parse_math_expression(expression))
+
+
 def _display(expression: sp.Expr, limit: int = 300) -> str:
     text = sp.sstr(expression)
     return text if len(text) <= limit else f"{text[: limit - 3]}..."

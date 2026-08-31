@@ -22,4 +22,13 @@ sensei-dashboard = "sensei.dashboard:main"
 include = ["sensei*"]
 
 [tool.setuptools.package-data]
-sensei = ["web/*.html", "web/*.css", "web/*.js"]
+sensei = [
+    "web/*.html",
+    "web/*.css",
+    "web/*.js",
+    "web/vendor/katex/*.css",
+    "web/vendor/katex/*.js",
+    "web/vendor/katex/LICENSE",
+    "web/vendor/katex/contrib/*.js",
+    "web/vendor/katex/fonts/*.woff2",
+]

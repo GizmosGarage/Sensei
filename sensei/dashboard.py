@@ -56,6 +56,7 @@ from sensei.verification import (
     MathInputError,
     VerificationResult,
     VerificationStatus,
+    math_expression_latex,
 )
 
 
@@ -68,6 +69,7 @@ CHALLENGE_TOKEN_LIFETIME_SECONDS = 60 * 60
 ADAPTIVE_PROMPT_HISTORY = 8
 ADAPTIVE_DISTINCT_ATTEMPTS = 3
 WEB_DIRECTORY = Path(__file__).resolve().parent / "web"
+KATEX_DIRECTORY = WEB_DIRECTORY / "vendor" / "katex"
 PracticeQuest = QuestTemplate | AdaptiveQuest
 ASSETS = {
     "/": (WEB_DIRECTORY / "index.html", "text/html; charset=utf-8"),
@@ -80,6 +82,19 @@ ASSETS = {
         "text/css; charset=utf-8",
     ),
 }
+for katex_asset in KATEX_DIRECTORY.rglob("*"):
+    if not katex_asset.is_file():
+        continue
+    content_type = {
+        ".css": "text/css; charset=utf-8",
+        ".js": "text/javascript; charset=utf-8",
+        ".woff2": "font/woff2",
+    }.get(katex_asset.suffix, "text/plain; charset=utf-8")
+    relative_asset = katex_asset.relative_to(KATEX_DIRECTORY).as_posix()
+    ASSETS[f"/assets/vendor/katex/{relative_asset}"] = (
+        katex_asset,
+        content_type,
+    )
 
 SCANNER_MODEL_ENVIRONMENT = "SENSEI_PDF_SCANNER_MODEL"
 MODEL_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}")
@@ -146,12 +161,23 @@ def rank_name(level: int) -> str:
     return "Dojo Novice"
 
 
+def _answer_latex(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return math_expression_latex(value)
+    except MathInputError:
+        return None
+
+
 def verification_document(result: VerificationResult) -> dict[str, str | None]:
     return {
         "kind": result.kind.value,
         "status": result.status.value,
         "submitted": result.submitted,
+        "submitted_latex": _answer_latex(result.submitted),
         "expected": result.expected,
+        "expected_latex": _answer_latex(result.expected),
         "detail": result.detail,
         "verifier_version": result.verifier_version,
     }
@@ -236,7 +262,7 @@ def quest_help_steps(quest: PracticeQuest) -> tuple[str, ...]:
             index = ord(quest.answer) - ord("A")
             final = f"Final answer: {quest.answer}. {quest.options[index]}"
         else:
-            final = f"Final answer: {quest.answer}"
+            final = f"Final answer: \\({math_expression_latex(quest.answer)}\\)"
         return (*steps, final)
 
     first_moves = {
@@ -261,7 +287,7 @@ def quest_help_steps(quest: PracticeQuest) -> tuple[str, ...]:
         quest.kind.value,
         "Identify the rule that matches the requested operation and apply it first.",
     )
-    return first, f"Final answer: {quest.sample_answer}"
+    return first, f"Final answer: \\({math_expression_latex(quest.sample_answer)}\\)"
 
 
 @dataclass(frozen=True)

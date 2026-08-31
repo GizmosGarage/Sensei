@@ -235,6 +235,35 @@ function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, Number(value) || 0));
 }
 
+function renderNotation(target) {
+  if (!target || typeof window.renderMathInElement !== "function") return;
+  try {
+    window.renderMathInElement(target, {
+      delimiters: [
+        { left: "\\[", right: "\\]", display: true },
+        { left: "\\(", right: "\\)", display: false },
+      ],
+      throwOnError: false,
+      strict: "ignore",
+      trust: false,
+    });
+  } catch (error) {
+    void reportClientProblem(error, "renderNotation");
+  }
+}
+
+function setNotationText(target, copy) {
+  target.textContent = copy || "";
+  renderNotation(target);
+}
+
+function inlineOptionNotation(copy) {
+  return String(copy || "")
+    .replaceAll("\\[", "\\(")
+    .replaceAll("\\]", "\\)")
+    .replace(/^\s*[A-D][.)]\s+/i, "");
+}
+
 function svgElement(name, attributes = {}, copy = "") {
   const element = document.createElementNS(SVG_NAMESPACE, name);
   Object.entries(attributes).forEach(([key, value]) => element.setAttribute(key, String(value)));
@@ -688,7 +717,7 @@ function renderHistory(attempts) {
     const row = historyTemplate.content.firstElementChild.cloneNode(true);
     row.dataset.outcome = attempt.outcome;
     row.querySelector(".history-skill").textContent = `${attempt.course} · ${attempt.skill_name}`;
-    row.querySelector(".history-problem").textContent = attempt.problem;
+    setNotationText(row.querySelector(".history-problem"), attempt.problem);
     const source = attempt.effective_outcome_source === "verifier" ? "checked " : "";
     row.querySelector(".history-outcome").textContent = `${source}${attempt.outcome}`;
     const time = row.querySelector(".history-time");
@@ -715,7 +744,10 @@ function beginPracticeSession(topic) {
   byId("chat-history").replaceChildren();
   byId("session-subject").textContent = topic.course;
   byId("session-topic").textContent = topic.name;
-  byId("session-context").textContent = topic.description || "No extra instructions provided.";
+  setNotationText(
+    byId("session-context"),
+    topic.description || "No extra instructions provided.",
+  );
 }
 
 function resetArenaFeedback() {
@@ -758,14 +790,19 @@ function renderOptions(quest) {
   const grid = byId("option-grid");
   grid.replaceChildren();
   grid.hidden = quest.answer_type !== "multiple_choice";
+  grid.classList.toggle(
+    "has-notation",
+    quest.options.some((option) => /\\[[(]/.test(option)),
+  );
   quest.options.forEach((option, index) => {
     const letter = String.fromCharCode(65 + index);
     const button = document.createElement("button");
     button.type = "button";
     const badge = document.createElement("span");
+    badge.className = "option-letter";
     badge.textContent = letter;
     const copy = document.createElement("b");
-    copy.textContent = option;
+    setNotationText(copy, inlineOptionNotation(option));
     button.append(badge, copy);
     button.addEventListener("click", () => {
       grid.querySelectorAll("button").forEach((item) => item.classList.remove("selected"));
@@ -784,7 +821,7 @@ function openArena(quest) {
   byId("arena-skill").textContent = `${quest.subject} · ${quest.skill_name}`;
   byId("arena-title").textContent = "Practice chat";
   byId("problem-title").textContent = quest.title;
-  byId("arena-prompt").textContent = quest.prompt;
+  setNotationText(byId("arena-prompt"), quest.prompt);
   renderGraph(quest.graph);
   byId("quest-answer").value = "";
   byId("quest-answer").placeholder = quest.answer_type === "multiple_choice" ? "Choose A, B, C, or D" : "Enter only the requested value";
@@ -984,7 +1021,7 @@ async function askSenseiForHelp() {
     activeHelpCount = response.hints_used;
     helpExhausted = response.final_answer;
     const step = document.createElement("li");
-    step.textContent = response.step;
+    setNotationText(step, response.step);
     byId("help-steps").append(step);
     byId("help-panel").hidden = false;
     const reward = byId("help-reward");
@@ -1060,17 +1097,23 @@ async function checkAnswer() {
     const feedback = byId("answer-feedback");
     const correct = result.status === "verified_correct";
     activeFeedback = { correct };
-    byId("learner-answer-copy").textContent = answer;
+    const submittedCopy = activeQuest.answer_type === "expression" && result.submitted_latex
+      ? `\\(${result.submitted_latex}\\)`
+      : answer;
+    setNotationText(byId("learner-answer-copy"), submittedCopy);
     byId("learner-answer-turn").hidden = false;
     feedback.classList.add(correct ? "correct" : "incorrect");
     byId("feedback-status").textContent = correct ? "Victory — your answer holds." : "Not yet — this encounter has another opening.";
     const detail = byId("feedback-detail");
     const showTechnicalDetail = activeQuest.source !== "adaptive";
-    detail.textContent = showTechnicalDetail ? result.detail : "";
+    setNotationText(detail, showTechnicalDetail ? result.detail : "");
     detail.hidden = !showTechnicalDetail;
-    byId("feedback-expected").textContent = correct ? "" : `Validated answer: ${result.expected}`;
+    const expectedCopy = result.expected_latex
+      ? `Validated answer: \\(${result.expected_latex}\\)`
+      : `Validated answer: ${result.expected || ""}`;
+    setNotationText(byId("feedback-expected"), correct ? "" : expectedCopy);
     if (response.solution) {
-      byId("solution-text").textContent = response.solution;
+      setNotationText(byId("solution-text"), response.solution);
       byId("solution-copy").hidden = false;
     }
     byId("record-attempt").hidden = !attemptToken;

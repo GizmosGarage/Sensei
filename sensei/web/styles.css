@@ -861,6 +861,24 @@ button:disabled {
   line-height: 1.6;
 }
 
+.arena-prompt .katex {
+  color: var(--paper);
+  font-size: 1.08em;
+}
+
+.katex-display {
+  max-width: 100%;
+  margin: 0.9em 0;
+  padding: 3px 0 7px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.katex-display > .katex {
+  min-width: max-content;
+  text-align: left;
+}
+
 .arena-generation-status {
   margin-top: 12px;
 }
@@ -1047,8 +1065,12 @@ button:disabled {
 .option-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 9px;
+  gap: 12px;
   margin: -5px 0 25px;
+}
+
+.option-grid.has-notation {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .option-grid[hidden] {
@@ -1056,12 +1078,13 @@ button:disabled {
 }
 
 .option-grid button {
+  min-width: 0;
   min-height: 54px;
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
   gap: 11px;
-  align-items: center;
-  padding: 9px 13px;
+  align-items: start;
+  padding: 13px;
   border: 1px solid var(--line);
   border-radius: 10px;
   color: var(--paper);
@@ -1076,7 +1099,7 @@ button:disabled {
   background: rgba(123, 198, 164, 0.09);
 }
 
-.option-grid span {
+.option-grid .option-letter {
   width: 28px;
   height: 28px;
   display: grid;
@@ -1089,9 +1112,22 @@ button:disabled {
 }
 
 .option-grid b {
+  min-width: 0;
+  padding-top: 4px;
   font-size: 13px;
   font-weight: 500;
-  line-height: 1.35;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.option-grid b .katex {
+  max-width: 100%;
+  font-size: 1.08em;
+}
+
+.option-grid b .katex-display {
+  margin: 0.4em 0;
+  padding: 0;
 }
 
 .answer-label {
@@ -1219,6 +1255,14 @@ button:disabled {
 
 .solution-copy p {
   color: #c7cfc8;
+  white-space: pre-line;
+}
+
+.solution-copy .katex,
+.help-steps .katex,
+.feedback-expected .katex,
+#learner-answer-copy .katex {
+  color: var(--paper);
 }
 
 .notation-help code {

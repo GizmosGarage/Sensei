@@ -36,17 +36,20 @@ class AdaptivePracticeTests(unittest.TestCase):
             {
                 "title": "Mole Ratio Trial",
                 "prompt": (
-                    "For 2 H2 + O2 -> 2 H2O, how many moles of H2O form "
-                    "from 3 moles of H2? Enter only the number."
+                    r"For \(\ce{2H2 + O2 -> 2H2O}\), how many moles of "
+                    r"\(\ce{H2O}\) form from \(3\) moles of \(\ce{H2}\)? "
+                    "Enter only the number."
                 ),
                 "answer_type": "expression",
                 "answer": "3",
                 "options": [],
                 "help_steps": [
-                    "Compare the coefficients of H2 and H2O.",
+                    r"Compare the coefficients of \(\ce{H2}\) and \(\ce{H2O}\).",
                     "Use that coefficient ratio to convert the given moles.",
                 ],
-                "solution": "The coefficient ratio is 2:2, or 1:1, so 3 moles form.",
+                "solution": (
+                    r"The coefficient ratio is \(2:2=1:1\), so \(3\) moles form."
+                ),
                 "graph": None,
             }
         )
@@ -73,6 +76,12 @@ class AdaptivePracticeTests(unittest.TestCase):
             "Every quantitative given must be necessary",
             provider.requests[0][0]["content"],
         )
+        self.assertIn("KaTeX-compatible LaTeX", provider.requests[0][0]["content"])
+        self.assertIn(r"\ce{2H2 + O2 -> 2H2O}", provider.requests[0][0]["content"])
+        self.assertIn(
+            "use inline \\(...\\) notation only",
+            provider.requests[0][0]["content"],
+        )
         self.assertIn("Requested subject: Chemistry", provider.requests[1][-1]["content"])
         self.assertIn(
             "Requested topic or skill: Stoichiometry",
@@ -90,6 +99,7 @@ class AdaptivePracticeTests(unittest.TestCase):
             "help_steps are ordered",
             provider.requests[1][0]["content"],
         )
+        self.assertIn("reject raw ASCII formulas", provider.requests[1][0]["content"])
 
     def test_fixable_draft_is_revised_with_feedback_instead_of_discarded(self) -> None:
         incorrect_key = json.dumps(
@@ -242,10 +252,10 @@ class AdaptivePracticeTests(unittest.TestCase):
                     "answer_type": "multiple_choice",
                     "answer": "B",
                     "options": [
-                        "Catalyst",
-                        "Limiting reagent",
-                        "Solvent",
-                        "Excess reagent",
+                        "A. Catalyst",
+                        "B) Limiting reagent",
+                        "C. Solvent",
+                        "D) Excess reagent",
                     ],
                     "hint": "Its name describes the cap it places on product.",
                     "solution": "The limiting reagent is exhausted first.",
@@ -254,12 +264,30 @@ class AdaptivePracticeTests(unittest.TestCase):
             ),
             skill=SKILL,
         )
+        self.assertEqual(
+            ("Catalyst", "Limiting reagent", "Solvent", "Excess reagent"),
+            quest.options,
+        )
         self.assertEqual(VerificationStatus.VERIFIED_CORRECT, quest.check("B").status)
         self.assertEqual(
             VerificationStatus.VERIFIED_CORRECT,
             quest.check("Limiting reagent").status,
         )
         self.assertEqual(VerificationStatus.VERIFIED_INCORRECT, quest.check("D").status)
+
+    def test_multiple_choice_rejects_an_unbounded_option(self) -> None:
+        document = {
+            "title": "Oversized option",
+            "prompt": "Choose the best answer.",
+            "answer_type": "multiple_choice",
+            "answer": "A",
+            "options": ["x" * 501, "Second", "Third", "Fourth"],
+            "hint": "Compare the choices.",
+            "solution": "The first choice is keyed.",
+            "graph": None,
+        }
+        with self.assertRaisesRegex(PracticeGenerationError, "500 characters"):
+            parse_adaptive_quest(json.dumps(document), skill=SKILL)
 
     def test_dne_expression_key_is_checked_by_normalized_exact_match(self) -> None:
         document = {
@@ -389,8 +417,8 @@ class AdaptivePracticeTests(unittest.TestCase):
             skill={**SKILL, "name": "Graphical limits"},
         )
         self.assertEqual(
-            "Use the displayed graph to determine the limit of f(x) as x approaches "
-            "2. Enter only the value of the limit.",
+            r"Use the displayed graph to determine \(\displaystyle \lim_{x \to 2} "
+            r"f(x)\). Enter only the value of the limit.",
             quest.prompt,
         )
 

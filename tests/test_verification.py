@@ -6,6 +6,7 @@ from sensei.verification import (
     CalculusVerifier,
     MathInputError,
     VerificationStatus,
+    math_expression_latex,
     parse_math_expression,
 )
 
@@ -19,6 +20,11 @@ class RestrictedParserTests(unittest.TestCase):
 
     def test_decimal_is_converted_to_an_exact_rational(self) -> None:
         self.assertEqual(sp.Rational(1, 2), parse_math_expression("0.5"))
+
+    def test_validated_expressions_have_paper_style_latex(self) -> None:
+        self.assertEqual(r"\frac{9}{2}", math_expression_latex("9/2"))
+        self.assertEqual(r"\sqrt{2}", math_expression_latex("sqrt(2)"))
+        self.assertEqual(r"\mathrm{DNE}", math_expression_latex("does not exist"))
 
     def test_rejects_code_and_object_introspection_syntax(self) -> None:
         unsafe = [
