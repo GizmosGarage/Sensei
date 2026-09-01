@@ -50,6 +50,18 @@ REPLACEMENT_FEEDBACK_MARKERS = (
     "off-topic",
     "outside the requested",
     "wrong scope",
+    "does not address",
+    "does not cover",
+    "does not use",
+    "does not actually use",
+    "ignores required",
+    "incompletely follows",
+    "unused",
+    "redundant",
+    "not utilized",
+    "physics error",
+    "scientific error",
+    "malformed",
     "ambiguous",
     "contradiction",
     "contradictory",
@@ -156,33 +168,50 @@ def _graph_limit_topic(skill: Mapping[str, object]) -> bool:
 
 
 def _concise_graph_limit_prompt(prompt: str, answer_type: str) -> str:
+    searchable = (
+        prompt.replace(r"\(", "")
+        .replace(r"\)", "")
+        .replace(r"\[", "")
+        .replace(r"\]", "")
+        .replace("−", "-")
+    )
+    point_pattern = (
+        r"(?P<point>[+-]?(?:\d+(?:\.\d+)?|\.\d+|"
+        r"\\?pi(?:\s*/\s*\d+)?))"
+    )
+    side_pattern = r"(?P<side>\s*\^\s*(?:\{\s*[+-]\s*\}|[+-]))?"
     target = re.search(
-        r"\bx\s*(?:approaches|->|→)\s*"
-        r"([+-]?(?:\d+(?:\.\d+)?|\.\d+|pi(?:\s*/\s*\d+)?))",
-        prompt,
+        rf"\bx\s*(?:approaches|->|→|\\(?:to|rightarrow))\s*"
+        rf"{point_pattern}{side_pattern}",
+        searchable,
         re.I,
     )
     if target is None:
         target = re.search(
-            r"\blimit\b[^.?!]{0,80}?\bat\s+x\s*=\s*"
-            r"([+-]?(?:\d+(?:\.\d+)?|\.\d+|pi(?:\s*/\s*\d+)?))",
-            prompt,
+            rf"\blimit\b[^.?!]{{0,80}}?\bat\s+x\s*=\s*"
+            rf"{point_pattern}{side_pattern}",
+            searchable,
             re.I,
         )
     if target is None:
         raise PracticeGenerationError(
             "a graphical-limit prompt must state the target x-value"
         )
-    point = re.sub(r"\s+", "", target.group(1))
+    point = re.sub(r"\s+", "", target.group("point")).replace(r"\pi", "pi")
     point_latex = math_expression_latex(point)
-    lowered = prompt.casefold()
+    lowered = searchable.casefold()
     mentions_left = "from the left" in lowered or "left-hand" in lowered
     mentions_right = (
         "from the right" in lowered
         or "right-hand" in lowered
         or "right side" in lowered
     )
-    if "two-sided" in lowered or (mentions_left and mentions_right):
+    explicit_side = target.group("side") or ""
+    if "+" in explicit_side:
+        direction = " from the right"
+    elif "-" in explicit_side:
+        direction = " from the left"
+    elif "two-sided" in lowered or (mentions_left and mentions_right):
         direction = ""
     elif mentions_left:
         direction = " from the left"
@@ -195,9 +224,9 @@ def _concise_graph_limit_prompt(prompt: str, answer_type: str) -> str:
         if answer_type == "multiple_choice"
         else "Enter only the value of the limit."
     )
-    direction_symbol = "^-" if direction else ""
+    direction_symbol = "^{-}" if direction else ""
     if direction == " from the right":
-        direction_symbol = "^+"
+        direction_symbol = "^{+}"
     limit = rf"\(\displaystyle \lim_{{x \to {point_latex}{direction_symbol}}} f(x)\)"
     return f"Use the displayed graph to determine {limit}. {instruction}"
 

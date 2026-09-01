@@ -68,6 +68,7 @@ ATTEMPT_TOKEN_LIFETIME_SECONDS = 15 * 60
 CHALLENGE_TOKEN_LIFETIME_SECONDS = 60 * 60
 ADAPTIVE_PROMPT_HISTORY = 8
 ADAPTIVE_DISTINCT_ATTEMPTS = 3
+PRACTICE_MAX_OUTPUT_TOKENS = 4_096
 WEB_DIRECTORY = Path(__file__).resolve().parent / "web"
 KATEX_DIRECTORY = WEB_DIRECTORY / "vendor" / "katex"
 PracticeQuest = QuestTemplate | AdaptiveQuest
@@ -130,7 +131,7 @@ class HostedModelRouter:
                 self.settings.api_key,
                 selected,
                 base_url=self.settings.base_url,
-                max_output_tokens=1_536,
+                max_output_tokens=PRACTICE_MAX_OUTPUT_TOKENS,
                 json_mode=True,
             )
         )
@@ -936,6 +937,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             )
             return
         path = urlsplit(self.path).path
+        generation_context: dict[str, object] = {}
         try:
             if path == "/api/errors":
                 document = self._read_json({"message", "stack", "source"})
@@ -1114,6 +1116,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     document.get("model"),
                     fallback=self.server.default_practice_model,
                 )
+                generation_context = {
+                    "skill_id": skill_id,
+                    "model": selected_model,
+                }
                 with self.server.topic_state_lock:
                     skill = self.server.service.study_topic(skill_id)
                     challenge_token, quest = self.server.challenges.issue_adaptive(
@@ -1218,6 +1224,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             error_id = self._record_exception(
                 error,
                 "generate and validate adaptive encounter",
+                context=generation_context,
             )
             self.log_error(
                 "Adaptive generation failed validation (%s): %s",

@@ -14,6 +14,7 @@ from sensei.dashboard import (
     DashboardService,
     HostedModelRouter,
     PendingAttemptStore,
+    PRACTICE_MAX_OUTPUT_TOKENS,
     create_server,
     rank_name,
 )
@@ -70,6 +71,10 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual("practice-specialist", practice.provider.model)
         self.assertEqual("scanner-specialist", scanner.provider.model)
         self.assertIsNot(practice.provider, scanner.provider)
+        self.assertEqual(
+            PRACTICE_MAX_OUTPUT_TOKENS,
+            practice.provider.max_output_tokens,
+        )
 
     def test_deleted_topic_is_purged_from_in_process_quest_memory(self) -> None:
         skill_id = "precalc_linear_equations"
@@ -983,6 +988,12 @@ class DashboardTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+        generation_error = json.loads(
+            self.error_log.read_text(encoding="utf-8").strip()
+        )
+        self.assertEqual(skill["id"], generation_error["context"]["skill_id"])
+        self.assertIn("model", generation_error["context"])
 
     def test_generation_avoids_an_immediate_repeat_for_one_subject(self) -> None:
         server = create_server(

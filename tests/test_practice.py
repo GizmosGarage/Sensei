@@ -154,6 +154,61 @@ class AdaptivePracticeTests(unittest.TestCase):
         self.assertIn("Convert 100 centimeters to meters", revision_request)
         self.assertIn("Return one clean, self-contained replacement", revision_request)
 
+    def test_scope_or_science_failure_starts_over_without_anchoring(self) -> None:
+        flawed = json.dumps(
+            {
+                "title": "Charged Particle Paths",
+                "prompt": "Which ion bends more? Choose the best answer.",
+                "answer_type": "multiple_choice",
+                "answer": "A",
+                "options": ["Lighter ion", "Heavier ion", "Both", "Neither"],
+                "hint": "Compare the masses.",
+                "solution": "The lighter ion bends more.",
+                "graph": None,
+            }
+        )
+        replacement = json.dumps(
+            {
+                "title": "Mass-to-Charge Paths",
+                "prompt": "Which ion has the smallest mass-to-charge ratio?",
+                "answer_type": "multiple_choice",
+                "answer": "B",
+                "options": ["40/1", "20/2", "30/1", "60/2"],
+                "hint": "Compare each mass divided by charge magnitude.",
+                "solution": "The second ratio is the smallest.",
+                "graph": None,
+            }
+        )
+        provider = StubProvider(
+            [
+                flawed,
+                json.dumps(
+                    {
+                        "approved": False,
+                        "reason": (
+                            "The problem does not address the requested effect of "
+                            "different ion charges on trajectories."
+                        ),
+                    }
+                ),
+                replacement,
+                json.dumps({"approved": True, "reason": "Checked."}),
+            ]
+        )
+
+        quest = AdaptiveQuestFactory(provider).generate(
+            {
+                **SKILL,
+                "name": "Mass spectrometry",
+                "description": "Compare how ion mass and charge affect trajectories.",
+            }
+        )
+
+        self.assertEqual("Mass-to-Charge Paths", quest.title)
+        replacement_request = provider.requests[2][-1]["content"]
+        self.assertIn("Start over with a clean problem", replacement_request)
+        self.assertNotIn("Prior draft:", replacement_request)
+
     def test_repeated_graphical_limit_is_rejected_and_replaced(self) -> None:
         skill = {
             **SKILL,
@@ -493,6 +548,21 @@ class AdaptivePracticeTests(unittest.TestCase):
             skill={**SKILL, "name": "Graphical limits"},
         )
         self.assertNotIn("(0, 1)", quest.prompt)
+
+        document["prompt"] = (
+            r"Use the displayed graph to evaluate "
+            r"\(\lim_{x \to 2^{-}} f(x)\)."
+        )
+        quest = parse_adaptive_quest(
+            json.dumps(document),
+            skill={**SKILL, "name": "Graphical limits"},
+        )
+        self.assertEqual(
+            r"Use the displayed graph to determine "
+            r"\(\displaystyle \lim_{x \to 2^{-}} f(x)\). "
+            r"Enter only the value of the limit.",
+            quest.prompt,
+        )
 
     def test_graph_axes_expand_to_include_model_coordinates(self) -> None:
         document = {
