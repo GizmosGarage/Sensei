@@ -20,7 +20,6 @@ let activeHelpCount = 0;
 let helpExhausted = false;
 let revealingHelp = false;
 let generatingQuestion = false;
-let importingPdf = false;
 let activeSubjectFilter = "all";
 let editingFolderId = null;
 let editingFolderSubject = "";
@@ -29,8 +28,6 @@ const changingTopicIds = new Set();
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const CLIENT_ERROR_STORAGE_KEY = "sensei.pending-client-errors.v1";
 const FOLDER_STATE_STORAGE_KEY = "sensei.closed-topic-folders.v1";
-const MODEL_STORAGE_KEY = "sensei.model-routing.v1";
-const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const MAX_PENDING_CLIENT_ERRORS = 25;
 const reportedClientErrors = new WeakSet();
 const closedFolderIds = readClosedFolderIds();
@@ -59,50 +56,6 @@ function rememberFolderState(folderId, isOpen) {
   } catch {
     // Folder state still survives dashboard refreshes when storage is unavailable.
   }
-}
-
-function readModelRouting() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(MODEL_STORAGE_KEY) || "{}");
-    return stored && typeof stored === "object" ? stored : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveModelRouting() {
-  try {
-    localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify({
-      practice: byId("practice-model-input").value.trim(),
-      scanner: byId("scanner-model-input").value.trim(),
-    }));
-  } catch {
-    // Model choices still work for the current page when storage is unavailable.
-  }
-}
-
-function initializeModelRouting(runtime) {
-  const stored = readModelRouting();
-  const practiceInput = byId("practice-model-input");
-  const scannerInput = byId("scanner-model-input");
-  if (!practiceInput.value) {
-    practiceInput.value = stored.practice || runtime.default_practice_model || "";
-  }
-  if (!scannerInput.value) {
-    scannerInput.value = stored.scanner || runtime.default_scanner_model || "";
-  }
-}
-
-function selectedPracticeModel() {
-  return byId("practice-model-input").value.trim()
-    || dashboardState?.runtime.default_practice_model
-    || "";
-}
-
-function selectedScannerModel() {
-  return byId("scanner-model-input").value.trim()
-    || dashboardState?.runtime.default_scanner_model
-    || "";
 }
 
 function viewFromHash() {
@@ -742,7 +695,6 @@ function renderTopics(topics) {
       const folderTopics = group.topics.filter((topic) => topic.folder_id === folder.id);
       const container = document.createElement("details");
       container.className = "topic-folder";
-      container.dataset.folderId = folder.id;
       container.open = !closedFolderIds.has(folder.id);
       container.addEventListener("toggle", () => rememberFolderState(folder.id, container.open));
       const summary = document.createElement("summary");
@@ -960,7 +912,7 @@ async function startAdaptiveQuest(
   try {
     const response = await postJson(
       "/api/study/generate",
-      { skill_id: skillId, model: selectedPracticeModel() },
+      { skill_id: skillId },
       {
         retries: 1,
         onRetry: () => setGenerationStatus(
@@ -1011,86 +963,6 @@ async function createFocus(event) {
     byId("form-status").textContent = error.message;
   } finally {
     if (!generatingQuestion) byId("forge-button").disabled = false;
-  }
-}
-
-function pdfBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      const result = String(reader.result || "");
-      const separator = result.indexOf(",");
-      if (separator < 0) {
-        reject(new Error("Sensei could not read that PDF."));
-        return;
-      }
-      resolve(result.slice(separator + 1));
-    });
-    reader.addEventListener("error", () => reject(new Error("Sensei could not read that PDF.")));
-    reader.readAsDataURL(file);
-  });
-}
-
-function updatePdfFileCopy() {
-  const file = byId("pdf-input").files[0];
-  byId("pdf-file-copy").textContent = file
-    ? `${file.name} · ${(file.size / (1024 * 1024)).toFixed(1)} MB`
-    : "Choose textbook pages";
-}
-
-async function importPdf(event) {
-  event.preventDefault();
-  if (importingPdf || !dashboardState) return;
-  const file = byId("pdf-input").files[0];
-  const status = byId("pdf-import-status");
-  if (!file) {
-    status.textContent = "Choose a PDF first.";
-    byId("pdf-input").focus();
-    return;
-  }
-  if (!file.name.toLowerCase().endsWith(".pdf")) {
-    status.textContent = "Choose a file with a .pdf extension.";
-    return;
-  }
-  if (file.size > MAX_PDF_BYTES) {
-    status.textContent = "That PDF is larger than 20 MB. Upload a smaller set of pages.";
-    return;
-  }
-  if (dashboardState.runtime.pdf_import !== "ready") {
-    status.textContent = "PDF scanning is unavailable. Restart Sensei with a valid LLM API connection.";
-    return;
-  }
-
-  importingPdf = true;
-  const button = byId("pdf-import-button");
-  button.disabled = true;
-  byId("pdf-input").disabled = true;
-  status.textContent = `Reading every page with ${selectedScannerModel()}… This can take a minute.`;
-  try {
-    const response = await postJson("/api/study/import-pdf", {
-      filename: file.name,
-      pdf_base64: await pdfBase64(file),
-      subject_hint: byId("pdf-subject-input").value.trim(),
-      folder_hint: byId("pdf-folder-input").value.trim(),
-      scanner_model: selectedScannerModel(),
-    });
-    const topicCount = response.study_topics.length;
-    activeSubjectFilter = subjectKey(response.topic_folder.subject);
-    await loadDashboard();
-    showView("profile");
-    status.textContent = `Created “${response.topic_folder.name}” with ${topicCount} topic${topicCount === 1 ? "" : "s"} using ${response.scanner_model}.`;
-    const folder = document.querySelector(`[data-folder-id="${CSS.escape(response.topic_folder.id)}"]`);
-    if (folder) {
-      folder.open = true;
-      folder.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  } catch (error) {
-    void reportClientProblem(error, "importPdf");
-    status.textContent = error.message;
-  } finally {
-    importingPdf = false;
-    button.disabled = false;
-    byId("pdf-input").disabled = false;
   }
 }
 
@@ -1255,14 +1127,11 @@ async function recordAttempt() {
 
 function render(state) {
   dashboardState = state;
-  initializeModelRouting(state.runtime);
   renderProfile(state.profile);
   byId("practiced").textContent = state.study_topics.length;
   renderTopics(state.study_topics);
   renderHistory(state.recent_attempts);
-  const modelState = state.runtime.adaptive_generation === "ready" && state.runtime.pdf_import === "ready"
-    ? "Practice + scanner LLMs ready"
-    : "LLM API unavailable";
+  const modelState = state.runtime.adaptive_generation === "ready" ? "LLM API ready" : "LLM API unavailable";
   byId("updated-at").textContent = `${modelState} · synced ${new Date(state.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
   void flushPendingClientProblems();
 }
@@ -1289,10 +1158,6 @@ async function loadDashboard() {
 }
 
 byId("focus-form").addEventListener("submit", createFocus);
-byId("pdf-import-form").addEventListener("submit", importPdf);
-byId("pdf-input").addEventListener("change", updatePdfFileCopy);
-byId("practice-model-input").addEventListener("change", saveModelRouting);
-byId("scanner-model-input").addEventListener("change", saveModelRouting);
 document.querySelectorAll(".nav-tab").forEach((tab, index, tabs) => {
   tab.addEventListener("click", () => showView(tab.dataset.view));
   tab.addEventListener("keydown", (event) => {

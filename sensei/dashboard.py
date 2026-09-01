@@ -3,11 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import binascii
 import json
-import os
-import re
 import secrets
 import sqlite3
 import sys
@@ -25,10 +21,6 @@ from urllib.parse import urlsplit
 
 from sensei.errorlog import DEFAULT_ERROR_LOG_PATH, ErrorRecorder, error_reference
 from sensei.generation import GENERATED_SKILL_IDS, GeneratedQuestFactory
-from sensei.imports import (
-    MAX_PDF_BYTES,
-    PDFCurriculumScanner,
-)
 from sensei.learning import LearningEvent, Outcome
 from sensei.practice import (
     AdaptiveQuest,
@@ -37,7 +29,6 @@ from sensei.practice import (
     adaptive_quest_fingerprint,
 )
 from sensei.providers import (
-    APISettings,
     DEFAULT_API_BASE_URL,
     DEFAULT_API_MODEL,
     ResponsesAPIProvider,
@@ -63,7 +54,6 @@ from sensei.verification import (
 LOOPBACK_HOST = "127.0.0.1"
 DEFAULT_DASHBOARD_PORT = 8765
 MAX_REQUEST_BYTES = 4_096
-MAX_PDF_REQUEST_BYTES = (MAX_PDF_BYTES * 4 // 3) + 16_384
 ATTEMPT_TOKEN_LIFETIME_SECONDS = 15 * 60
 CHALLENGE_TOKEN_LIFETIME_SECONDS = 60 * 60
 ADAPTIVE_PROMPT_HISTORY = 8
@@ -96,59 +86,6 @@ for katex_asset in KATEX_DIRECTORY.rglob("*"):
         katex_asset,
         content_type,
     )
-
-SCANNER_MODEL_ENVIRONMENT = "SENSEI_PDF_SCANNER_MODEL"
-MODEL_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}")
-
-
-def model_name(value: object, *, fallback: str) -> str:
-    """Validate a request-selected provider model without constraining vendors."""
-
-    selected = str(value or fallback).strip()
-    if not MODEL_NAME_PATTERN.fullmatch(selected):
-        raise ValueError(
-            "Model names may contain letters, numbers, dots, dashes, underscores, "
-            "colons, and slashes (120 characters maximum)."
-        )
-    return selected
-
-
-@dataclass(frozen=True)
-class HostedModelRouter:
-    """Builds isolated practice and PDF-scanning clients from shared credentials."""
-
-    settings: APISettings
-    default_scanner_model: str
-
-    @property
-    def default_practice_model(self) -> str:
-        return self.settings.model
-
-    def practice_factory(self, requested_model: object) -> AdaptiveQuestFactory:
-        selected = model_name(requested_model, fallback=self.default_practice_model)
-        return AdaptiveQuestFactory(
-            ResponsesAPIProvider(
-                self.settings.api_key,
-                selected,
-                base_url=self.settings.base_url,
-                max_output_tokens=PRACTICE_MAX_OUTPUT_TOKENS,
-                json_mode=True,
-            )
-        )
-
-    def curriculum_scanner(self, requested_model: object) -> PDFCurriculumScanner:
-        selected = model_name(requested_model, fallback=self.default_scanner_model)
-        return PDFCurriculumScanner(
-            ResponsesAPIProvider(
-                self.settings.api_key,
-                selected,
-                base_url=self.settings.base_url,
-                timeout_seconds=300,
-                max_output_tokens=5_000,
-                json_mode=True,
-            )
-        )
-
 
 def rank_name(level: int) -> str:
     if level >= 10:
@@ -345,10 +282,8 @@ class ChallengeStore:
         skill: dict[str, Any],
         *,
         avoid_prompts: Collection[str] = (),
-        adaptive_factory: AdaptiveQuestFactory | None = None,
     ) -> tuple[str, AdaptiveQuest]:
-        factory = adaptive_factory or self.adaptive_factory
-        if factory is None:
+        if self.adaptive_factory is None:
             raise RuntimeError(
                 "Adaptive generation is unavailable. Restart the dashboard with a "
                 "valid hosted LLM API connection."
@@ -363,7 +298,7 @@ class ChallengeStore:
             recent = tuple(dict.fromkeys((*avoid_prompts, *session_recent)))[
                 -ADAPTIVE_PROMPT_HISTORY:
             ]
-            quest = factory.generate(
+            quest = self.adaptive_factory.generate(
                 skill,
                 avoid_prompts=recent,
                 avoid_fingerprints=session_fingerprints,
@@ -553,20 +488,6 @@ class DashboardService:
                 subject=subject, name=name, skill_ids=skill_ids
             )
 
-    def create_topic_collection(
-        self,
-        *,
-        subject: str,
-        folder_name: str,
-        topics: Collection[dict[str, str]],
-    ) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            return store.create_topic_collection(
-                subject=subject,
-                folder_name=folder_name,
-                topics=topics,
-            )
-
     def update_topic_folder(
         self, folder_id: str, *, name: str, skill_ids: Collection[str]
     ) -> dict[str, Any]:
@@ -666,18 +587,13 @@ class SenseiDashboardServer(ThreadingHTTPServer):
         service: DashboardService,
         quest_factory: GeneratedQuestFactory | None = None,
         adaptive_factory: AdaptiveQuestFactory | None = None,
-        model_router: HostedModelRouter | None = None,
-        pdf_scanner: PDFCurriculumScanner | None = None,
         error_recorder: ErrorRecorder | None = None,
     ) -> None:
         self.service = service
         self.error_recorder = error_recorder or ErrorRecorder()
         self.csrf_token = secrets.token_urlsafe(32)
         self.challenges = ChallengeStore(quest_factory, adaptive_factory)
-        self.model_router = model_router
-        self.pdf_scanner = pdf_scanner
-        self.adaptive_available = adaptive_factory is not None or model_router is not None
-        self.pdf_import_available = pdf_scanner is not None or model_router is not None
+        self.adaptive_available = adaptive_factory is not None
         self.pending_attempts = PendingAttemptStore()
         self.topic_state_lock = threading.RLock()
         self.assets = {
@@ -685,39 +601,6 @@ class SenseiDashboardServer(ThreadingHTTPServer):
             for path, (asset_path, content_type) in ASSETS.items()
         }
         super().__init__(server_address, DashboardRequestHandler)
-
-    @property
-    def default_practice_model(self) -> str:
-        return (
-            self.model_router.default_practice_model
-            if self.model_router is not None
-            else DEFAULT_API_MODEL
-        )
-
-    @property
-    def default_scanner_model(self) -> str:
-        return (
-            self.model_router.default_scanner_model
-            if self.model_router is not None
-            else self.default_practice_model
-        )
-
-    def practice_factory_for(
-        self, requested_model: object
-    ) -> AdaptiveQuestFactory | None:
-        if self.model_router is None:
-            return None
-        return self.model_router.practice_factory(requested_model)
-
-    def pdf_scanner_for(self, requested_model: object) -> PDFCurriculumScanner:
-        if self.model_router is not None:
-            return self.model_router.curriculum_scanner(requested_model)
-        if self.pdf_scanner is not None:
-            return self.pdf_scanner
-        raise RuntimeError(
-            "PDF curriculum scanning is unavailable. Restart Sensei with a valid "
-            "hosted LLM API connection."
-        )
 
     def handle_error(
         self,
@@ -823,13 +706,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         body = json.dumps(document, ensure_ascii=False).encode("utf-8")
         self._send_bytes(status, body, "application/json; charset=utf-8")
 
-    def _read_json(
-        self,
-        expected_fields: set[str],
-        *,
-        optional_fields: set[str] | None = None,
-        max_bytes: int = MAX_REQUEST_BYTES,
-    ) -> dict[str, object]:
+    def _read_json(self, expected_fields: set[str]) -> dict[str, object]:
         content_type = self.headers.get("Content-Type", "").split(";", 1)[0]
         if content_type.strip().lower() != "application/json":
             raise ValueError("Requests must use application/json.")
@@ -837,22 +714,17 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", ""))
         except ValueError as error:
             raise ValueError("A valid Content-Length is required.") from error
-        if not 1 <= length <= max_bytes:
-            raise ValueError(f"Request body must be from 1 to {max_bytes} bytes.")
+        if not 1 <= length <= MAX_REQUEST_BYTES:
+            raise ValueError(
+                f"Request body must be from 1 to {MAX_REQUEST_BYTES} bytes."
+            )
         try:
             document = json.loads(self.rfile.read(length))
         except (json.JSONDecodeError, UnicodeDecodeError) as error:
             raise ValueError("Request body must be valid UTF-8 JSON.") from error
-        optional_fields = optional_fields or set()
-        supplied_fields = set(document) if isinstance(document, dict) else set()
-        if (
-            not isinstance(document, dict)
-            or not expected_fields.issubset(supplied_fields)
-            or not supplied_fields.issubset(expected_fields | optional_fields)
-        ):
+        if not isinstance(document, dict) or set(document) != expected_fields:
             raise ValueError(
-                f"Request fields must include {sorted(expected_fields)} and may also "
-                f"include {sorted(optional_fields)}."
+                f"Request fields must be exactly {sorted(expected_fields)}."
             )
         return document
 
@@ -898,15 +770,6 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             document["csrf_token"] = self.server.csrf_token
             document["runtime"]["adaptive_generation"] = (
                 "ready" if self.server.adaptive_available else "unavailable"
-            )
-            document["runtime"]["pdf_import"] = (
-                "ready" if self.server.pdf_import_available else "unavailable"
-            )
-            document["runtime"]["default_practice_model"] = (
-                self.server.default_practice_model
-            )
-            document["runtime"]["default_scanner_model"] = (
-                self.server.default_scanner_model
             )
             self._send_json(200, document)
             return
@@ -974,68 +837,6 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                         context=str(document["context"]),
                     )
                 self._send_json(200, {"study_topic": skill})
-                return
-            if path == "/api/study/import-pdf":
-                document = self._read_json(
-                    {
-                        "filename",
-                        "pdf_base64",
-                        "subject_hint",
-                        "folder_hint",
-                        "scanner_model",
-                    },
-                    max_bytes=MAX_PDF_REQUEST_BYTES,
-                )
-                if not all(
-                    isinstance(document[field], str)
-                    for field in (
-                        "filename",
-                        "pdf_base64",
-                        "subject_hint",
-                        "folder_hint",
-                        "scanner_model",
-                    )
-                ):
-                    raise ValueError("PDF import fields must be text.")
-                try:
-                    pdf_bytes = base64.b64decode(
-                        str(document["pdf_base64"]), validate=True
-                    )
-                except (binascii.Error, ValueError) as error:
-                    raise ValueError("The uploaded PDF data is invalid.") from error
-                if len(pdf_bytes) > MAX_PDF_BYTES:
-                    raise ValueError("PDF files must be 20 MB or smaller.")
-                selected_model = model_name(
-                    document["scanner_model"],
-                    fallback=self.server.default_scanner_model,
-                )
-                scanner = self.server.pdf_scanner_for(selected_model)
-                plan = scanner.scan(
-                    pdf_bytes,
-                    filename=str(document["filename"]),
-                    subject_hint=str(document["subject_hint"]),
-                    folder_hint=str(document["folder_hint"]),
-                )
-                with self.server.topic_state_lock:
-                    imported = self.server.service.create_topic_collection(
-                        subject=plan.subject,
-                        folder_name=plan.folder_name,
-                        topics=[
-                            {
-                                "name": topic.name,
-                                "description": topic.description,
-                            }
-                            for topic in plan.topics
-                        ],
-                    )
-                self._send_json(
-                    200,
-                    {
-                        "topic_folder": imported["folder"],
-                        "study_topics": imported["topics"],
-                        "scanner_model": selected_model,
-                    },
-                )
                 return
             if path == "/api/study/delete":
                 document = self._read_json({"skill_id"})
@@ -1106,35 +907,22 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"deleted_folder": folder})
                 return
             if path == "/api/study/generate":
-                document = self._read_json(
-                    {"skill_id"}, optional_fields={"model"}
-                )
+                document = self._read_json({"skill_id"})
                 skill_id = document["skill_id"]
                 if not isinstance(skill_id, str) or len(skill_id) > 80:
                     raise ValueError("Study topic ID must be valid text.")
-                selected_model = model_name(
-                    document.get("model"),
-                    fallback=self.server.default_practice_model,
-                )
-                generation_context = {
-                    "skill_id": skill_id,
-                    "model": selected_model,
-                }
+                generation_context = {"skill_id": skill_id}
                 with self.server.topic_state_lock:
                     skill = self.server.service.study_topic(skill_id)
                     challenge_token, quest = self.server.challenges.issue_adaptive(
                         skill,
                         avoid_prompts=self.server.service.recent_topic_prompts(skill_id),
-                        adaptive_factory=self.server.practice_factory_for(
-                            selected_model
-                        ),
                     )
                 self._send_json(
                     200,
                     {
                         "quest": self.server.service.public_adaptive_quest(quest),
                         "challenge_token": challenge_token,
-                        "practice_model": selected_model,
                     },
                 )
                 return
@@ -1311,8 +1099,6 @@ def create_server(
     port: int = DEFAULT_DASHBOARD_PORT,
     quest_factory: GeneratedQuestFactory | None = None,
     adaptive_factory: AdaptiveQuestFactory | None = None,
-    model_router: HostedModelRouter | None = None,
-    pdf_scanner: PDFCurriculumScanner | None = None,
     error_recorder: ErrorRecorder | None = None,
 ) -> SenseiDashboardServer:
     if not 0 <= port <= 65_535:
@@ -1322,8 +1108,6 @@ def create_server(
         service,
         quest_factory,
         adaptive_factory,
-        model_router,
-        pdf_scanner,
         error_recorder,
     )
 
@@ -1364,13 +1148,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--scanner-model",
-        help=(
-            "Hosted model used only for PDF curriculum scanning (default: the "
-            f"practice model, or {SCANNER_MODEL_ENVIRONMENT})."
-        ),
-    )
-    parser.add_argument(
         "--error-log",
         type=Path,
         default=DEFAULT_ERROR_LOG_PATH,
@@ -1379,20 +1156,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _model_router(
+def _adaptive_factory(
     args: argparse.Namespace,
     stack: ExitStack,
-) -> HostedModelRouter:
+) -> AdaptiveQuestFactory:
     del stack
     settings = api_settings_from_environment(
         model=args.model,
         base_url=args.api_base_url,
     )
-    scanner_model = model_name(
-        args.scanner_model or os.environ.get(SCANNER_MODEL_ENVIRONMENT),
-        fallback=settings.model,
+    return AdaptiveQuestFactory(
+        ResponsesAPIProvider(
+            settings.api_key,
+            settings.model,
+            base_url=settings.base_url,
+            max_output_tokens=PRACTICE_MAX_OUTPUT_TOKENS,
+            json_mode=True,
+        )
     )
-    return HostedModelRouter(settings, scanner_model)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1402,11 +1183,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             service = DashboardService(args.database)
             service.state()
-            model_router = _model_router(args, stack)
+            adaptive_factory = _adaptive_factory(args, stack)
             server = create_server(
                 service,
                 port=args.port,
-                model_router=model_router,
+                adaptive_factory=adaptive_factory,
                 error_recorder=error_recorder,
             )
         except (OSError, RuntimeError, ValueError, sqlite3.Error) as error:

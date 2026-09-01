@@ -12,8 +12,6 @@ Repository: [GizmosGarage/Sensei](https://github.com/GizmosGarage/Sensei)
 - `data/sensei.db` remains the default and only durable learning store.
 - The dashboard remains loopback-only at `http://127.0.0.1:8765/`.
 - LLM requests go to the configured hosted Responses API.
-- Textbook PDFs are sent transiently to the selected scanner model; Sensei saves the
-  resulting topic briefs and folder, not the PDF bytes.
 - API credentials are read from a local `.env` file or process environment variables
   and are never saved to SQLite or committed to the repository.
 - Deterministic SymPy checks remain the correctness boundary for supported math.
@@ -39,7 +37,6 @@ Copy-Item .env.example .env
 ```dotenv
 OPENAI_API_KEY=your-api-key
 SENSEI_LLM_MODEL=gpt-5.6-sol
-SENSEI_PDF_SCANNER_MODEL=gpt-5.6-sol
 SENSEI_LLM_BASE_URL=https://api.openai.com/v1
 ```
 
@@ -52,7 +49,6 @@ Sensei also accepts `SENSEI_LLM_API_KEY`. Optional connection overrides are:
 
 ```powershell
 $env:SENSEI_LLM_MODEL = "gpt-5.4-mini"
-$env:SENSEI_PDF_SCANNER_MODEL = "gpt-5.4-mini"
 $env:SENSEI_LLM_BASE_URL = "https://api.openai.com/v1"
 ```
 
@@ -77,7 +73,7 @@ python -m sensei.dashboard
 Choose a different API model or endpoint without changing source code:
 
 ```powershell
-python -m sensei.dashboard --model "gpt-5.4-mini" --scanner-model "gpt-5.4-mini" --api-base-url "https://api.openai.com/v1"
+python -m sensei.dashboard --model "gpt-5.4-mini" --api-base-url "https://api.openai.com/v1"
 ```
 
 The dashboard lets a learner name a subject, topic, and practice instructions. The
@@ -87,12 +83,6 @@ topic also has two confirmed data controls: **Restart** clears that topic's atte
 mastery, misconceptions, review progress, and earned XP while keeping the topic in the
 Atlas; **Delete** removes the topic and its topic-specific learning data from the active
 database.
-
-The **Import textbook pages** path accepts a PDF up to 20 MB. A separately selectable
-scanner LLM reads the supplied text, diagrams, tables, and page images, then creates an
-ordered, deduplicated topic set inside a new Atlas folder. Expand **Model routing** to
-choose the practice-problem LLM and PDF-scanner LLM independently; those browser-local
-choices override the startup defaults for their respective requests.
 
 During a generated problem, **Ask Sensei for help** reveals one solution step at a
 time. Each request lowers the available XP and mastery evidence; reaching the final

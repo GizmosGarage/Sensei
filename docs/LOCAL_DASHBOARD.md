@@ -19,27 +19,10 @@ The default address is `http://127.0.0.1:8765/`. Available options are:
 - `--port PORT`: select the loopback port.
 - `--no-open`: do not open a browser automatically.
 - `--model NAME`: override the hosted model.
-- `--scanner-model NAME`: set the default PDF curriculum scanner model independently.
 - `--api-base-url URL`: override the Responses-compatible API root.
 - `--error-log PATH`: select the local structured error log.
 
 The dashboard requires API credentials at startup. See [API setup](API_SETUP.md).
-
-## Textbook PDF import and model routing
-
-Expand **Model routing** to choose one model for practice problems and another model
-used exclusively for PDF curriculum scanning. The choices are kept in browser local
-storage and sent with only their corresponding requests.
-
-The **Import textbook pages** form accepts one PDF up to 20 MB. An optional subject or
-folder-name hint can force the exact Atlas labels; otherwise the scanner infers them.
-The scanner receives the PDF as a high-detail Responses API file input so it can inspect
-text, diagrams, tables, and scanned page images. Sensei validates the returned JSON and
-atomically creates every topic plus one containing Atlas folder. A failed scan or folder
-conflict does not leave a partial import behind.
-
-Sensei does not save the source PDF to disk or SQLite. Only the generated subject,
-folder, topic names, and practice briefs become durable learning data.
 
 ## Practice flow
 
@@ -75,7 +58,5 @@ Symbolic math answers are checked with the restricted SymPy verifier.
 - API keys never enter dashboard JSON or browser storage.
 - Personal learning history remains in `data/sensei.db`.
 - Relevant prompt and learner-context text is sent to the configured LLM API.
-- Uploaded PDFs are sent only to the selected scanner LLM and are discarded by Sensei
-  after the scan request; the practice-problem LLM receives only saved topic briefs.
 
 The browser is a local interface, not a second durable data store.

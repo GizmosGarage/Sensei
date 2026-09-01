@@ -33,19 +33,6 @@
     <main id="top">
       <section class="app-view dojo-view" id="dojo-view" role="tabpanel" aria-labelledby="dojo-tab" tabindex="0">
         <section class="forge-section panel" aria-label="Start a practice chat">
-          <div class="forge-heading">
-            <div><p class="eyebrow">Choose your path</p><h1>Build your Atlas</h1></div>
-            <p>Add one topic yourself, or let a dedicated scanner turn textbook pages into a complete topic folder.</p>
-          </div>
-          <details class="model-routing" id="model-routing">
-            <summary><span>Model routing</span><small>Choose separate LLMs for practice and PDF scanning</small></summary>
-            <div class="model-routing-grid">
-              <label>Practice problem LLM<input id="practice-model-input" name="practice-model" maxlength="120" autocomplete="off" spellcheck="false" aria-describedby="practice-model-help"><small class="field-help" id="practice-model-help">Drafts and reviews practice problems. The PDF is never sent to this model.</small></label>
-              <label>PDF scanner LLM<input id="scanner-model-input" name="scanner-model" maxlength="120" autocomplete="off" spellcheck="false" aria-describedby="scanner-model-help"><small class="field-help" id="scanner-model-help">Reads the uploaded PDF and designs its topic list. It is not used to generate practice problems.</small></label>
-            </div>
-            <p class="model-routing-note">Both use your configured Responses API connection. Your choices stay in this browser.</p>
-          </details>
-          <div class="path-heading"><span>01</span><div><h2>Start with one topic</h2><p>Define the exact skill and begin practicing immediately.</p></div></div>
           <form class="focus-form" id="focus-form">
             <div class="field-pair">
               <label>Subject<input id="subject-input" name="subject" maxlength="80" placeholder="Chemistry" autocomplete="off" aria-describedby="subject-help" required><small class="field-help" id="subject-help">Broad context, such as Algebra, Calculus, Chemistry, or Physics.</small></label>
@@ -57,24 +44,6 @@
             <div class="form-action-row">
               <p id="form-status" role="status">Your conversation stays on this machine.</p>
               <button class="primary-button forge-button" id="forge-button" type="submit">Start practice chat</button>
-            </div>
-          </form>
-          <div class="path-divider"><span>or</span></div>
-          <div class="path-heading"><span>02</span><div><h2>Import textbook pages</h2><p>Sensei scans every supplied page and creates the folder of topics needed to master it.</p></div></div>
-          <form class="focus-form pdf-import-form" id="pdf-import-form">
-            <label class="pdf-drop-label" for="pdf-input">
-              <span class="pdf-drop-icon" aria-hidden="true">PDF</span>
-              <strong id="pdf-file-copy">Choose textbook pages</strong>
-              <small>One PDF, up to 20 MB. Text, diagrams, tables, and scanned page images are included.</small>
-              <input id="pdf-input" name="pdf" type="file" accept="application/pdf,.pdf" required>
-            </label>
-            <div class="field-pair pdf-hints">
-              <label>Subject <span>optional</span><input id="pdf-subject-input" name="pdf-subject" maxlength="80" placeholder="Let the scanner infer it" autocomplete="off"><small class="field-help">Set this when you want an exact Atlas subject label.</small></label>
-              <label>Folder name <span>optional</span><input id="pdf-folder-input" name="pdf-folder" maxlength="80" placeholder="Use the chapter or filename" autocomplete="off"><small class="field-help">All generated topics will be filed here automatically.</small></label>
-            </div>
-            <div class="form-action-row">
-              <p id="pdf-import-status" role="status">The PDF is sent only to your scanner LLM and is not saved by Sensei.</p>
-              <button class="primary-button forge-button" id="pdf-import-button" type="submit">Scan PDF into Atlas</button>
             </div>
           </form>
         </section>

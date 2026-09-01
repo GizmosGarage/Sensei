@@ -18,7 +18,6 @@ Copy-Item .env.example .env
 ```dotenv
 OPENAI_API_KEY=your-api-key
 SENSEI_LLM_MODEL=gpt-5.6-sol
-SENSEI_PDF_SCANNER_MODEL=gpt-5.6-sol
 SENSEI_LLM_BASE_URL=https://api.openai.com/v1
 ```
 
@@ -41,27 +40,19 @@ another Responses-compatible service:
 ```powershell
 $env:SENSEI_LLM_API_KEY = "your-api-key"
 $env:SENSEI_LLM_MODEL = "provider-model-name"
-$env:SENSEI_PDF_SCANNER_MODEL = "provider-pdf-capable-model-name"
 $env:SENSEI_LLM_BASE_URL = "https://provider.example/v1"
 python -m sensei.dashboard
 ```
 
-Command-line `--model`, `--scanner-model`, and `--api-base-url` values override the
-corresponding environment variables. When no scanner model is configured, it defaults
-to the practice model. The dashboard's **Model routing** controls can override both
-model names per request. A scanner model must support PDF `input_file` content. The API
-key intentionally has no command-line option so it does not enter shell history or
-process listings.
+Command-line `--model` and `--api-base-url` values override the corresponding
+environment variables. The API key intentionally has no command-line option so it
+does not enter shell history or process listings.
 
 ## Data boundary
 
 Sensei keeps learning records in `data/sensei.db`. LLM requests contain the current
 problem, recent bounded conversation context, and a small relevant summary of learner
 memory when available. The provider request sets `store` to `false`.
-
-PDF imports send the source file only to the selected scanner model. The practice model
-receives the scanner's saved topic brief later, never the PDF itself. Sensei does not
-write PDF bytes to disk or SQLite.
 
 The API is required for both the terminal tutor and dashboard startup. Missing
 credentials cause startup to fail before a tutoring request is sent.
