@@ -119,10 +119,71 @@ def _normalize_display_notation(value: str) -> str:
     )
 
 
+_DISPLAY_ENVIRONMENT_PATTERN = re.compile(
+    r"\\begin\{(?P<name>array|tabular|aligned|gathered|matrix|pmatrix|"
+    r"bmatrix|vmatrix|Vmatrix|cases)\}(?P<body>.*?)\\end\{(?P=name)\}",
+    flags=re.DOTALL,
+)
+
+
+def _inside_notation_delimiters(value: str, position: int) -> bool:
+    active_delimiter: str | None = None
+    for match in re.finditer(r"\\([()\[\]])", value):
+        if match.start() >= position:
+            break
+        token = match.group(1)
+        if token in {"(", "["}:
+            active_delimiter = token
+        elif active_delimiter == ("(" if token == ")" else "["):
+            active_delimiter = None
+    return active_delimiter is not None
+
+
+def _repair_array_rows(body: str) -> str:
+    """Insert a missing row break before an array's horizontal rule."""
+
+    repaired: list[str] = []
+    cursor = 0
+    for match in re.finditer(r"\\hline", body):
+        prefix = body[cursor : match.start()]
+        repaired.append(prefix)
+        if not re.search(r"\\\\\s*$", prefix):
+            repaired.append(r"\\ ")
+        repaired.append(r"\hline")
+        cursor = match.end()
+    repaired.append(body[cursor:])
+    return "".join(repaired)
+
+
+def _repair_display_environments(value: str) -> str:
+    """Make standalone KaTeX environments render instead of leaking source text."""
+
+    repaired: list[str] = []
+    cursor = 0
+    for match in _DISPLAY_ENVIRONMENT_PATTERN.finditer(value):
+        repaired.append(value[cursor : match.start()])
+        name = match.group("name")
+        rendered_name = "array" if name == "tabular" else name
+        body = match.group("body")
+        if rendered_name == "array":
+            body = _repair_array_rows(body)
+        environment = (
+            rf"\begin{{{rendered_name}}}{body}\end{{{rendered_name}}}"
+        )
+        if not _inside_notation_delimiters(value, match.start()):
+            environment = rf"\[{environment}\]"
+        repaired.append(environment)
+        cursor = match.end()
+    repaired.append(value[cursor:])
+    return "".join(repaired)
+
+
 def _display_text(
     document: Mapping[str, object], field: str, *, maximum: int
 ) -> str:
-    value = _normalize_display_notation(_text(document, field, maximum=maximum))
+    value = _repair_display_environments(
+        _normalize_display_notation(_text(document, field, maximum=maximum))
+    )
     active_delimiter: str | None = None
     for match in re.finditer(r"\\([()\[\]])", value):
         token = match.group(1)
@@ -142,6 +203,23 @@ def _display_text(
     if active_delimiter is not None:
         raise PracticeGenerationError(
             f"{field} contains an unclosed notation delimiter"
+        )
+    environment_stack: list[str] = []
+    for match in re.finditer(r"\\(begin|end)\{([A-Za-z*]+)\}", value):
+        action, name = match.groups()
+        if not _inside_notation_delimiters(value, match.start()):
+            raise PracticeGenerationError(
+                f"{field} contains a math environment outside notation delimiters"
+            )
+        if action == "begin":
+            environment_stack.append(name)
+        elif not environment_stack or environment_stack.pop() != name:
+            raise PracticeGenerationError(
+                f"{field} contains mismatched math environments"
+            )
+    if environment_stack:
+        raise PracticeGenerationError(
+            f"{field} contains an unclosed math environment"
         )
     return value
 
@@ -730,6 +808,11 @@ class AdaptiveQuestFactory:
                     "command and delimiter must have one backslash, never two. Never "
                     "double-escape delimiters into visible text such as \\\\( or \\\\). "
                     "Never use dollar-sign math delimiters. "
+                    "For a numerical table, use a KaTeX array inside standalone "
+                    "display delimiters, for example \\[\\begin{array}{c|cc} "
+                    "x & 1.9 & 2.1 \\\\ \\hline f(x) & 4.9 & 5.1 "
+                    "\\end{array}\\]. Separate every table row with \\\\ before "
+                    "using \\hline; never emit array or tabular source as prose. "
                     "Keep prose outside the notation delimiters. Tell the learner "
                     "in the prompt to enter only the requested value when units apply. "
                     "Never tell the learner how many stages to use, ask them to show "
@@ -827,7 +910,9 @@ class AdaptiveQuestFactory:
                         "an option that uses display delimiters \\[...\\] or starts with "
                         "an A-D label; the interface adds its own choice labels. Reject "
                         "decoded fields with doubled LaTeX backslashes or unmatched "
-                        "notation delimiters. "
+                        "notation delimiters. Reject a begin/end math environment "
+                        "outside those delimiters, mismatched environment names, or an "
+                        "array table whose rows are not separated with \\\\. "
                         "For numeric answers, "
                         "answer_type=expression is required and is not an error. For "
                         "graphical limits, treat the structured graph as the displayed "

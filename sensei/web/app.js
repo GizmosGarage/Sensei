@@ -256,13 +256,56 @@ function normalizeNotationEscapes(copy) {
   return String(copy || "").replace(/\\{2,}(?=[A-Za-z()[\]])/g, "\\");
 }
 
+function isInsideNotation(copy, position) {
+  const delimiters = /\\([()[\]])/g;
+  let activeDelimiter = "";
+  let match = delimiters.exec(copy);
+  while (match && match.index < position) {
+    const token = match[1];
+    if (token === "(" || token === "[") {
+      activeDelimiter = token;
+    } else if (activeDelimiter === (token === ")" ? "(" : "[")) {
+      activeDelimiter = "";
+    }
+    match = delimiters.exec(copy);
+  }
+  return Boolean(activeDelimiter);
+}
+
+function repairArrayRows(body) {
+  return body.replace(/\\hline/g, (command, offset) => {
+    const prefix = body.slice(0, offset);
+    return /\\\\\s*$/.test(prefix) ? command : `\\\\ ${command}`;
+  });
+}
+
+function normalizeNotationStructure(copy) {
+  const normalized = normalizeNotationEscapes(copy);
+  const environments = /\\begin\{(array|tabular|aligned|gathered|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|cases)\}([\s\S]*?)\\end\{\1\}/g;
+  let repaired = "";
+  let cursor = 0;
+  let match = environments.exec(normalized);
+  while (match) {
+    repaired += normalized.slice(cursor, match.index);
+    const name = match[1] === "tabular" ? "array" : match[1];
+    const body = name === "array" ? repairArrayRows(match[2]) : match[2];
+    const environment = `\\begin{${name}}${body}\\end{${name}}`;
+    repaired += isInsideNotation(normalized, match.index)
+      ? environment
+      : `\\[${environment}\\]`;
+    cursor = match.index + match[0].length;
+    match = environments.exec(normalized);
+  }
+  return repaired + normalized.slice(cursor);
+}
+
 function setNotationText(target, copy) {
-  target.textContent = normalizeNotationEscapes(copy);
+  target.textContent = normalizeNotationStructure(copy);
   renderNotation(target);
 }
 
 function inlineOptionNotation(copy) {
-  return normalizeNotationEscapes(copy)
+  return normalizeNotationStructure(copy)
     .replaceAll("\\[", "\\(")
     .replaceAll("\\]", "\\)")
     .replace(/^\s*[A-D][.)]\s+/i, "");
@@ -439,7 +482,7 @@ function prepareTopicForPractice(topic) {
   closeArena();
   byId("subject-input").value = topic.course;
   byId("topic-input").value = topic.name;
-  byId("context-input").value = topic.description || "";
+  byId("context-input").value = "";
   setGenerationStatus(
     byId("form-status"),
     `Review the practice instructions for ${topic.name}, then start the practice chat.`,

@@ -169,6 +169,10 @@ class DashboardTests(unittest.TestCase):
                     javascript,
                 )
                 self.assertIn(
+                    'byId("context-input").value = "";',
+                    javascript,
+                )
+                self.assertNotIn(
                     'byId("context-input").value = topic.description || "";',
                     javascript,
                 )
@@ -177,6 +181,7 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn('badge.className = "option-letter"', javascript)
                 self.assertIn("function inlineOptionNotation(copy)", javascript)
                 self.assertIn("function normalizeNotationEscapes(copy)", javascript)
+                self.assertIn("function normalizeNotationStructure(copy)", javascript)
             with urlopen(f"{base_url}/assets/styles.css", timeout=5) as response:
                 stylesheet = response.read().decode("utf-8")
                 self.assertIn(".option-grid .option-letter", stylesheet)

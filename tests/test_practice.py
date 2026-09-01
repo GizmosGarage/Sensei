@@ -397,6 +397,49 @@ class AdaptivePracticeTests(unittest.TestCase):
         with self.assertRaisesRegex(PracticeGenerationError, "unclosed notation"):
             parse_adaptive_quest(json.dumps(document), skill=SKILL)
 
+    def test_bare_numerical_array_is_repaired_for_display(self) -> None:
+        document = {
+            "title": "Estimate a limit from a table",
+            "prompt": (
+                "Use the numerical table to estimate the two-sided limit. "
+                r"\begin{array}{c|ccccc} x&1.90&1.99&2.01&2.10\hline "
+                r"f(x)&4.90&4.99&5.01&5.10 \end{array} Estimate "
+                r"\(\lim_{x \to 2} f(x)\)."
+            ),
+            "answer_type": "expression",
+            "answer": "5",
+            "options": [],
+            "help_steps": [
+                "Compare the function values on both sides of the target input.",
+                r"Both sides approach \(5\).",
+            ],
+            "solution": r"The nearby values approach \(5\) from both sides.",
+            "graph": None,
+        }
+
+        quest = parse_adaptive_quest(json.dumps(document), skill=SKILL)
+
+        self.assertIn(
+            r"\[\begin{array}{c|ccccc} x&1.90&1.99&2.01&2.10\\ "
+            r"\hline f(x)&4.90&4.99&5.01&5.10 \end{array}\]",
+            quest.prompt,
+        )
+
+    def test_mismatched_math_environments_are_rejected(self) -> None:
+        document = {
+            "title": "Broken table",
+            "prompt": r"Read \[\begin{array}{cc}x&1\end{matrix}\].",
+            "answer_type": "expression",
+            "answer": "1",
+            "options": [],
+            "hint": "Read the value.",
+            "solution": r"The value is \(1\).",
+            "graph": None,
+        }
+
+        with self.assertRaisesRegex(PracticeGenerationError, "mismatched"):
+            parse_adaptive_quest(json.dumps(document), skill=SKILL)
+
     def test_dne_expression_key_is_checked_by_normalized_exact_match(self) -> None:
         document = {
             "title": "Nonexistent limit",
