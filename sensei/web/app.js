@@ -31,6 +31,16 @@ const FOLDER_STATE_STORAGE_KEY = "sensei.closed-topic-folders.v1";
 const MAX_PENDING_CLIENT_ERRORS = 25;
 const reportedClientErrors = new WeakSet();
 const closedFolderIds = readClosedFolderIds();
+const PRACTICE_API_VERSION = 6;
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
+let partAnswers = {};
+let materialTopic = null;
+let materialProposals = [];
+let currentPlan = null;
+let importMode = "file";
+let analyzing = false;
 
 function readClosedFolderIds() {
   try {
@@ -431,18 +441,9 @@ function renderSubjectFilters(groups) {
   });
 }
 
-function prepareTopicForPractice(topic) {
-  closeArena();
-  byId("subject-input").value = topic.course;
-  byId("topic-input").value = topic.name;
-  byId("context-input").value = "";
-  setGenerationStatus(
-    byId("form-status"),
-    `Review the practice instructions for ${topic.name}, then start the practice chat.`,
-  );
+function trainTopic(topic, statusTarget) {
   showView("dojo");
-  byId("focus-form").scrollIntoView({ behavior: "smooth", block: "center" });
-  byId("context-input").focus({ preventScroll: true });
+  void startAdaptiveQuest(topic.id, statusTarget || byId("arena-generation-status"), { resetSession: true });
 }
 
 function topicCard(topic) {
@@ -459,9 +460,16 @@ function topicCard(topic) {
   const practiceButton = card.querySelector(".practice-button");
   const restartButton = card.querySelector(".restart-topic-button");
   const deleteButton = card.querySelector(".delete-topic-button");
+  const materialButton = card.querySelector(".material-button");
+  const materialCount = Number(topic.material_count) || 0;
+  materialButton.textContent = materialCount
+    ? `Class material · ${materialCount}`
+    : "Add class material";
+  materialButton.setAttribute("aria-label", `Manage class material for ${topic.name}`);
+  materialButton.addEventListener("click", () => openMaterialDialog(topic));
   restartButton.setAttribute("aria-label", `Restart ${topic.name} from the beginning`);
   deleteButton.setAttribute("aria-label", `Delete ${topic.name} and its saved data`);
-  practiceButton.addEventListener("click", () => prepareTopicForPractice(topic));
+  practiceButton.addEventListener("click", () => trainTopic(topic, generationStatus));
   restartButton.addEventListener("click", () => restartTopic(
     topic,
     restartButton,
@@ -796,6 +804,7 @@ function beginPracticeSession(topic) {
     byId("session-context"),
     topic.description || "No extra instructions provided.",
   );
+  renderSessionBrief(topic.material_count, null);
 }
 
 function resetArenaFeedback() {
@@ -818,6 +827,11 @@ function resetArenaFeedback() {
   byId("continue-practice").hidden = true;
   byId("quest-answer").disabled = false;
   byId("check-answer").disabled = false;
+  byId("part-results").replaceChildren();
+  byId("part-results").hidden = true;
+  byId("likely-mistake").textContent = "";
+  byId("likely-mistake").hidden = true;
+  byId("part-list").querySelectorAll("input, button").forEach((control) => { control.disabled = false; });
 }
 
 function resetProgressiveHelp() {
@@ -873,22 +887,33 @@ function openArena(quest) {
   renderGraph(quest.graph);
   byId("quest-answer").value = "";
   byId("quest-answer").placeholder = quest.answer_type === "multiple_choice" ? "Choose A, B, C, or D" : "Enter only the requested value";
-  byId("notation-help").hidden = quest.answer_type !== "expression";
+  const multiPart = quest.answer_type === "multi_part";
+  byId("quest-answer").hidden = multiPart;
+  byId("check-answer").textContent = multiPart ? "Check all parts" : "Send answer";
+  const hint = byId("notation-help");
+  hint.textContent = multiPart ? "Answer every part, then check them together." : (quest.answer_format_hint || "");
+  hint.hidden = !hint.textContent;
+  renderSessionBrief(quest.material_count, quest.difficulty_tier);
   resetProgressiveHelp();
   renderOptions(quest);
+  renderParts(quest);
   const arena = byId("quest-arena");
   arena.hidden = false;
   arena.scrollIntoView({ behavior: "smooth", block: "start" });
-  if (quest.answer_type === "expression") byId("quest-answer").focus({ preventScroll: true });
+  if (multiPart) {
+    byId("part-list").querySelector(".part-answer")?.focus({ preventScroll: true });
+  } else if (quest.answer_type !== "multiple_choice") {
+    byId("quest-answer").focus({ preventScroll: true });
+  }
 }
 
 async function startAdaptiveQuest(
   skillId,
-  statusTarget = byId("form-status"),
+  statusTarget = byId("arena-generation-status"),
   { resetSession = false } = {},
 ) {
   if (!dashboardState || generatingQuestion || changingTopicIds.has(skillId)) return;
-  if (dashboardState.runtime.practice_api_version !== 5) {
+  if (dashboardState.runtime.practice_api_version !== PRACTICE_API_VERSION) {
     setGenerationStatus(
       statusTarget,
       "Sensei was updated while this dashboard was running. Restart Sensei, then try again.",
@@ -906,7 +931,6 @@ async function startAdaptiveQuest(
   generatingQuestion = true;
   document.body.classList.add("generating");
   setGenerationStatus(statusTarget, "Sensei is drafting and independently checking your encounter…", "working", skillId);
-  byId("forge-button").disabled = true;
   byId("new-question").disabled = true;
   byId("continue-practice").disabled = true;
   try {
@@ -932,37 +956,8 @@ async function startAdaptiveQuest(
   } finally {
     generatingQuestion = false;
     document.body.classList.remove("generating");
-    byId("forge-button").disabled = false;
     byId("new-question").disabled = false;
     byId("continue-practice").disabled = false;
-  }
-}
-
-async function createFocus(event) {
-  event.preventDefault();
-  if (generatingQuestion) return;
-  const subject = byId("subject-input").value.trim();
-  const topic = byId("topic-input").value.trim();
-  if (!subject || !topic) return;
-  byId("form-status").textContent = "Adding this focus to your atlas…";
-  byId("forge-button").disabled = true;
-  try {
-    const response = await postJson("/api/study/focus", {
-      subject,
-      topic,
-      context: byId("context-input").value.trim(),
-    });
-    await loadDashboard();
-    await startAdaptiveQuest(
-      response.study_topic.id,
-      byId("form-status"),
-      { resetSession: true },
-    );
-  } catch (error) {
-    void reportClientProblem(error, "createFocus");
-    byId("form-status").textContent = error.message;
-  } finally {
-    if (!generatingQuestion) byId("forge-button").disabled = false;
   }
 }
 
@@ -1050,8 +1045,24 @@ async function postJson(path, document, { retries = 0, onRetry = null } = {}) {
 async function checkAnswer() {
   if (!activeQuest || revealingHelp) return;
   const challengeToken = activeQuest.challenge_token;
-  const answer = byId("quest-answer").value.trim();
-  if (!answer) { byId("quest-answer").focus(); return; }
+  const multiPart = activeQuest.answer_type === "multi_part";
+  let answer;
+  if (multiPart) {
+    answer = {};
+    for (const part of activeQuest.parts || []) {
+      const value = String(partAnswers[part.label] || "").trim();
+      if (!value) {
+        byId("part-list").querySelector(`[data-part="${part.label}"] .part-answer`)?.focus();
+        byId("notation-help").textContent = `Answer part (${part.label}) before checking.`;
+        byId("notation-help").hidden = false;
+        return;
+      }
+      answer[part.label] = value;
+    }
+  } else {
+    answer = byId("quest-answer").value.trim();
+    if (!answer) { byId("quest-answer").focus(); return; }
+  }
   const button = byId("check-answer");
   resetArenaFeedback();
   button.disabled = true;
@@ -1061,25 +1072,44 @@ async function checkAnswer() {
     if (!activeQuest || activeQuest.challenge_token !== challengeToken) return;
     const result = response.result;
     attemptToken = response.attempt_token;
-    activeAnswer = answer;
+    activeAnswer = multiPart ? Object.values(answer).join(" · ") : answer;
     const feedback = byId("answer-feedback");
-    const correct = result.status === "verified_correct";
-    activeFeedback = { correct };
-    const submittedCopy = activeQuest.answer_type === "expression" && result.submitted_latex
-      ? `\\(${result.submitted_latex}\\)`
-      : answer;
+    const outcome = response.outcome || (result.status === "verified_correct" ? "correct" : "incorrect");
+    const correct = outcome === "correct";
+    activeFeedback = { correct, outcome };
+    const submittedCopy = multiPart
+      ? (activeQuest.parts || []).map((part) => `(${part.label}) ${answer[part.label]}`).join("   ")
+      : (activeQuest.answer_type === "expression" && result.submitted_latex
+        ? `\\(${result.submitted_latex}\\)`
+        : answer);
     setNotationText(byId("learner-answer-copy"), submittedCopy);
     byId("learner-answer-turn").hidden = false;
-    feedback.classList.add(correct ? "correct" : "incorrect");
-    byId("feedback-status").textContent = correct ? "Victory — your answer holds." : "Not yet — this encounter has another opening.";
+    feedback.classList.add(correct ? "correct" : outcome === "partial" ? "partial" : "incorrect");
+    const parts = Array.isArray(response.parts) ? response.parts : [];
+    const correctParts = parts.filter((part) => part.status === "verified_correct").length;
+    byId("feedback-status").textContent = correct
+      ? "Victory — your answer holds."
+      : outcome === "partial"
+        ? `Partial — ${correctParts} of ${parts.length} parts hold.`
+        : "Not yet — this encounter has another opening.";
     const detail = byId("feedback-detail");
     const showTechnicalDetail = activeQuest.source !== "adaptive";
     setNotationText(detail, showTechnicalDetail ? result.detail : "");
     detail.hidden = !showTechnicalDetail;
-    const expectedCopy = result.expected_latex
-      ? `Validated answer: \\(${result.expected_latex}\\)`
-      : `Validated answer: ${result.expected || ""}`;
-    setNotationText(byId("feedback-expected"), correct ? "" : expectedCopy);
+    if (multiPart) {
+      renderPartResults(parts);
+      byId("feedback-expected").textContent = "";
+    } else {
+      const expectedCopy = result.expected_latex
+        ? `Validated answer: \\(${result.expected_latex}\\)`
+        : `Validated answer: ${result.expected || ""}`;
+      setNotationText(byId("feedback-expected"), correct ? "" : expectedCopy);
+    }
+    if (response.likely_mistake) {
+      const mistake = byId("likely-mistake");
+      setNotationText(mistake, `Sensei noticed: ${response.likely_mistake}`);
+      mistake.hidden = false;
+    }
     if (response.solution) {
       setNotationText(byId("solution-text"), response.solution);
       byId("solution-copy").hidden = false;
@@ -1089,6 +1119,7 @@ async function checkAnswer() {
     feedback.scrollIntoView({ behavior: "smooth", block: "nearest" });
     byId("quest-answer").disabled = true;
     byId("option-grid").querySelectorAll("button").forEach((option) => { option.disabled = true; });
+    byId("part-list").querySelectorAll("input, button").forEach((control) => { control.disabled = true; });
     byId("ask-sensei-help").disabled = true;
   } catch (error) {
     void reportClientProblem(error, "checkAnswer");
@@ -1130,6 +1161,7 @@ function render(state) {
   renderProfile(state.profile);
   byId("practiced").textContent = state.study_topics.length;
   renderTopics(state.study_topics);
+  renderStudySets(state.study_topics, state.topic_folders || []);
   renderHistory(state.recent_attempts);
   const modelState = state.runtime.adaptive_generation === "ready" ? "LLM API ready" : "LLM API unavailable";
   byId("updated-at").textContent = `${modelState} · synced ${new Date(state.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
@@ -1157,7 +1189,655 @@ async function loadDashboard() {
   }
 }
 
-byId("focus-form").addEventListener("submit", createFocus);
+function tierLabel(tier) {
+  const labels = {
+    foundational: "Foundational — isolate the skill",
+    standard: "Standard — a typical exam problem",
+    challenging: "Challenging — an extra step, less scaffolding",
+    synthesis: "Synthesis — combine with prerequisite skills",
+  };
+  return labels[tier] || tier;
+}
+
+function renderSessionBrief(materialCount, tier) {
+  const count = Number(materialCount) || 0;
+  byId("session-materials").textContent = count
+    ? `${count} saved exemplar${count === 1 ? "" : "s"} guide this problem's style.`
+    : "None yet — add homework or exam problems so Sensei can match your class.";
+  byId("session-tier").textContent = tier ? tierLabel(tier) : "Chosen from your mastery when the problem is drafted.";
+}
+
+function renderParts(quest) {
+  const list = byId("part-list");
+  list.replaceChildren();
+  partAnswers = {};
+  const parts = Array.isArray(quest.parts) ? quest.parts : [];
+  list.hidden = parts.length === 0;
+  parts.forEach((part) => {
+    const row = document.createElement("li");
+    row.className = "part-row";
+    row.dataset.part = part.label;
+    const label = document.createElement("span");
+    label.className = "part-label";
+    label.textContent = `(${part.label})`;
+    const body = document.createElement("div");
+    body.className = "part-body";
+    const prompt = document.createElement("p");
+    prompt.className = "part-prompt";
+    setNotationText(prompt, part.prompt);
+    body.append(prompt);
+    if (part.answer_type === "multiple_choice") {
+      const options = document.createElement("div");
+      options.className = "option-grid part-options";
+      options.classList.toggle("has-notation", (part.options || []).some((option) => /\\[[(]/.test(option)));
+      (part.options || []).forEach((option, index) => {
+        const letter = String.fromCharCode(65 + index);
+        const button = document.createElement("button");
+        button.type = "button";
+        const badge = document.createElement("span");
+        badge.className = "option-letter";
+        badge.textContent = letter;
+        const copy = document.createElement("b");
+        setNotationText(copy, inlineOptionNotation(option));
+        button.append(badge, copy);
+        button.addEventListener("click", () => {
+          options.querySelectorAll("button").forEach((item) => item.classList.remove("selected"));
+          button.classList.add("selected");
+          partAnswers[part.label] = letter;
+        });
+        options.append(button);
+      });
+      body.append(options);
+    } else {
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "part-answer";
+      input.maxLength = 500;
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      input.placeholder = part.unit ? `Answer in ${part.unit}` : "Type your answer";
+      input.setAttribute("aria-label", `Answer for part ${part.label}`);
+      input.addEventListener("input", () => { partAnswers[part.label] = input.value; });
+      input.addEventListener("keydown", (event) => { if (event.key === "Enter") checkAnswer(); });
+      body.append(input);
+      if (part.answer_format_hint) {
+        const hint = document.createElement("p");
+        hint.className = "part-hint";
+        hint.textContent = part.answer_format_hint;
+        body.append(hint);
+      }
+    }
+    row.append(label, body);
+    list.append(row);
+  });
+}
+
+function renderPartResults(parts) {
+  const list = byId("part-results");
+  list.replaceChildren();
+  parts.forEach((part) => {
+    const row = document.createElement("li");
+    const correct = part.status === "verified_correct";
+    row.className = `part-result ${correct ? "correct" : "incorrect"}`;
+    const label = document.createElement("strong");
+    label.textContent = `(${part.label}) ${correct ? "holds" : "not yet"}`;
+    row.append(label);
+    if (!correct) {
+      const expected = document.createElement("span");
+      setNotationText(
+        expected,
+        part.expected_latex ? `Validated answer: \\(${part.expected_latex}\\)` : `Validated answer: ${part.expected || ""}`,
+      );
+      row.append(expected);
+    }
+    list.append(row);
+  });
+  list.hidden = parts.length === 0;
+}
+
+function kindLabel(kind) {
+  return { example_problem: "Problem", worked_example: "Worked example", notes: "Notes" }[kind] || kind;
+}
+
+function subjectProfileFor(subject) {
+  const profiles = dashboardState?.subject_profiles || {};
+  const key = subjectKey(subject);
+  const match = Object.keys(profiles).find((name) => subjectKey(name) === key);
+  return match ? profiles[match] : "";
+}
+
+function closeMaterialDialog() {
+  const dialog = byId("material-dialog");
+  if (dialog.open) dialog.close();
+  materialTopic = null;
+  materialProposals = [];
+  byId("material-dialog-status").textContent = "";
+}
+
+function renderMaterialList(materials) {
+  const list = byId("material-list");
+  list.replaceChildren();
+  if (!materials.length) {
+    const empty = document.createElement("p");
+    empty.className = "folder-topic-empty";
+    empty.textContent = "No class material yet. Paste a homework or exam problem below, or scan a page.";
+    list.append(empty);
+    return;
+  }
+  materials.forEach((material) => {
+    const item = document.createElement("article");
+    item.className = "material-item";
+    const heading = document.createElement("div");
+    heading.className = "material-heading";
+    const kind = document.createElement("span");
+    kind.className = "material-kind";
+    kind.textContent = kindLabel(material.kind);
+    const source = document.createElement("strong");
+    source.textContent = material.source_label || "Untitled";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "material-delete";
+    remove.textContent = "Remove";
+    remove.setAttribute("aria-label", `Remove ${material.source_label || "this material"}`);
+    remove.addEventListener("click", () => deleteMaterial(material, remove));
+    heading.append(kind, source, remove);
+    const body = document.createElement("p");
+    body.className = "material-body";
+    setNotationText(body, material.body);
+    item.append(heading, body);
+    if (material.solution) {
+      const solution = document.createElement("p");
+      solution.className = "material-solution";
+      setNotationText(solution, `Solution: ${material.solution}`);
+      item.append(solution);
+    }
+    list.append(item);
+  });
+}
+
+async function openMaterialDialog(topic) {
+  materialTopic = topic;
+  materialProposals = [];
+  byId("material-dialog-subject").textContent = topic.course;
+  byId("material-dialog-title").textContent = `Class material · ${topic.name}`;
+  byId("material-profile-subject").textContent = topic.course;
+  byId("material-profile").value = subjectProfileFor(topic.course);
+  byId("material-kind").value = "example_problem";
+  byId("material-body").value = "";
+  byId("material-solution").value = "";
+  byId("material-source").value = "";
+  byId("material-file").value = "";
+  byId("material-proposals").replaceChildren();
+  byId("material-save-proposals").hidden = true;
+  byId("material-list").replaceChildren();
+  byId("material-dialog-status").textContent = "Loading saved material…";
+  byId("material-dialog").showModal();
+  try {
+    const response = await fetch(`/api/study/materials?skill_id=${encodeURIComponent(topic.id)}`, { cache: "no-store" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `Request failed: ${response.status}`);
+    renderMaterialList(result.materials || []);
+    byId("material-dialog-status").textContent = "";
+  } catch (error) {
+    void reportClientProblem(error, "openMaterialDialog");
+    byId("material-dialog-status").textContent = error.message;
+  }
+  requestAnimationFrame(() => byId("material-body").focus());
+}
+
+async function addMaterials(materials, statusText) {
+  if (!materialTopic) return;
+  byId("material-dialog-status").textContent = statusText;
+  const response = await postJson("/api/study/materials/add", { skill_id: materialTopic.id, materials });
+  renderMaterialList(response.materials || []);
+  materialTopic = { ...materialTopic, material_count: response.material_count };
+  await loadDashboard();
+}
+
+async function addPastedMaterial(event) {
+  event.preventDefault();
+  const body = byId("material-body").value.trim();
+  if (!body) { byId("material-body").focus(); return; }
+  const button = byId("material-add");
+  button.disabled = true;
+  try {
+    await addMaterials(
+      [{
+        kind: byId("material-kind").value,
+        body,
+        solution: byId("material-solution").value.trim(),
+        source_label: byId("material-source").value.trim(),
+      }],
+      "Saving this problem…",
+    );
+    byId("material-body").value = "";
+    byId("material-solution").value = "";
+    byId("material-source").value = "";
+    byId("material-dialog-status").textContent = "Saved. Sensei will imitate it on the next problem.";
+  } catch (error) {
+    void reportClientProblem(error, "addPastedMaterial");
+    byId("material-dialog-status").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function deleteMaterial(material, button) {
+  if (!window.confirm("Remove this class material? Sensei will stop imitating it.")) return;
+  button.disabled = true;
+  try {
+    const response = await postJson("/api/study/materials/delete", { material_id: material.id });
+    renderMaterialList(response.materials || []);
+    if (materialTopic) materialTopic = { ...materialTopic, material_count: response.material_count };
+    await loadDashboard();
+  } catch (error) {
+    void reportClientProblem(error, "deleteMaterial");
+    byId("material-dialog-status").textContent = error.message;
+    button.disabled = false;
+  }
+}
+
+async function saveCourseProfile() {
+  if (!materialTopic) return;
+  const button = byId("material-profile-save");
+  button.disabled = true;
+  byId("material-dialog-status").textContent = "Saving the course profile…";
+  try {
+    await postJson("/api/study/profile", { subject: materialTopic.course, profile: byId("material-profile").value.trim() });
+    await loadDashboard();
+    byId("material-dialog-status").textContent = "Course profile saved for every topic in this subject.";
+  } catch (error) {
+    void reportClientProblem(error, "saveCourseProfile");
+    byId("material-dialog-status").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      resolve(result.slice(result.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(reader.error || new Error("The file could not be read."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderProposals(proposals) {
+  const container = byId("material-proposals");
+  container.replaceChildren();
+  proposals.forEach((proposal, index) => {
+    const item = document.createElement("div");
+    item.className = "material-proposal";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    checkbox.dataset.index = String(index);
+    checkbox.setAttribute("aria-label", `Save scanned item ${index + 1}`);
+    const fields = document.createElement("div");
+    fields.className = "material-proposal-fields";
+    const meta = document.createElement("div");
+    meta.className = "material-proposal-meta";
+    const kind = document.createElement("select");
+    kind.dataset.field = "kind";
+    ["example_problem", "worked_example", "notes"].forEach((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = kindLabel(value);
+      option.selected = proposal.kind === value;
+      kind.append(option);
+    });
+    const source = document.createElement("input");
+    source.type = "text";
+    source.maxLength = 120;
+    source.placeholder = "Source, e.g. HW 4 #7";
+    source.value = proposal.source_label || "";
+    source.dataset.field = "source_label";
+    meta.append(kind, source);
+    const body = document.createElement("textarea");
+    body.rows = 4;
+    body.maxLength = 4000;
+    body.value = proposal.body || "";
+    body.dataset.field = "body";
+    const solution = document.createElement("textarea");
+    solution.rows = 2;
+    solution.maxLength = 4000;
+    solution.placeholder = "Printed solution or answer (optional)";
+    solution.value = proposal.solution || "";
+    solution.dataset.field = "solution";
+    fields.append(meta, body, solution);
+    item.append(checkbox, fields);
+    container.append(item);
+  });
+  byId("material-save-proposals").hidden = proposals.length === 0;
+}
+
+async function scanMaterialFile() {
+  if (!materialTopic) return;
+  const status = byId("material-dialog-status");
+  const file = byId("material-file").files?.[0];
+  if (!file) { status.textContent = "Choose a PDF or photo first."; return; }
+  const isPdf = file.type === "application/pdf";
+  if (!isPdf && !IMAGE_TYPES.includes(file.type)) {
+    status.textContent = "Upload a PDF or a PNG, JPEG, or WebP image.";
+    return;
+  }
+  if (file.size > (isPdf ? MAX_UPLOAD_BYTES : MAX_IMAGE_BYTES)) {
+    status.textContent = isPdf ? "PDF files must be 20 MB or smaller." : "Images must be 8 MB or smaller.";
+    return;
+  }
+  const button = byId("material-scan");
+  button.disabled = true;
+  status.textContent = "Sensei is reading the page and transcribing its problems…";
+  try {
+    const response = await postJson("/api/study/materials/scan", {
+      skill_id: materialTopic.id,
+      filename: file.name,
+      media_base64: await fileToBase64(file),
+      media_type: file.type,
+    });
+    materialProposals = response.proposals || [];
+    renderProposals(materialProposals);
+    status.textContent = materialProposals.length
+      ? `Found ${materialProposals.length} item${materialProposals.length === 1 ? "" : "s"}. Review, edit, and save the ones you want.`
+      : "No problems were found on that page.";
+  } catch (error) {
+    void reportClientProblem(error, "scanMaterialFile");
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveSelectedProposals() {
+  const rows = Array.from(byId("material-proposals").querySelectorAll(".material-proposal"));
+  const materials = rows
+    .filter((row) => row.querySelector('input[type="checkbox"]').checked)
+    .map((row) => ({
+      kind: row.querySelector('[data-field="kind"]').value,
+      body: row.querySelector('[data-field="body"]').value.trim(),
+      solution: row.querySelector('[data-field="solution"]').value.trim(),
+      source_label: row.querySelector('[data-field="source_label"]').value.trim(),
+    }))
+    .filter((material) => material.body);
+  if (!materials.length) {
+    byId("material-dialog-status").textContent = "Select at least one item with problem text.";
+    return;
+  }
+  const button = byId("material-save-proposals");
+  button.disabled = true;
+  try {
+    await addMaterials(materials, "Saving scanned material…");
+    byId("material-proposals").replaceChildren();
+    materialProposals = [];
+    button.hidden = true;
+    byId("material-file").value = "";
+    byId("material-dialog-status").textContent = `Saved ${materials.length} item${materials.length === 1 ? "" : "s"}.`;
+  } catch (error) {
+    void reportClientProblem(error, "saveSelectedProposals");
+    byId("material-dialog-status").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderStudySets(topics, folders) {
+  const container = byId("study-sets");
+  container.replaceChildren();
+  const hasContent = topics.length > 0 || folders.length > 0;
+  byId("empty-study-sets").hidden = hasContent;
+  if (!hasContent) {
+    byId("study-sets-summary").textContent = "";
+    return;
+  }
+  const groups = groupTopicsBySubject(topics, folders);
+  byId("study-sets-summary").textContent = `${topics.length} topic${topics.length === 1 ? "" : "s"} in ${folders.length} study set${folders.length === 1 ? "" : "s"}.`;
+  groups.forEach((group, groupIndex) => {
+    group.folders.forEach((folder, folderIndex) => {
+      const folderTopics = group.topics
+        .filter((topic) => topic.folder_id === folder.id)
+        .sort((left, right) => Number(left.sort_order) - Number(right.sort_order));
+      const section = document.createElement("section");
+      section.className = "subject-group study-set";
+      const heading = document.createElement("div");
+      heading.className = "subject-group-heading";
+      const title = document.createElement("h3");
+      title.id = `study-set-${groupIndex}-${folderIndex}`;
+      title.textContent = `${group.subject} · ${folder.name}`;
+      section.setAttribute("aria-labelledby", title.id);
+      const count = document.createElement("span");
+      count.textContent = `${folderTopics.length} topic${folderTopics.length === 1 ? "" : "s"}`;
+      heading.append(title, count);
+      section.append(heading);
+      const grid = document.createElement("div");
+      grid.className = "skill-grid";
+      folderTopics.forEach((topic) => grid.append(topicCard(topic)));
+      if (!folderTopics.length) {
+        const empty = document.createElement("p");
+        empty.className = "empty-folder-copy";
+        empty.textContent = "This study set has no topics yet.";
+        section.append(empty);
+      } else {
+        section.append(grid);
+      }
+      container.append(section);
+    });
+    const unfiled = group.topics.filter((topic) => !topic.folder_id || !folderById(topic.folder_id));
+    if (unfiled.length) {
+      const section = document.createElement("section");
+      section.className = "subject-group study-set";
+      const heading = document.createElement("div");
+      heading.className = "subject-group-heading";
+      const title = document.createElement("h3");
+      title.textContent = group.folders.length ? `${group.subject} · Other topics` : group.subject;
+      const count = document.createElement("span");
+      count.textContent = `${unfiled.length} topic${unfiled.length === 1 ? "" : "s"}`;
+      heading.append(title, count);
+      const grid = document.createElement("div");
+      grid.className = "skill-grid";
+      unfiled.forEach((topic) => grid.append(topicCard(topic)));
+      section.append(heading, grid);
+      container.append(section);
+    }
+  });
+}
+
+function setImportMode(mode) {
+  importMode = mode === "text" ? "text" : "file";
+  byId("import-file-row").hidden = importMode !== "file";
+  byId("import-text-row").hidden = importMode !== "text";
+  byId("import-mode-file").classList.toggle("active", importMode === "file");
+  byId("import-mode-file").setAttribute("aria-pressed", String(importMode === "file"));
+  byId("import-mode-text").classList.toggle("active", importMode === "text");
+  byId("import-mode-text").setAttribute("aria-pressed", String(importMode === "text"));
+}
+
+function utf8ToBase64(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(index, index + chunk));
+  }
+  return btoa(binary);
+}
+
+async function importPayload() {
+  if (importMode === "text") {
+    const text = byId("import-text").value.trim();
+    if (!text) {
+      byId("import-text").focus();
+      throw new Error("Paste the study guide text first.");
+    }
+    return { filename: "study-guide.txt", media_base64: utf8ToBase64(text), media_type: "text/plain" };
+  }
+  const file = byId("import-file").files?.[0];
+  if (!file) throw new Error("Choose a PDF or photo of your study guide first.");
+  const isPdf = file.type === "application/pdf";
+  if (!isPdf && !IMAGE_TYPES.includes(file.type)) {
+    throw new Error("Upload a PDF or a PNG, JPEG, or WebP image.");
+  }
+  if (file.size > (isPdf ? MAX_UPLOAD_BYTES : MAX_IMAGE_BYTES)) {
+    throw new Error(isPdf ? "PDF files must be 20 MB or smaller." : "Images must be 8 MB or smaller.");
+  }
+  return { filename: file.name, media_base64: await fileToBase64(file), media_type: file.type };
+}
+
+async function analyzeStudyGuide(event) {
+  event.preventDefault();
+  if (analyzing || !dashboardState) return;
+  const status = byId("import-status");
+  const button = byId("import-button");
+  analyzing = true;
+  button.disabled = true;
+  try {
+    const payload = await importPayload();
+    payload.subject_hint = byId("import-subject").value.trim();
+    payload.set_name_hint = byId("import-set-name").value.trim();
+    setGenerationStatus(status, "Sensei is reading the document and mapping the skills it expects. This can take a minute or two…", "working");
+    const response = await postJson("/api/study/plan/scan", payload);
+    renderPlanReview(response.plan);
+    setGenerationStatus(status, "Review the plan below, then create it.", "success");
+  } catch (error) {
+    void reportClientProblem(error, "analyzeStudyGuide");
+    setGenerationStatus(status, error.message, "error");
+  } finally {
+    analyzing = false;
+    button.disabled = false;
+  }
+}
+
+function renderPlanReview(plan) {
+  currentPlan = plan;
+  byId("plan-subject").value = plan.subject || "";
+  byId("plan-set-name").value = plan.set_name || "";
+  byId("plan-profile").value = plan.course_profile || "";
+  const list = byId("plan-topics");
+  list.replaceChildren();
+  (plan.topics || []).forEach((topic, index) => {
+    const row = document.createElement("li");
+    row.className = "plan-topic";
+    row.dataset.index = String(index);
+    const head = document.createElement("div");
+    head.className = "plan-topic-head";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    checkbox.setAttribute("aria-label", `Include ${topic.name}`);
+    const name = document.createElement("input");
+    name.type = "text";
+    name.maxLength = 120;
+    name.value = topic.name || "";
+    name.dataset.field = "name";
+    name.setAttribute("aria-label", "Topic name");
+    const section = document.createElement("span");
+    section.className = "plan-topic-section";
+    section.textContent = topic.section ? `§ ${topic.section}` : "";
+    const materials = Array.isArray(topic.materials) ? topic.materials : [];
+    const count = document.createElement("span");
+    count.className = "plan-topic-count";
+    count.textContent = `${materials.length} example${materials.length === 1 ? "" : "s"}`;
+    head.append(checkbox, name, section, count);
+    const details = document.createElement("details");
+    details.className = "plan-topic-details";
+    const summary = document.createElement("summary");
+    summary.textContent = "Practice brief and examples";
+    const brief = document.createElement("textarea");
+    brief.rows = 3;
+    brief.maxLength = 2000;
+    brief.value = topic.description || "";
+    brief.dataset.field = "description";
+    brief.setAttribute("aria-label", "Practice brief");
+    details.append(summary, brief);
+    materials.forEach((material) => {
+      const example = document.createElement("p");
+      example.className = "plan-example";
+      const label = material.source_label ? `${material.source_label}: ` : "";
+      const solution = material.solution ? `  —  ${material.solution}` : "";
+      setNotationText(example, `${label}${material.body}${solution}`);
+      details.append(example);
+    });
+    row.append(head, details);
+    list.append(row);
+  });
+  const topicCount = (plan.topics || []).length;
+  byId("plan-summary").textContent = `${topicCount} topic${topicCount === 1 ? "" : "s"} · ${plan.material_count || 0} example problem${plan.material_count === 1 ? "" : "s"}`;
+  byId("plan-status").textContent = "Uncheck anything you do not need, rename topics, then create the plan.";
+  byId("plan-review").hidden = false;
+  byId("plan-review").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function collectPlan() {
+  const rows = Array.from(byId("plan-topics").querySelectorAll(".plan-topic"));
+  const topics = rows
+    .filter((row) => row.querySelector('input[type="checkbox"]').checked)
+    .map((row) => {
+      const source = (currentPlan?.topics || [])[Number(row.dataset.index)] || {};
+      return {
+        name: row.querySelector('[data-field="name"]').value.trim(),
+        section: source.section || "",
+        description: row.querySelector('[data-field="description"]').value.trim(),
+        materials: Array.isArray(source.materials) ? source.materials : [],
+      };
+    })
+    .filter((topic) => topic.name);
+  return {
+    subject: byId("plan-subject").value.trim(),
+    set_name: byId("plan-set-name").value.trim(),
+    course_profile: byId("plan-profile").value.trim(),
+    topics,
+  };
+}
+
+function discardPlan() {
+  currentPlan = null;
+  byId("plan-topics").replaceChildren();
+  byId("plan-review").hidden = true;
+}
+
+async function createStudyPlan() {
+  if (!currentPlan) return;
+  const status = byId("plan-status");
+  const plan = collectPlan();
+  if (!plan.subject || !plan.set_name) {
+    status.textContent = "Give the plan a subject and a study set name.";
+    return;
+  }
+  if (!plan.topics.length) {
+    status.textContent = "Keep at least one topic checked.";
+    return;
+  }
+  const button = byId("plan-create");
+  button.disabled = true;
+  status.textContent = "Creating your study set…";
+  try {
+    const response = await postJson("/api/study/plan/create", plan);
+    discardPlan();
+    byId("import-file").value = "";
+    byId("import-text").value = "";
+    await loadDashboard();
+    setGenerationStatus(
+      byId("import-status"),
+      `Created “${response.folder.name}” with ${response.topics.length} topic${response.topics.length === 1 ? "" : "s"} and ${response.added_materials} example problem${response.added_materials === 1 ? "" : "s"}. Pick a topic below to train.`,
+      "success",
+    );
+    byId("study-sets-section").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    void reportClientProblem(error, "createStudyPlan");
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+byId("import-form").addEventListener("submit", analyzeStudyGuide);
+byId("import-mode-file").addEventListener("click", () => setImportMode("file"));
+byId("import-mode-text").addEventListener("click", () => setImportMode("text"));
+byId("plan-create").addEventListener("click", createStudyPlan);
+byId("plan-discard").addEventListener("click", discardPlan);
 document.querySelectorAll(".nav-tab").forEach((tab, index, tabs) => {
   tab.addEventListener("click", () => showView(tab.dataset.view));
   tab.addEventListener("keydown", (event) => {
@@ -1189,6 +1869,15 @@ byId("folder-form").addEventListener("submit", saveFolder);
 byId("folder-cancel").addEventListener("click", closeFolderDialog);
 byId("folder-dialog-close").addEventListener("click", closeFolderDialog);
 byId("folder-delete").addEventListener("click", deleteFolder);
+byId("material-form").addEventListener("submit", addPastedMaterial);
+byId("material-dialog-close").addEventListener("click", closeMaterialDialog);
+byId("material-done").addEventListener("click", closeMaterialDialog);
+byId("material-profile-save").addEventListener("click", saveCourseProfile);
+byId("material-scan").addEventListener("click", scanMaterialFile);
+byId("material-save-proposals").addEventListener("click", saveSelectedProposals);
+byId("material-dialog").addEventListener("click", (event) => {
+  if (event.target === byId("material-dialog")) closeMaterialDialog();
+});
 byId("folder-dialog").addEventListener("click", (event) => {
   if (event.target === byId("folder-dialog")) closeFolderDialog();
 });

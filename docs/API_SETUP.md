@@ -44,15 +44,26 @@ $env:SENSEI_LLM_BASE_URL = "https://provider.example/v1"
 python -m sensei.dashboard
 ```
 
-Command-line `--model` and `--api-base-url` values override the corresponding
-environment variables. The API key intentionally has no command-line option so it
-does not enter shell history or process listings.
+Command-line `--model`, `--scanner-model`, and `--api-base-url` values override the
+corresponding environment variables. `SENSEI_SCANNER_MODEL` (or `--scanner-model`)
+names the model used to analyze study guides and transcribe uploaded class material;
+it must accept PDF `input_file` and `input_image` content and long JSON outputs (a
+study-plan request allows up to 16,384 output tokens) and defaults to the practice
+model. The API key
+intentionally has no command-line option so it does not enter shell history or
+process listings.
 
 ## Data boundary
 
 Sensei keeps learning records in `data/sensei.db`. LLM requests contain the current
 problem, recent bounded conversation context, and a small relevant summary of learner
-memory when available. The provider request sets `store` to `false`.
+memory when available. Practice requests also include the topic's saved class
+material, the subject's course profile, and a compact learner signal. The provider
+request sets `store` to `false`.
+
+Uploaded study guides, homework, or exam pages are sent only to the scanner model.
+The practice model receives the plan or transcribed items you save, never the file.
+Sensei does not write uploaded bytes to disk or SQLite.
 
 The API is required for both the terminal tutor and dashboard startup. Missing
 credentials cause startup to fail before a tutoring request is sent.

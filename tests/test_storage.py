@@ -87,14 +87,14 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(9, version)
+        self.assertEqual(10, version)
         self.assertEqual(37, len(self.store.skill_names()))
         self.store.close()
         self.store = LearningStore(self.database)
         migration_count = self.store.connection.execute(
             "SELECT COUNT(*) AS count FROM schema_migrations"
         ).fetchone()["count"]
-        self.assertEqual(9, migration_count)
+        self.assertEqual(10, migration_count)
 
     def test_schema_v1_database_migrates_and_backfills_provenance(self) -> None:
         self.store.close()
@@ -141,7 +141,7 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(9, version)
+        self.assertEqual(10, version)
         self.assertIsNone(attempt["quest_id"])
         self.assertEqual(100.0, attempt["mastery_evidence"])
         progress = self.store.connection.execute(
@@ -171,7 +171,7 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(9, version)
+        self.assertEqual(10, version)
 
     def test_schema_v3_database_migrates_course_and_preserves_old_skills(self) -> None:
         self.store.close()
@@ -200,7 +200,7 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(9, version)
+        self.assertEqual(10, version)
 
     def test_schema_v6_removes_obsolete_skill_metadata_without_losing_topics(self) -> None:
         self.store.close()
@@ -548,3 +548,421 @@ class LearningStoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from datetime import timedelta  # noqa: E402
+
+from sensei.storage import (  # noqa: E402
+    MIGRATION_7,
+    MIGRATION_8,
+    MIGRATION_9,
+    difficulty_tier,
+)
+
+
+class ClassMaterialTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.store = LearningStore(self.root / "sensei.db")
+
+    def tearDown(self) -> None:
+        self.store.close()
+        self.temporary.cleanup()
+
+    @staticmethod
+    def _learner_event(skill_id: str, **overrides: object) -> LearningEvent:
+        fields: dict[str, object] = dict(
+            skill_id=skill_id,
+            outcome=Outcome.CORRECT,
+            misconception=None,
+            evidence="The verifier checked the dashboard answer.",
+            confidence=1.0,
+            problem="Find dy/dx for the given relation.",
+            hints_used=0,
+            solution_revealed=False,
+            tutor_turns=1,
+        )
+        fields.update(overrides)
+        return LearningEvent(**fields)  # type: ignore[arg-type]
+
+    def _topic(self, name: str = "Related rates") -> str:
+        return str(
+            self.store.create_study_topic(
+                subject="Calculus I", topic=name, context=""
+            )["id"]
+        )
+
+    def test_schema_v9_database_migrates_to_class_material_tables(self) -> None:
+        self.store.close()
+        old_database = self.root / "version-nine.db"
+        connection = sqlite3.connect(old_database)
+        for migration in (
+            MIGRATION_1,
+            MIGRATION_2,
+            MIGRATION_3,
+            MIGRATION_4,
+            MIGRATION_5,
+            MIGRATION_7,
+            MIGRATION_8,
+            MIGRATION_9,
+        ):
+            connection.executescript(migration)
+        connection.executemany(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+            [(version, NOW.isoformat()) for version in range(1, 10)],
+        )
+        connection.execute(
+            """INSERT INTO skills(
+                   id, name, unit, description, prerequisites_json, sort_order,
+                   course, source, created_at
+               ) VALUES ('legacy-topic', 'Legacy topic', 'Legacy', 'Test', '[]',
+                         100, 'Calculus I', 'learner', ?)""",
+            (NOW.isoformat(),),
+        )
+        connection.commit()
+        connection.close()
+
+        self.store = LearningStore(old_database)
+        version = self.store.connection.execute(
+            "SELECT MAX(version) AS version FROM schema_migrations"
+        ).fetchone()["version"]
+        self.assertEqual(10, version)
+        tables = {
+            row["name"]
+            for row in self.store.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        self.assertIn("topic_materials", tables)
+        self.assertIn("subject_profiles", tables)
+        self.assertEqual(0, self.store.study_topic("legacy-topic")["material_count"])
+        self.assertEqual(
+            [], list(self.store.connection.execute("PRAGMA foreign_key_check"))
+        )
+
+    def test_materials_attach_to_topics_survive_restart_and_leave_with_delete(
+        self,
+    ) -> None:
+        skill_id = self._topic()
+        added = self.store.add_topic_materials(
+            skill_id,
+            [
+                {
+                    "kind": "example_problem",
+                    "body": (
+                        "A 10 ft ladder slides down a wall.\r\n"
+                        "(a) Find dx/dt when x = 6.\r\n(b) Find the rate of the angle."
+                    ),
+                    "solution": "dx/dt = 3/4 ft/s",
+                    "source_label": "  HW 4   #7 ",
+                },
+                {"body": "Water drains from a cone at 2 L/min.", "solution": ""},
+            ],
+        )
+        self.assertEqual(2, len(added))
+        self.assertEqual("HW 4 #7", added[0]["source_label"])
+        self.assertIn("(b) Find the rate", added[0]["body"])
+        self.assertNotIn("\r", added[0]["body"])
+        self.assertIsNone(added[1]["solution"])
+        self.assertEqual("example_problem", added[1]["kind"])
+        self.assertEqual("", added[1]["source_label"])
+        self.assertEqual(2, self.store.study_topic(skill_id)["material_count"])
+        self.assertEqual(2, self.store.study_topics()[0]["material_count"])
+        with self.assertRaisesRegex(ValueError, "at least one"):
+            self.store.add_topic_materials(skill_id, [])
+        with self.assertRaisesRegex(ValueError, "kind"):
+            self.store.add_topic_materials(skill_id, [{"kind": "video", "body": "x"}])
+        with self.assertRaisesRegex(ValueError, "does not exist"):
+            self.store.add_topic_materials("missing-topic", [{"body": "x"}])
+
+        self.store.record_event(self._learner_event(skill_id), now=NOW)
+        self.store.restart_study_topic(skill_id)
+        self.assertEqual(2, len(self.store.topic_materials(skill_id)))
+
+        deleted = self.store.delete_topic_material(added[1]["id"])
+        self.assertEqual(added[1]["id"], deleted["id"])
+        self.assertEqual(1, len(self.store.topic_materials(skill_id)))
+        with self.assertRaisesRegex(ValueError, "does not exist"):
+            self.store.delete_topic_material(added[1]["id"])
+
+        export = self.store.export_json(self.root / "export.json")
+        document = json.loads(export.read_text(encoding="utf-8"))
+        self.assertEqual(1, len(document["topic_materials"]))
+
+        self.store.delete_study_topic(skill_id)
+        self.assertEqual([], self.store.topic_materials(skill_id))
+        self.assertEqual(
+            [], list(self.store.connection.execute("PRAGMA foreign_key_check"))
+        )
+
+    def test_material_limits_are_enforced(self) -> None:
+        skill_id = self._topic()
+        with self.assertRaisesRegex(ValueError, "4000 characters"):
+            self.store.add_topic_materials(skill_id, [{"body": "x" * 4_001}])
+        with self.assertRaisesRegex(ValueError, "120 characters"):
+            self.store.add_topic_materials(
+                skill_id, [{"body": "x", "source_label": "y" * 121}]
+            )
+        self.store.add_topic_materials(
+            skill_id, [{"body": f"Problem {index}"} for index in range(40)]
+        )
+        with self.assertRaisesRegex(ValueError, "at most 40"):
+            self.store.add_topic_materials(skill_id, [{"body": "one more"}])
+
+    def test_subject_profiles_match_subjects_case_insensitively(self) -> None:
+        self._topic("Limits")
+        saved = self.store.set_subject_profile(
+            "calculus i",
+            "Exams are five free-response problems; no calculator; show all work.",
+        )
+        self.assertEqual("Calculus I", saved["subject"])
+        self.assertEqual({"Calculus I": saved["profile"]}, self.store.subject_profiles())
+        self.assertEqual(saved["profile"], self.store.subject_profile("CALCULUS I"))
+        self.store.set_subject_profile("Calculus I", "Updated.")
+        self.assertEqual({"Calculus I": "Updated."}, self.store.subject_profiles())
+        self.store.set_subject_profile("Calculus I", "   ")
+        self.assertEqual({}, self.store.subject_profiles())
+        self.assertEqual("", self.store.subject_profile("Calculus I"))
+        with self.assertRaisesRegex(ValueError, "2000 characters"):
+            self.store.set_subject_profile("Calculus I", "p" * 2_001)
+
+    def test_generation_context_adapts_tier_to_recent_outcomes(self) -> None:
+        skill_id = self._topic()
+        fresh = self.store.generation_context(skill_id)
+        self.assertEqual("standard", fresh["difficulty_tier"])
+        self.assertEqual([], fresh["recent_outcomes"])
+        self.assertEqual("not started", fresh["mastery_label"])
+        self.assertEqual([], fresh["misconceptions"])
+
+        for index in range(3):
+            self.store.record_event(
+                self._learner_event(
+                    skill_id,
+                    outcome=Outcome.INCORRECT,
+                    misconception="Forgot the chain rule on the inner function.",
+                ),
+                now=NOW + timedelta(minutes=index),
+            )
+        context = self.store.generation_context(skill_id)
+        self.assertEqual("foundational", context["difficulty_tier"])
+        self.assertEqual(["incorrect"] * 3, context["recent_outcomes"])
+        self.assertEqual(3, context["attempts_count"])
+        self.assertEqual(
+            ["Forgot the chain rule on the inner function."],
+            context["misconceptions"],
+        )
+
+    def test_difficulty_tier_rules(self) -> None:
+        self.assertEqual("standard", difficulty_tier(0.0, 0, 0, []))
+        self.assertEqual("standard", difficulty_tier(0.0, 0, 2, ["incorrect"]))
+        self.assertEqual(
+            "foundational", difficulty_tier(10.0, 0, 3, ["incorrect"] * 3)
+        )
+        self.assertEqual(
+            "standard",
+            difficulty_tier(50.0, 2, 4, ["correct", "incorrect", "correct", "correct"]),
+        )
+        self.assertEqual(
+            "challenging",
+            difficulty_tier(50.0, 2, 4, ["incorrect", "correct", "correct", "correct"]),
+        )
+        self.assertEqual(
+            "challenging", difficulty_tier(70.0, 3, 6, ["correct", "incorrect"])
+        )
+        self.assertEqual(
+            "standard", difficulty_tier(70.0, 3, 6, ["incorrect", "incorrect"])
+        )
+        self.assertEqual("synthesis", difficulty_tier(85.0, 5, 10, ["correct"] * 5))
+        self.assertEqual(
+            "foundational",
+            difficulty_tier(30.0, 1, 5, ["correct", "incorrect", "incorrect"]),
+        )
+
+    def test_misconceptions_resolve_after_two_independent_correct_answers(
+        self,
+    ) -> None:
+        skill_id = self._topic()
+
+        def unresolved() -> list[tuple[str, int]]:
+            return [
+                (str(row["description"]), int(row["occurrence_count"]))
+                for row in self.store.connection.execute(
+                    """SELECT description, occurrence_count FROM misconceptions
+                        WHERE skill_id = ? AND resolved_at IS NULL""",
+                    (skill_id,),
+                )
+            ]
+
+        self.store.record_event(
+            self._learner_event(
+                skill_id,
+                outcome=Outcome.INCORRECT,
+                misconception="Dropped the negative sign.",
+            ),
+            now=NOW,
+        )
+        self.store.record_event(self._learner_event(skill_id), now=NOW + timedelta(days=1))
+        self.assertEqual([("Dropped the negative sign.", 1)], unresolved())
+        self.store.record_event(self._learner_event(skill_id), now=NOW + timedelta(days=2))
+        self.assertEqual([], unresolved())
+        self.assertEqual([], self.store.generation_context(skill_id)["misconceptions"])
+
+        self.store.record_event(
+            self._learner_event(
+                skill_id,
+                outcome=Outcome.INCORRECT,
+                misconception="Dropped the negative sign.",
+            ),
+            now=NOW + timedelta(days=3),
+        )
+        self.assertEqual([("Dropped the negative sign.", 2)], unresolved())
+
+
+
+class StudyPlanStorageTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.store = LearningStore(self.root / "sensei.db")
+
+    def tearDown(self) -> None:
+        self.store.close()
+        self.temporary.cleanup()
+
+    @staticmethod
+    def _plan_topics() -> list[dict]:
+        return [
+            {
+                "name": "Limits from a graph",
+                "section": "1.2",
+                "description": "Read one-sided and two-sided limits and function values from a graph.",
+                "materials": [
+                    {
+                        "kind": "example_problem",
+                        "body": "[Graph of f with a hole at (2, 1/2).] Find lim_{x->2} f(x).",
+                        "solution": "L = 1/2",
+                        "source_label": "Exercise 12",
+                    },
+                    {
+                        "kind": "example_problem",
+                        "body": "[Graph of g.] Find lim_{x->1^-} g(x).",
+                        "solution": "L = 3",
+                        "source_label": "Exercise 24",
+                    },
+                ],
+            },
+            {
+                "name": "Squeeze theorem",
+                "section": "1.4",
+                "description": "Bound h(x) between two functions with equal limits.",
+                "materials": [
+                    {
+                        "kind": "example_problem",
+                        "body": "c = 0; 4 - x^2 <= h(x) <= 4 + x^2",
+                        "solution": "L = 4",
+                        "source_label": "Exercise 31",
+                    }
+                ],
+            },
+            {
+                "name": "Vertical asymptotes versus holes",
+                "section": "1.5",
+                "description": "",
+                "materials": [],
+            },
+        ]
+
+    def test_plan_creates_folder_topics_materials_and_profile_atomically(self) -> None:
+        result = self.store.create_study_plan(
+            subject="MAC2311 Calculus I",
+            set_name="Test 1",
+            course_profile="Calculator in radian mode.",
+            topics=self._plan_topics(),
+        )
+        self.assertEqual("Test 1", result["folder"]["name"])
+        self.assertEqual(3, result["folder"]["topic_count"])
+        self.assertEqual(3, result["created_topics"])
+        self.assertEqual(0, result["updated_topics"])
+        self.assertEqual(3, result["added_materials"])
+        self.assertTrue(result["profile_saved"])
+        names = [topic["name"] for topic in result["topics"]]
+        self.assertEqual(
+            ["Limits from a graph", "Squeeze theorem", "Vertical asymptotes versus holes"],
+            names,
+        )
+        graph_topic = result["topics"][0]
+        self.assertEqual("Section 1.2", graph_topic["unit"])
+        self.assertEqual(result["folder"]["id"], graph_topic["folder_id"])
+        self.assertEqual(2, graph_topic["material_count"])
+        self.assertEqual(
+            "No additional practice instructions were provided.",
+            result["topics"][2]["description"],
+        )
+        self.assertEqual(
+            {"MAC2311 Calculus I": "Calculator in radian mode."},
+            self.store.subject_profiles(),
+        )
+        materials = self.store.topic_materials(graph_topic["id"])
+        self.assertEqual(["Exercise 12", "Exercise 24"], [m["source_label"] for m in materials])
+        self.assertEqual(
+            [], list(self.store.connection.execute("PRAGMA foreign_key_check"))
+        )
+
+    def test_reimport_merges_without_duplicates_and_keeps_existing_profile(self) -> None:
+        first = self.store.create_study_plan(
+            subject="MAC2311 Calculus I",
+            set_name="Test 1",
+            course_profile="Original profile.",
+            topics=self._plan_topics(),
+        )
+        topics = self._plan_topics()
+        topics[0]["materials"].append(
+            {
+                "kind": "example_problem",
+                "body": "[Graph of f.] Find f(4).",
+                "solution": "y = 2",
+                "source_label": "Exercise 17",
+            }
+        )
+        topics[1]["description"] = "Updated brief for the squeeze theorem."
+        second = self.store.create_study_plan(
+            subject="mac2311 calculus i",
+            set_name="test 1",
+            course_profile="A different profile.",
+            topics=topics,
+        )
+        self.assertEqual(first["folder"]["id"], second["folder"]["id"])
+        self.assertEqual(0, second["created_topics"])
+        self.assertEqual(3, second["updated_topics"])
+        self.assertEqual(1, second["added_materials"])
+        self.assertFalse(second["profile_saved"])
+        self.assertEqual(
+            {"MAC2311 Calculus I": "Original profile."}, self.store.subject_profiles()
+        )
+        self.assertEqual(1, len(self.store.topic_folders()))
+        self.assertEqual(3, len(self.store.study_topics()))
+        self.assertEqual(
+            "Updated brief for the squeeze theorem.", second["topics"][1]["description"]
+        )
+        self.assertEqual(3, self.store.study_topic(first["topics"][0]["id"])["material_count"])
+
+    def test_plan_validation_rolls_back_everything(self) -> None:
+        with self.assertRaisesRegex(ValueError, "from 1 to 40"):
+            self.store.create_study_plan(subject="Calc", set_name="Test", topics=[])
+        with self.assertRaisesRegex(ValueError, "more than once"):
+            self.store.create_study_plan(
+                subject="Calc",
+                set_name="Test",
+                topics=[{"name": "Limits"}, {"name": "limits"}],
+            )
+        with self.assertRaisesRegex(ValueError, "4000 characters"):
+            self.store.create_study_plan(
+                subject="Calc",
+                set_name="Test",
+                topics=[{"name": "Limits", "materials": [{"body": "x" * 4_001}]}],
+            )
+        self.assertEqual([], self.store.topic_folders())
+        self.assertEqual([], self.store.study_topics())
+        with self.assertRaisesRegex(ValueError, "Folder name"):
+            self.store.create_study_plan(subject="Calc", set_name=" ", topics=[{"name": "L"}])

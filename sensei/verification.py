@@ -322,6 +322,12 @@ def _equivalent(left: sp.Expr, right: sp.Expr) -> tuple[bool | None, sp.Expr]:
     return equality, residual
 
 
+def expressions_equivalent(left: sp.Expr, right: sp.Expr) -> bool | None:
+    """Return True, False, or None when symbolic equality is undecidable."""
+
+    return _equivalent(left, right)[0]
+
+
 def _result_from_equivalence(
     *,
     kind: VerificationKind,

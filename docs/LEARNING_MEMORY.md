@@ -166,11 +166,45 @@ No old problem transcript is replayed. This keeps personalization approximately 
 
 Default exports and backups are created under ignored `data/exports/` and `data/backups/`. JSON exports include problem text and are personal. `/delete-data` affects the active database only; separate exports and backups remain until the student removes them.
 
+## Schema version 10
+
+| Table | Purpose |
+| --- | --- |
+| `topic_materials` | Pasted or scanned class material per topic: kind, body, optional solution, source label. |
+| `subject_profiles` | One course profile per subject with the professor's conventions. |
+
+Materials are course content rather than progress: **Restart** keeps them and
+**Delete** removes them with the topic. JSON exports include both tables.
+
+## Difficulty tiers
+
+Generation receives a `difficulty_tier` derived from the mastery label and recent
+outcomes: `standard` for a new or developing topic, `foundational` once a topic is
+`beginning` with at least three attempts, `challenging` when `proficient`, and
+`synthesis` when `mastered`. Two consecutive incorrect outcomes step the tier down;
+three consecutive correct outcomes step it up. The rule is a pure function
+(`difficulty_tier`) and is tested directly.
+
+## Misconception capture and resolution
+
+Dashboard attempts that are incorrect or partial, and did not reveal the final
+answer, trigger one short classification call. The finding must be a compact
+`misconception`, `evidence`, and `confidence` record; findings below 0.5 confidence
+or with a null misconception are discarded, and any provider failure is logged
+and ignored. Stored misconceptions are fed back into generation as "known weak
+spots" and are marked resolved after two independent correct answers in a row.
+A recurrence reopens the record and increments its count.
+
+Multi-part problems record `partial` when some parts are correct. The evidence and
+XP values in the tables above apply unchanged.
+
 ## Current limitations
 
 - Deterministic checks cover a deliberately restricted single-variable expression grammar; unsupported work remains student-reported or model-classified.
 - The catalog provides broad Precalculus and Calculus I paths rather than mirroring one specific college syllabus.
 - One local database represents one learner; profiles and multi-user isolation are not implemented.
-- Misconceptions accumulate but do not yet have an evidence-based resolution workflow.
+- Misconception names come from a model classification of one wrong answer; the
+  two-correct-answers resolution rule is a heuristic, not a validated model.
+- Partial credit records a fixed 55 evidence regardless of how many parts were right.
 - Review intervals and mastery weights are transparent heuristics that still need evaluation.
 - The retrieval summary is skill-level rather than embedding-based; this is intentional until the smaller design proves insufficient.

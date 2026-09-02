@@ -73,7 +73,7 @@ class AdaptivePracticeTests(unittest.TestCase):
             provider.requests[0][-1]["content"],
         )
         self.assertIn(
-            "Every quantitative given must be necessary",
+            "Course fidelity is the top priority",
             provider.requests[0][0]["content"],
         )
         self.assertIn("KaTeX-compatible LaTeX", provider.requests[0][0]["content"])
@@ -96,7 +96,7 @@ class AdaptivePracticeTests(unittest.TestCase):
             provider.requests[1][-1]["content"],
         )
         self.assertIn(
-            "Reject unused or redundant quantitative givens",
+            "compare the draft with the anchor exemplar",
             provider.requests[1][0]["content"],
         )
         self.assertIn(
@@ -681,3 +681,326 @@ class AdaptivePracticeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from sensei.learning import Outcome  # noqa: E402
+from sensei.practice import (  # noqa: E402
+    _private_quest_document,
+    exemplar_block,
+    learner_signal_block,
+)
+
+
+CALCULUS_SKILL = {
+    "id": "focus-related-rates-test",
+    "course": "Calculus I",
+    "name": "Related rates",
+    "description": "Match Dr. Lee's homework style.",
+}
+APPROVED = json.dumps({"approved": True, "reason": "Recomputed every part."})
+MATERIALS = (
+    {
+        "id": "material-1",
+        "kind": "example_problem",
+        "body": (
+            "A 13 ft ladder leans against a wall and its base slides out at 2 ft/s.\n"
+            "(a) How fast is the top sliding when the base is 5 ft out?\n"
+            "(b) How fast is the angle with the ground changing?"
+        ),
+        "solution": "dy/dt = -5/6 ft/s; dtheta/dt = -1/6 rad/s",
+        "source_label": "HW 4 #7",
+    },
+    {
+        "id": "material-2",
+        "kind": "example_problem",
+        "body": "Sand falls into a conical pile whose height equals its radius.",
+        "solution": None,
+        "source_label": "",
+    },
+    {
+        "id": "material-3",
+        "kind": "notes",
+        "body": "Dr. Lee wants every rate written with units.",
+        "solution": None,
+        "source_label": "Lecture 12",
+    },
+)
+
+
+def multi_part_draft() -> dict:
+    return {
+        "title": "Sliding ladder",
+        "prompt": (
+            r"A 10 ft ladder leans against a wall. Its base slides away from the "
+            r"wall at \(2\) ft/s."
+        ),
+        "answer_type": "multi_part",
+        "answer": "",
+        "options": [],
+        "parts": [
+            {
+                "label": "(a)",
+                "prompt": (
+                    r"Find \(\frac{dy}{dt}\) when \(x = 6\). Enter only the value "
+                    "in ft/s."
+                ),
+                "answer_type": "expression",
+                "answer": "-3/2",
+            },
+            {
+                "label": "b",
+                "prompt": (
+                    "For which base distances is the top moving faster than 1 ft/s "
+                    "downward? Use interval notation."
+                ),
+                "answer_type": "interval",
+                "answer": "(4, 10)",
+            },
+            {
+                "label": "c",
+                "prompt": "Which quantity stays constant? Choose the best answer.",
+                "answer_type": "multiple_choice",
+                "answer": "C",
+                "options": ["x", "y", "The ladder length", r"\(\frac{dy}{dt}\)"],
+            },
+        ],
+        "help_steps": [
+            "Relate the base distance and height with the Pythagorean theorem.",
+            r"Differentiate both sides with respect to \(t\).",
+            "Substitute the known values and solve for the unknown rate.",
+        ],
+        "solution": (
+            r"From \(x^2 + y^2 = 100\), \(2x\,x' + 2y\,y' = 0\), so at \(x = 6\), "
+            r"\(y = 8\) and \(y' = -\frac{3}{2}\) ft/s."
+        ),
+        "graph": None,
+    }
+
+
+class CourseFidelityTests(unittest.TestCase):
+    def test_prompt_carries_exemplars_profile_and_learner_signal(self) -> None:
+        provider = StubProvider([json.dumps(multi_part_draft()), APPROVED])
+        quest = AdaptiveQuestFactory(provider).generate(
+            CALCULUS_SKILL,
+            materials=MATERIALS,
+            subject_profile="Exams: five free-response problems, no calculator.",
+            learner_signal={
+                "mastery_score": 42.0,
+                "mastery_label": "developing",
+                "attempts_count": 7,
+                "success_streak": 2,
+                "recent_outcomes": [
+                    "incorrect",
+                    "correct",
+                    "incorrect",
+                    "correct",
+                    "correct",
+                ],
+                "misconceptions": ["Forgets the chain rule on the inner function."],
+                "difficulty_tier": "challenging",
+            },
+            anchor_index=1,
+        )
+
+        user = provider.requests[0][-1]["content"]
+        self.assertIn(
+            "Course profile: Exams: five free-response problems, no calculator.",
+            user,
+        )
+        self.assertIn("Anchor exemplar for this problem: [1]", user)
+        self.assertLess(user.index("Sand falls"), user.index("A 13 ft ladder"))
+        self.assertIn("[2] (HW 4 #7)", user)
+        self.assertIn("Worked solution: dy/dt = -5/6 ft/s", user)
+        self.assertIn("Worked solution: not provided", user)
+        self.assertIn("Class notes:\nDr. Lee wants every rate written with units.", user)
+        self.assertIn("mastery 42/100 (developing); 7 attempts", user)
+        self.assertIn("incorrect, correct, incorrect, correct, correct", user)
+        self.assertIn("Target difficulty tier: challenging", user)
+        self.assertIn("- Forgets the chain rule on the inner function.", user)
+        system = provider.requests[0][0]["content"]
+        self.assertIn("Course fidelity is the top priority", system)
+        self.assertIn("multi_part", system)
+        self.assertIn("interval notation", system)
+        review_user = provider.requests[1][-1]["content"]
+        self.assertIn("Anchor exemplar for this problem: [1]", review_user)
+        self.assertIn("Target difficulty tier: challenging", review_user)
+        self.assertIn('"parts"', review_user)
+        self.assertIn(
+            "compare the draft with the anchor exemplar",
+            provider.requests[1][0]["content"],
+        )
+        self.assertEqual("material-2", quest.anchor_material_id)
+        self.assertEqual("challenging", quest.difficulty_tier)
+        self.assertEqual(3, quest.material_count)
+        self.assertEqual("challenging", quest.public_dict()["difficulty_tier"])
+
+    def test_brief_without_material_or_history_uses_standard_tier(self) -> None:
+        provider = StubProvider([json.dumps(multi_part_draft()), APPROVED])
+        quest = AdaptiveQuestFactory(provider).generate(CALCULUS_SKILL)
+        user = provider.requests[0][-1]["content"]
+        self.assertIn("Course profile: None provided.", user)
+        self.assertIn("Class exemplars: none provided.", user)
+        self.assertIn("Learner signal: no recorded attempts on this topic yet.", user)
+        self.assertIn("Target difficulty tier: standard", user)
+        self.assertIn("Known weak spots to exercise: none recorded.", user)
+        self.assertEqual("standard", quest.difficulty_tier)
+        self.assertIsNone(quest.anchor_material_id)
+
+    def test_exemplar_block_bounds_size_and_rotates_anchor(self) -> None:
+        many = [
+            {
+                "id": f"material-{index}",
+                "kind": "example_problem",
+                "body": "x" * 2_000,
+                "solution": None,
+                "source_label": "",
+            }
+            for index in range(10)
+        ]
+        text, anchor = exemplar_block(many, anchor_index=13)
+        self.assertEqual("material-3", anchor)
+        self.assertEqual(4, text.count("Worked solution: not provided"))
+        self.assertTrue(text.startswith("Class exemplars"))
+        empty, none_anchor = exemplar_block([])
+        self.assertIsNone(none_anchor)
+        self.assertIn("none provided", empty)
+        signal = learner_signal_block(None)
+        self.assertIn("no recorded attempts", signal)
+        self.assertIn("Target difficulty tier: standard", signal)
+
+
+class MultiPartQuestTests(unittest.TestCase):
+    def test_multi_part_quest_checks_each_part_with_partial_credit(self) -> None:
+        quest = parse_adaptive_quest(json.dumps(multi_part_draft()), skill=CALCULUS_SKILL)
+        self.assertTrue(quest.is_multi_part)
+        self.assertEqual(("a", "b", "c"), tuple(part.label for part in quest.parts))
+        public = quest.public_dict()
+        self.assertEqual(3, len(public["parts"]))
+        self.assertNotIn("answer", public["parts"][0])
+        self.assertIn("interval notation", public["parts"][1]["answer_format_hint"])
+        self.assertEqual(
+            ["x", "y", "The ladder length", r"\(\frac{dy}{dt}\)"],
+            public["parts"][2]["options"],
+        )
+        self.assertIsNone(public["answer_format_hint"])
+        self.assertIn("(a) Find", quest.full_text)
+        self.assertIn("(c) Which quantity", quest.full_text)
+
+        complete = quest.evaluate({"a": "-1.5", "b": "(4, 10)", "c": "c"})
+        self.assertIs(Outcome.CORRECT, complete.outcome)
+        self.assertEqual(VerificationStatus.VERIFIED_CORRECT, complete.result.status)
+        self.assertEqual(3, len(complete.parts))
+
+        partial = quest.evaluate({"a": "-1.5", "b": "[4, 10]", "c": "A"})
+        self.assertIs(Outcome.PARTIAL, partial.outcome)
+        self.assertEqual(VerificationStatus.VERIFIED_INCORRECT, partial.result.status)
+        self.assertEqual(
+            VerificationStatus.VERIFIED_INCORRECT, partial.parts[1][1].status
+        )
+        self.assertIn("1 of 3", partial.result.detail)
+
+        with self.assertRaisesRegex(ValueError, "several parts"):
+            quest.check("-1.5")
+        with self.assertRaisesRegex(ValueError, "several parts"):
+            quest.evaluate("-1.5")
+        with self.assertRaisesRegex(ValueError, r"part \(b\)"):
+            quest.evaluate({"a": "-1.5", "c": "C"})
+        private = _private_quest_document(quest)
+        self.assertEqual("-3/2", private["parts"][0]["answer"])
+        self.assertEqual("(4, 10)", private["parts"][1]["answer"])
+
+    def test_multi_part_validation(self) -> None:
+        def parse(**changes: object) -> None:
+            document = multi_part_draft()
+            document.update(changes)
+            parse_adaptive_quest(json.dumps(document), skill=CALCULUS_SKILL)
+
+        duplicate = multi_part_draft()["parts"][:2]
+        duplicate[1] = {**duplicate[1], "label": "A"}
+        with self.assertRaisesRegex(PracticeGenerationError, "short and unique"):
+            parse(parts=duplicate)
+        with self.assertRaisesRegex(PracticeGenerationError, "from 2 to 5 parts"):
+            parse(parts=multi_part_draft()["parts"][:1])
+        with self.assertRaisesRegex(PracticeGenerationError, "keep answer empty"):
+            parse(answer="5")
+        nested = multi_part_draft()["parts"]
+        nested[0] = {**nested[0], "answer_type": "multi_part"}
+        with self.assertRaisesRegex(PracticeGenerationError, "answer_type must be one of"):
+            parse(parts=nested)
+        extra = multi_part_draft()["parts"]
+        extra[0] = {**extra[0], "hint": "no"}
+        with self.assertRaisesRegex(PracticeGenerationError, "part fields must include"):
+            parse(parts=extra)
+        wrong_key = multi_part_draft()["parts"]
+        wrong_key[1] = {**wrong_key[1], "answer": "(10, 4)"}
+        with self.assertRaisesRegex(PracticeGenerationError, r"part \(b\)"):
+            parse(parts=wrong_key)
+        single = {
+            "title": "Single",
+            "prompt": "Evaluate 1 + 1. Enter only the number.",
+            "answer_type": "expression",
+            "answer": "2",
+            "options": [],
+            "help_steps": ["Add.", "Check."],
+            "solution": "Two.",
+            "graph": None,
+            "parts": multi_part_draft()["parts"],
+        }
+        with self.assertRaisesRegex(PracticeGenerationError, "parts are allowed only"):
+            parse_adaptive_quest(json.dumps(single), skill=CALCULUS_SKILL)
+
+    def test_numeric_set_interval_and_point_keys_parse_and_check(self) -> None:
+        def quest_for(**fields: object):
+            document = {
+                "title": "Format check",
+                "prompt": "Answer the question. Enter the requested form.",
+                "options": [],
+                "help_steps": ["First move.", "Second move."],
+                "solution": "Worked.",
+                "graph": None,
+            }
+            document.update(fields)
+            return parse_adaptive_quest(json.dumps(document), skill=CALCULUS_SKILL)
+
+        numeric = quest_for(
+            answer_type="numeric", answer="3.5", tolerance=0.02, unit="ft/s"
+        )
+        self.assertEqual(0.02, numeric.tolerance)
+        self.assertEqual("ft/s", numeric.unit)
+        self.assertEqual(VerificationStatus.VERIFIED_CORRECT, numeric.check("3.45").status)
+        self.assertEqual(VerificationStatus.VERIFIED_INCORRECT, numeric.check("3.6").status)
+        self.assertEqual("ft/s", numeric.public_dict()["unit"])
+        self.assertIn("ft/s", numeric.public_dict()["answer_format_hint"])
+        self.assertEqual(0.02, _private_quest_document(numeric)["tolerance"])
+
+        solutions = quest_for(answer_type="solution_set", answer=["2", "-3"])
+        self.assertEqual("2, -3", solutions.answer)
+        self.assertEqual(
+            VerificationStatus.VERIFIED_CORRECT, solutions.check("x = -3, x = 2").status
+        )
+        interval = quest_for(answer_type="interval", answer="(-oo, 1) U [3, oo)")
+        self.assertEqual(
+            VerificationStatus.VERIFIED_CORRECT,
+            interval.check("[3, oo) U (-oo, 1)").status,
+        )
+        point = quest_for(answer_type="point", answer=[["1", "2"]])
+        self.assertEqual("(1, 2)", point.answer)
+        self.assertEqual(VerificationStatus.VERIFIED_CORRECT, point.check("(1, 2)").status)
+        self.assertIs(Outcome.INCORRECT, point.evaluate("(2, 1)").outcome)
+
+        with self.assertRaisesRegex(PracticeGenerationError, "tolerance applies only"):
+            quest_for(answer_type="expression", answer="x^2", tolerance=0.1)
+        with self.assertRaisesRegex(PracticeGenerationError, "answer_type must be one of"):
+            quest_for(answer_type="essay", answer="x")
+        with self.assertRaisesRegex(PracticeGenerationError, "from 2 to 8"):
+            quest_for(
+                answer_type="expression",
+                answer="2",
+                help_steps=[f"Step {index}." for index in range(9)],
+            )
+        eight = quest_for(
+            answer_type="expression",
+            answer="2",
+            help_steps=[f"Step {index}." for index in range(8)],
+        )
+        self.assertEqual(8, len(eight.help_steps))

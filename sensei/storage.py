@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Collection
+from typing import Any, Collection, Mapping
 
 from sensei.learning import LearningEvent, Outcome
 
@@ -19,8 +19,34 @@ from sensei.learning import LearningEvent, Outcome
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = REPOSITORY_ROOT / "data" / "sensei.db"
 DEFAULT_SKILLS_PATH = REPOSITORY_ROOT / "config" / "skills.json"
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 FULL_MASTERY_PRACTICE_ATTEMPTS = 10
+MATERIAL_KINDS = ("example_problem", "worked_example", "notes")
+MAX_TOPIC_MATERIALS = 40
+MAX_MATERIAL_CHARACTERS = 4_000
+MAX_SOURCE_LABEL_CHARACTERS = 120
+MAX_SUBJECT_PROFILE_CHARACTERS = 2_000
+MAX_PLAN_TOPICS = 40
+MAX_STUDY_CONTEXT_CHARACTERS = 2_000
+DIFFICULTY_TIERS = ("foundational", "standard", "challenging", "synthesis")
+DIFFICULTY_TIER_GUIDANCE = {
+    "foundational": (
+        "a one-concept problem that isolates this skill; shorter than a full "
+        "exam problem"
+    ),
+    "standard": (
+        "a typical exam problem for this class, matching the class examples' "
+        "length, depth, and method"
+    ),
+    "challenging": (
+        "harder than a typical exam problem: an extra step, less scaffolding, or "
+        "a less common form, still in this class's style"
+    ),
+    "synthesis": (
+        "the hardest problem this class would ask: combine this skill with its "
+        "prerequisites, usually as a multi-part problem"
+    ),
+}
 
 
 MIGRATION_1 = """
@@ -217,6 +243,27 @@ UPDATE attempts
    );
 """
 
+MIGRATION_10 = """
+CREATE TABLE topic_materials (
+    id TEXT PRIMARY KEY,
+    skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('example_problem', 'worked_example', 'notes')),
+    body TEXT NOT NULL CHECK (length(trim(body)) > 0),
+    solution TEXT,
+    source_label TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_topic_materials_skill
+    ON topic_materials(skill_id, created_at);
+
+CREATE TABLE subject_profiles (
+    subject TEXT PRIMARY KEY CHECK (length(trim(subject)) > 0),
+    profile TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
 
 @dataclass(frozen=True)
 class ProgressUpdate:
@@ -264,6 +311,36 @@ def mastery_label(score: float, correct_count: int, attempts_count: int) -> str:
     if score >= 35:
         return "developing"
     return "beginning"
+
+
+def difficulty_tier(
+    score: float,
+    correct_count: int,
+    attempts_count: int,
+    recent_outcomes: Collection[str],
+) -> str:
+    """Choose how demanding the next generated problem should be.
+
+    The base tier follows the mastery label. Two consecutive wrong answers step
+    the tier down; three consecutive correct answers step it up. A learner with
+    no history starts at the class's normal exam level rather than an easy one.
+    """
+
+    label = mastery_label(score, correct_count, attempts_count)
+    if label == "beginning" and attempts_count >= 3:
+        index = 0
+    elif label == "proficient":
+        index = 2
+    elif label == "mastered":
+        index = 3
+    else:
+        index = 1
+    outcomes = [str(outcome) for outcome in recent_outcomes]
+    if len(outcomes) >= 2 and all(outcome == "incorrect" for outcome in outcomes[-2:]):
+        index -= 1
+    elif len(outcomes) >= 3 and all(outcome == "correct" for outcome in outcomes[-3:]):
+        index += 1
+    return DIFFICULTY_TIERS[max(0, min(len(DIFFICULTY_TIERS) - 1, index))]
 
 
 def mastery_score(total_evidence: float, attempts_count: int) -> float:
@@ -461,6 +538,14 @@ class LearningStore:
                 (9, utc_now().isoformat()),
             )
             self.connection.commit()
+            applied.add(9)
+        if 10 not in applied:
+            self.connection.executescript(MIGRATION_10)
+            self.connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (10, utc_now().isoformat()),
+            )
+            self.connection.commit()
         current = self.connection.execute(
             "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations"
         ).fetchone()["version"]
@@ -556,6 +641,60 @@ class LearningStore:
             raise ValueError(f"{field} must be {maximum} characters or fewer.")
         return cleaned
 
+    @staticmethod
+    def _study_topic_id(subject: str, topic: str) -> str:
+        identity = f"{subject.casefold()}\0{topic.casefold()}"
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+        slug = re.sub(r"[^a-z0-9]+", "-", topic.casefold()).strip("-")[:40]
+        return f"focus-{slug or 'topic'}-{digest}"
+
+    def _upsert_study_topic(
+        self,
+        *,
+        subject: str,
+        topic: str,
+        context: str,
+        unit: str | None = None,
+    ) -> tuple[str, bool]:
+        """Insert or refresh one learner topic inside the caller's transaction."""
+
+        subject = self._study_text(subject, "Subject", 80)
+        topic = self._study_text(topic, "Topic", 120)
+        context = " ".join(context.split())
+        if len(context) > MAX_STUDY_CONTEXT_CHARACTERS:
+            raise ValueError("Study material must be 2,000 characters or fewer.")
+        skill_id = self._study_topic_id(subject, topic)
+        existing = self.connection.execute(
+            "SELECT 1 FROM skills WHERE id = ?", (skill_id,)
+        ).fetchone()
+        description = context or "No additional practice instructions were provided."
+        sort_order = int(
+            self.connection.execute(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM skills"
+            ).fetchone()["next_order"]
+        )
+        self.connection.execute(
+            """INSERT INTO skills(
+                   id, course, name, unit, description, prerequisites_json,
+                   sort_order, source, created_at
+               ) VALUES (?, ?, ?, ?, ?, '[]', ?, 'learner', ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   course = excluded.course,
+                   name = excluded.name,
+                   unit = excluded.unit,
+                   description = excluded.description""",
+            (
+                skill_id,
+                subject,
+                topic,
+                unit or f"{subject} questline",
+                description,
+                sort_order,
+                utc_now().isoformat(),
+            ),
+        )
+        return skill_id, existing is None
+
     def create_study_topic(
         self,
         *,
@@ -565,48 +704,18 @@ class LearningStore:
     ) -> dict[str, Any]:
         """Create or refresh one learner-owned topic in the growing skill atlas."""
 
-        subject = self._study_text(subject, "Subject", 80)
-        topic = self._study_text(topic, "Topic", 120)
-        context = " ".join(context.split())
-        if len(context) > 2_000:
-            raise ValueError("Study material must be 2,000 characters or fewer.")
-        identity = f"{subject.casefold()}\0{topic.casefold()}"
-        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
-        slug = re.sub(r"[^a-z0-9]+", "-", topic.casefold()).strip("-")[:40]
-        skill_id = f"focus-{slug or 'topic'}-{digest}"
-        timestamp = utc_now().isoformat()
-        description = context or "No additional practice instructions were provided."
-        sort_order = int(
-            self.connection.execute(
-                "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM skills"
-            ).fetchone()["next_order"]
-        )
         with self.connection:
-            self.connection.execute(
-                """INSERT INTO skills(
-                       id, course, name, unit, description, prerequisites_json,
-                       sort_order, source, created_at
-                   ) VALUES (?, ?, ?, ?, ?, '[]', ?, 'learner', ?)
-                   ON CONFLICT(id) DO UPDATE SET
-                       course = excluded.course,
-                       name = excluded.name,
-                       description = excluded.description""",
-                (
-                    skill_id,
-                    subject,
-                    topic,
-                    f"{subject} questline",
-                    description,
-                    sort_order,
-                    timestamp,
-                ),
+            skill_id, _ = self._upsert_study_topic(
+                subject=subject, topic=topic, context=context
             )
         return self.study_topic(skill_id)
 
     def study_topic(self, skill_id: str) -> dict[str, Any]:
         row = self.connection.execute(
             """SELECT s.id, s.course, s.name, s.unit, s.description,
-                      s.source, s.created_at, aft.folder_id
+                      s.source, s.created_at, aft.folder_id,
+                      (SELECT COUNT(*) FROM topic_materials tm
+                        WHERE tm.skill_id = s.id) AS material_count
                  FROM skills s
                  LEFT JOIN atlas_folder_topics aft ON aft.skill_id = s.id
                 WHERE s.id = ?""",
@@ -680,6 +789,9 @@ class LearningStore:
         deleted_attempts, removed_xp = self._topic_progress_summary(skill_id)
         with self.connection:
             self._clear_topic_progress(skill_id)
+            self.connection.execute(
+                "DELETE FROM topic_materials WHERE skill_id = ?", (skill_id,)
+            )
             if row["source"] == "learner":
                 self.connection.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
 
@@ -808,6 +920,14 @@ class LearningStore:
             incorrect_count = prior_incorrect + int(event.outcome is Outcome.INCORRECT)
             independent_count = prior_independent + int(independent_correct)
             success_streak = prior_streak + 1 if independent_correct else 0
+            if success_streak >= 2:
+                # Two independent correct answers in a row are the evidence that
+                # this topic's recorded mistakes no longer need targeting.
+                self.connection.execute(
+                    """UPDATE misconceptions SET resolved_at = ?
+                        WHERE skill_id = ? AND resolved_at IS NULL""",
+                    (timestamp, event.skill_id),
+                )
             review_at = self._review_date(event, now, success_streak)
             review_timestamp = review_at.astimezone(timezone.utc).isoformat()
 
@@ -905,6 +1025,8 @@ class LearningStore:
             """SELECT s.id, s.course, s.name, s.unit, s.description,
                       s.source, s.created_at, s.sort_order,
                       aft.folder_id,
+                      (SELECT COUNT(*) FROM topic_materials tm
+                        WHERE tm.skill_id = s.id) AS material_count,
                       COALESCE(m.mastery_score, 0) AS mastery_score,
                       COALESCE(m.attempts_count, 0) AS attempts_count,
                       COALESCE(m.correct_count, 0) AS correct_count,
@@ -1181,6 +1303,375 @@ class LearningStore:
         )
         return tuple(str(row["problem"]) for row in rows)
 
+    @staticmethod
+    def _material_text(
+        value: object, field: str, maximum: int, *, required: bool
+    ) -> str:
+        if value is None:
+            value = ""
+        if not isinstance(value, str):
+            raise ValueError(f"{field} must be text.")
+        lines = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        cleaned = "\n".join(line.rstrip() for line in lines).strip()
+        if required and not cleaned:
+            raise ValueError(f"{field} is required.")
+        if len(cleaned) > maximum:
+            raise ValueError(f"{field} must be {maximum} characters or fewer.")
+        return cleaned
+
+    def topic_materials(self, skill_id: str) -> list[dict[str, Any]]:
+        """Return one topic's class material, oldest first."""
+
+        rows = self.connection.execute(
+            """SELECT id, skill_id, kind, body, solution, source_label, created_at
+                 FROM topic_materials
+                WHERE skill_id = ?
+                ORDER BY created_at, rowid""",
+            (skill_id,),
+        )
+        return [dict(row) for row in rows]
+
+    def _prepared_materials(
+        self, materials: Collection[Mapping[str, object]]
+    ) -> list[tuple[str, str, str | None, str]]:
+        prepared: list[tuple[str, str, str | None, str]] = []
+        for material in materials:
+            if not isinstance(material, Mapping):
+                raise ValueError("Each class material must be an object.")
+            kind = str(material.get("kind") or "example_problem")
+            if kind not in MATERIAL_KINDS:
+                raise ValueError(
+                    "Material kind must be example_problem, worked_example, or notes."
+                )
+            body = self._material_text(
+                material.get("body"),
+                "Material text",
+                MAX_MATERIAL_CHARACTERS,
+                required=True,
+            )
+            solution = self._material_text(
+                material.get("solution"),
+                "Material solution",
+                MAX_MATERIAL_CHARACTERS,
+                required=False,
+            ) or None
+            source_label = " ".join(str(material.get("source_label") or "").split())
+            if len(source_label) > MAX_SOURCE_LABEL_CHARACTERS:
+                raise ValueError(
+                    f"Source label must be {MAX_SOURCE_LABEL_CHARACTERS} "
+                    "characters or fewer."
+                )
+            prepared.append((kind, body, solution, source_label))
+        return prepared
+
+    def _insert_materials(
+        self,
+        skill_id: str,
+        prepared: Collection[tuple[str, str, str | None, str]],
+        *,
+        merge: bool,
+    ) -> set[str]:
+        """Insert prepared rows inside the caller's transaction.
+
+        With ``merge`` the call skips bodies already stored for the topic and
+        stops quietly at the per-topic limit; otherwise the limit is an error.
+        """
+
+        existing_rows = self.connection.execute(
+            "SELECT body FROM topic_materials WHERE skill_id = ?", (skill_id,)
+        ).fetchall()
+        existing_bodies = {
+            " ".join(str(row["body"]).split()).casefold() for row in existing_rows
+        }
+        if not merge and len(existing_rows) + len(prepared) > MAX_TOPIC_MATERIALS:
+            raise ValueError(
+                f"A topic can keep at most {MAX_TOPIC_MATERIALS} class materials."
+            )
+        timestamp = utc_now().isoformat()
+        created: set[str] = set()
+        count = len(existing_rows)
+        for kind, body, solution, source_label in prepared:
+            fingerprint = " ".join(body.split()).casefold()
+            if merge and (fingerprint in existing_bodies or count >= MAX_TOPIC_MATERIALS):
+                continue
+            material_id = f"material-{uuid.uuid4().hex}"
+            self.connection.execute(
+                """INSERT INTO topic_materials(
+                       id, skill_id, kind, body, solution, source_label,
+                       created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    material_id,
+                    skill_id,
+                    kind,
+                    body,
+                    solution,
+                    source_label,
+                    timestamp,
+                ),
+            )
+            created.add(material_id)
+            existing_bodies.add(fingerprint)
+            count += 1
+        return created
+
+    def add_topic_materials(
+        self,
+        skill_id: str,
+        materials: Collection[Mapping[str, object]],
+    ) -> list[dict[str, Any]]:
+        """Atomically attach pasted or scanned class material to one topic."""
+
+        exists = self.connection.execute(
+            "SELECT 1 FROM skills WHERE id = ?", (skill_id,)
+        ).fetchone()
+        if exists is None:
+            raise ValueError("That study topic does not exist.")
+        prepared = self._prepared_materials(materials)
+        if not prepared:
+            raise ValueError("Add at least one class material.")
+        with self.connection:
+            created = self._insert_materials(skill_id, prepared, merge=False)
+        return [
+            material
+            for material in self.topic_materials(skill_id)
+            if material["id"] in created
+        ]
+
+    def delete_topic_material(self, material_id: str) -> dict[str, Any]:
+        row = self.connection.execute(
+            "SELECT id, skill_id, source_label FROM topic_materials WHERE id = ?",
+            (material_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("That class material does not exist.")
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM topic_materials WHERE id = ?", (material_id,)
+            )
+        return dict(row)
+
+    def subject_profiles(self) -> dict[str, str]:
+        rows = self.connection.execute(
+            "SELECT subject, profile FROM subject_profiles "
+            "ORDER BY subject COLLATE NOCASE"
+        )
+        return {str(row["subject"]): str(row["profile"]) for row in rows}
+
+    def subject_profile(self, subject: str) -> str:
+        row = self.connection.execute(
+            "SELECT profile FROM subject_profiles WHERE subject = ? COLLATE NOCASE",
+            (subject,),
+        ).fetchone()
+        return str(row["profile"]) if row else ""
+
+    def set_subject_profile(self, subject: str, profile: str) -> dict[str, Any]:
+        """Save course-wide conventions that apply to every topic in a subject."""
+
+        subject = self._study_text(subject, "Subject", 80)
+        profile = self._material_text(
+            profile,
+            "Course profile",
+            MAX_SUBJECT_PROFILE_CHARACTERS,
+            required=False,
+        )
+        for row in self.connection.execute("SELECT DISTINCT course FROM skills"):
+            if str(row["course"]).casefold() == subject.casefold():
+                subject = str(row["course"])
+                break
+        with self.connection:
+            self._write_subject_profile(subject, profile)
+        return {"subject": subject, "profile": profile}
+
+    def _write_subject_profile(self, subject: str, profile: str) -> None:
+        existing = self.connection.execute(
+            "SELECT subject FROM subject_profiles WHERE subject = ? COLLATE NOCASE",
+            (subject,),
+        ).fetchone()
+        if existing is not None:
+            self.connection.execute(
+                "DELETE FROM subject_profiles WHERE subject = ?",
+                (existing["subject"],),
+            )
+        if profile:
+            self.connection.execute(
+                """INSERT INTO subject_profiles(subject, profile, updated_at)
+                   VALUES (?, ?, ?)""",
+                (subject, profile, utc_now().isoformat()),
+            )
+
+    def _canonical_subject(self, subject: str) -> str:
+        for row in self.connection.execute("SELECT DISTINCT course FROM skills"):
+            if str(row["course"]).casefold() == subject.casefold():
+                return str(row["course"])
+        return subject
+
+    def create_study_plan(
+        self,
+        *,
+        subject: str,
+        set_name: str,
+        course_profile: str = "",
+        topics: Collection[Mapping[str, object]],
+    ) -> dict[str, Any]:
+        """Atomically turn an analyzed study guide into a folder of ready topics.
+
+        Re-importing the same guide merges: the folder is reused, topics are
+        refreshed in place, and example problems already stored are skipped.
+        """
+
+        subject = self._canonical_subject(self._study_text(subject, "Subject", 80))
+        folder_name, normalized_name = self._folder_name(set_name)
+        profile = self._material_text(
+            course_profile,
+            "Course profile",
+            MAX_SUBJECT_PROFILE_CHARACTERS,
+            required=False,
+        )
+        topic_list = list(topics)
+        if not 1 <= len(topic_list) <= MAX_PLAN_TOPICS:
+            raise ValueError(f"A study plan needs from 1 to {MAX_PLAN_TOPICS} topics.")
+        prepared: list[tuple[str, str, str, list[tuple[str, str, str | None, str]]]] = []
+        seen: set[str] = set()
+        for raw_topic in topic_list:
+            if not isinstance(raw_topic, Mapping):
+                raise ValueError("Each study-plan topic must be an object.")
+            name = self._study_text(str(raw_topic.get("name") or ""), "Topic", 120)
+            if name.casefold() in seen:
+                raise ValueError(f"Topic {name!r} appears more than once in the plan.")
+            seen.add(name.casefold())
+            description = " ".join(str(raw_topic.get("description") or "").split())
+            if len(description) > MAX_STUDY_CONTEXT_CHARACTERS:
+                raise ValueError("Study material must be 2,000 characters or fewer.")
+            section = " ".join(str(raw_topic.get("section") or "").split())[:40]
+            raw_materials = raw_topic.get("materials") or []
+            if not isinstance(raw_materials, (list, tuple)):
+                raise ValueError("Study-plan materials must be a list.")
+            prepared.append(
+                (name, description, section, self._prepared_materials(raw_materials))
+            )
+
+        timestamp = utc_now().isoformat()
+        created_topics = updated_topics = added_materials = 0
+        profile_saved = False
+        skill_ids: list[str] = []
+        try:
+            with self.connection:
+                folder = self.connection.execute(
+                    """SELECT id FROM atlas_folders
+                        WHERE subject = ? COLLATE NOCASE AND normalized_name = ?""",
+                    (subject, normalized_name),
+                ).fetchone()
+                if folder is None:
+                    folder_id = f"folder-{uuid.uuid4().hex}"
+                    sort_order = int(
+                        self.connection.execute(
+                            """SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
+                                 FROM atlas_folders WHERE subject = ? COLLATE NOCASE""",
+                            (subject,),
+                        ).fetchone()["next_order"]
+                    )
+                    self.connection.execute(
+                        """INSERT INTO atlas_folders(
+                               id, subject, name, normalized_name, sort_order,
+                               created_at, updated_at
+                           ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            folder_id,
+                            subject,
+                            folder_name,
+                            normalized_name,
+                            sort_order,
+                            timestamp,
+                            timestamp,
+                        ),
+                    )
+                else:
+                    folder_id = str(folder["id"])
+                    self.connection.execute(
+                        "UPDATE atlas_folders SET updated_at = ? WHERE id = ?",
+                        (timestamp, folder_id),
+                    )
+                for name, description, section, materials in prepared:
+                    skill_id, created = self._upsert_study_topic(
+                        subject=subject,
+                        topic=name,
+                        context=description,
+                        unit=(f"Section {section}" if section else None),
+                    )
+                    created_topics += int(created)
+                    updated_topics += int(not created)
+                    self.connection.execute(
+                        """INSERT INTO atlas_folder_topics(folder_id, skill_id)
+                           VALUES (?, ?)
+                           ON CONFLICT(skill_id) DO UPDATE SET
+                               folder_id = excluded.folder_id""",
+                        (folder_id, skill_id),
+                    )
+                    added_materials += len(
+                        self._insert_materials(skill_id, materials, merge=True)
+                    )
+                    skill_ids.append(skill_id)
+                if profile and not self.subject_profile(subject):
+                    self._write_subject_profile(subject, profile)
+                    profile_saved = True
+        except sqlite3.IntegrityError as error:
+            raise ValueError("The study plan could not be saved.") from error
+        folder_document = next(
+            item for item in self.topic_folders() if item["id"] == folder_id
+        )
+        return {
+            "folder": folder_document,
+            "topics": [self.study_topic(skill_id) for skill_id in skill_ids],
+            "created_topics": created_topics,
+            "updated_topics": updated_topics,
+            "added_materials": added_materials,
+            "profile_saved": profile_saved,
+        }
+
+    def generation_context(self, skill_id: str) -> dict[str, Any]:
+        """Summarize one topic's evidence so practice generation can adapt."""
+
+        mastery = self.connection.execute(
+            """SELECT mastery_score, attempts_count, correct_count, success_streak
+                 FROM mastery WHERE skill_id = ?""",
+            (skill_id,),
+        ).fetchone()
+        score = float(mastery["mastery_score"]) if mastery else 0.0
+        attempts = int(mastery["attempts_count"]) if mastery else 0
+        correct = int(mastery["correct_count"]) if mastery else 0
+        streak = int(mastery["success_streak"]) if mastery else 0
+        recent = [
+            str(row["outcome"])
+            for row in self.connection.execute(
+                """SELECT outcome FROM attempts
+                    WHERE skill_id = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 5""",
+                (skill_id,),
+            )
+        ]
+        recent.reverse()
+        misconceptions = [
+            str(row["description"])
+            for row in self.connection.execute(
+                """SELECT description FROM misconceptions
+                    WHERE skill_id = ? AND resolved_at IS NULL
+                    ORDER BY occurrence_count DESC, last_seen_at DESC
+                    LIMIT 3""",
+                (skill_id,),
+            )
+        ]
+        return {
+            "mastery_score": score,
+            "mastery_label": mastery_label(score, correct, attempts),
+            "attempts_count": attempts,
+            "success_streak": streak,
+            "recent_outcomes": recent,
+            "misconceptions": misconceptions,
+            "difficulty_tier": difficulty_tier(score, correct, attempts, recent),
+        }
+
     def export_json(self, path: Path) -> Path:
         destination = path.resolve()
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1196,6 +1687,12 @@ class LearningStore:
             "profile": self.profile(),
             "skills": self.skill_progress(),
             "topic_folders": self.topic_folders(),
+            "topic_materials": rows(
+                "SELECT * FROM topic_materials ORDER BY created_at, rowid"
+            ),
+            "subject_profiles": rows(
+                "SELECT * FROM subject_profiles ORDER BY subject COLLATE NOCASE"
+            ),
             "attempts": rows("SELECT * FROM attempts ORDER BY id"),
             "misconceptions": rows("SELECT * FROM misconceptions ORDER BY id"),
             "xp_events": rows("SELECT * FROM xp_events ORDER BY id"),

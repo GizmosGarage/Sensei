@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
+import os
 import secrets
 import sqlite3
 import sys
@@ -17,20 +20,31 @@ from datetime import timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Collection
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
+from sensei.answers import AnswerSpec, answer_key_display, answer_key_latex, submitted_latex
+from sensei.curriculum import StudyPlanScanner
 from sensei.errorlog import DEFAULT_ERROR_LOG_PATH, ErrorRecorder, error_reference
 from sensei.generation import GENERATED_SKILL_IDS, GeneratedQuestFactory
-from sensei.learning import LearningEvent, Outcome
+from sensei.learning import (
+    LearningEvent,
+    LearningEventError,
+    MisconceptionClassifier,
+    MisconceptionFinding,
+    Outcome,
+)
+from sensei.materials import MAX_PDF_BYTES, MaterialScanError, MaterialScanner
 from sensei.practice import (
     AdaptiveQuest,
     AdaptiveQuestFactory,
+    AttemptCheck,
     PracticeGenerationError,
     adaptive_quest_fingerprint,
 )
 from sensei.providers import (
     DEFAULT_API_BASE_URL,
     DEFAULT_API_MODEL,
+    ProviderError,
     ResponsesAPIProvider,
     api_settings_from_environment,
 )
@@ -54,11 +68,21 @@ from sensei.verification import (
 LOOPBACK_HOST = "127.0.0.1"
 DEFAULT_DASHBOARD_PORT = 8765
 MAX_REQUEST_BYTES = 4_096
+MAX_MATERIALS_REQUEST_BYTES = 64 * 1024
+MAX_UPLOAD_REQUEST_BYTES = (MAX_PDF_BYTES * 4 // 3) + 16_384
+MAX_MATERIALS_PER_REQUEST = 40
+MAX_PLAN_REQUEST_BYTES = 256 * 1024
+MAX_PLAN_TOPICS_PER_REQUEST = 40
+PLAN_SCANNER_MAX_OUTPUT_TOKENS = 16_384
 ATTEMPT_TOKEN_LIFETIME_SECONDS = 15 * 60
 CHALLENGE_TOKEN_LIFETIME_SECONDS = 60 * 60
 ADAPTIVE_PROMPT_HISTORY = 8
 ADAPTIVE_DISTINCT_ATTEMPTS = 3
-PRACTICE_MAX_OUTPUT_TOKENS = 4_096
+PRACTICE_API_VERSION = 6
+PRACTICE_MAX_OUTPUT_TOKENS = 8_192
+SCANNER_MAX_OUTPUT_TOKENS = 6_000
+CLASSIFIER_MAX_OUTPUT_TOKENS = 400
+SCANNER_MODEL_ENVIRONMENT = "SENSEI_SCANNER_MODEL"
 WEB_DIRECTORY = Path(__file__).resolve().parent / "web"
 KATEX_DIRECTORY = WEB_DIRECTORY / "vendor" / "katex"
 PracticeQuest = QuestTemplate | AdaptiveQuest
@@ -108,17 +132,44 @@ def _answer_latex(value: str | None) -> str | None:
         return None
 
 
-def verification_document(result: VerificationResult) -> dict[str, str | None]:
+def verification_document(
+    result: VerificationResult,
+    spec: AnswerSpec | None = None,
+) -> dict[str, str | None]:
+    if spec is not None and spec.answer_type != "expression":
+        submitted_form = submitted_latex(spec, result.submitted)
+        expected_form = answer_key_latex(spec)
+    else:
+        submitted_form = _answer_latex(result.submitted)
+        expected_form = _answer_latex(result.expected)
     return {
         "kind": result.kind.value,
         "status": result.status.value,
         "submitted": result.submitted,
-        "submitted_latex": _answer_latex(result.submitted),
+        "submitted_latex": submitted_form,
         "expected": result.expected,
-        "expected_latex": _answer_latex(result.expected),
+        "expected_latex": expected_form,
         "detail": result.detail,
         "verifier_version": result.verifier_version,
     }
+
+
+def part_documents(
+    quest: PracticeQuest, check: AttemptCheck
+) -> list[dict[str, object]]:
+    """Serialize per-part results for a multi-part adaptive quest."""
+
+    if not isinstance(quest, AdaptiveQuest) or not check.parts:
+        return []
+    specs = {part.label: part.spec for part in quest.parts}
+    return [
+        {
+            "label": label,
+            "answer_type": specs[label].answer_type,
+            **verification_document(result, specs[label]),
+        }
+        for label, result in check.parts
+    ]
 
 
 @dataclass(frozen=True)
@@ -128,6 +179,10 @@ class PendingAttempt:
     hints_used: int
     solution_revealed: bool
     issued_at: float
+    outcome: Outcome = Outcome.INCORRECT
+    parts: tuple[tuple[str, VerificationResult], ...] = ()
+    misconception: str | None = None
+    misconception_evidence: str | None = None
 
 
 class PendingAttemptStore:
@@ -144,17 +199,31 @@ class PendingAttemptStore:
         *,
         hints_used: int = 0,
         solution_revealed: bool = False,
+        outcome: Outcome | None = None,
+        parts: tuple[tuple[str, VerificationResult], ...] = (),
+        misconception: str | None = None,
+        misconception_evidence: str | None = None,
     ) -> str:
+        if outcome is None:
+            outcome = (
+                Outcome.CORRECT
+                if result.status is VerificationStatus.VERIFIED_CORRECT
+                else Outcome.INCORRECT
+            )
         token = secrets.token_urlsafe(32)
         now = time.monotonic()
         with self._lock:
             self._prune(now)
             self._attempts[token] = PendingAttempt(
-                quest,
-                result,
-                hints_used,
-                solution_revealed,
-                now,
+                quest=quest,
+                result=result,
+                hints_used=hints_used,
+                solution_revealed=solution_revealed,
+                issued_at=now,
+                outcome=outcome,
+                parts=parts,
+                misconception=misconception,
+                misconception_evidence=misconception_evidence,
             )
         return token
 
@@ -196,11 +265,15 @@ def quest_help_steps(quest: PracticeQuest) -> tuple[str, ...]:
 
     if isinstance(quest, AdaptiveQuest):
         steps = quest.help_steps
-        if quest.answer_type == "multiple_choice":
-            index = ord(quest.answer) - ord("A")
-            final = f"Final answer: {quest.answer}. {quest.options[index]}"
+        if quest.is_multi_part:
+            final = "Final answers: " + " ".join(
+                f"({part.label}) {answer_key_display(part.spec)}"
+                for part in quest.parts
+            )
         else:
-            final = f"Final answer: \\({math_expression_latex(quest.answer)}\\)"
+            spec = quest.spec
+            assert spec is not None
+            final = f"Final answer: {answer_key_display(spec)}"
         return (*steps, final)
 
     first_moves = {
@@ -258,6 +331,7 @@ class ChallengeStore:
         self._last_prompts: dict[str, str] = {}
         self._adaptive_prompts: dict[str, deque[str]] = {}
         self._adaptive_fingerprints: dict[str, deque[str]] = {}
+        self._anchor_cursor: dict[str, int] = {}
         self._lock = threading.Lock()
 
     def issue(self, skill_id: str) -> tuple[str, QuestTemplate]:
@@ -282,6 +356,9 @@ class ChallengeStore:
         skill: dict[str, Any],
         *,
         avoid_prompts: Collection[str] = (),
+        materials: Collection[dict[str, Any]] = (),
+        subject_profile: str = "",
+        learner_signal: dict[str, Any] | None = None,
     ) -> tuple[str, AdaptiveQuest]:
         if self.adaptive_factory is None:
             raise RuntimeError(
@@ -295,6 +372,7 @@ class ChallengeStore:
                 session_fingerprints = tuple(
                     self._adaptive_fingerprints.get(skill_id, ())
                 )
+                anchor_index = self._anchor_cursor.get(skill_id, 0)
             recent = tuple(dict.fromkeys((*avoid_prompts, *session_recent)))[
                 -ADAPTIVE_PROMPT_HISTORY:
             ]
@@ -302,6 +380,10 @@ class ChallengeStore:
                 skill,
                 avoid_prompts=recent,
                 avoid_fingerprints=session_fingerprints,
+                materials=tuple(materials),
+                subject_profile=subject_profile,
+                learner_signal=learner_signal,
+                anchor_index=anchor_index,
             )
             now = time.monotonic()
             with self._lock:
@@ -319,9 +401,10 @@ class ChallengeStore:
                     continue
                 token = secrets.token_urlsafe(32)
                 self._challenges[token] = PendingChallenge(quest, now)
-                self._last_prompts[skill_id] = quest.prompt
-                history.append(quest.prompt)
+                self._last_prompts[skill_id] = quest.full_text
+                history.append(quest.full_text)
                 fingerprint_history.append(fingerprint)
+                self._anchor_cursor[skill_id] = anchor_index + 1
                 return token, quest
         raise RuntimeError(
             "Sensei could not produce a distinct new encounter for this topic."
@@ -391,6 +474,7 @@ class ChallengeStore:
             self._last_prompts.pop(skill_id, None)
             self._adaptive_prompts.pop(skill_id, None)
             self._adaptive_fingerprints.pop(skill_id, None)
+            self._anchor_cursor.pop(skill_id, None)
 
     def _prune(self, now: float) -> None:
         expired = [
@@ -433,6 +517,7 @@ class DashboardService:
                 "skills": skills,
                 "study_topics": study_topics,
                 "topic_folders": store.topic_folders(),
+                "subject_profiles": store.subject_profiles(),
                 "recent_attempts": store.recent_attempts(limit=50),
                 "catalog": {
                     "quest_count": len(deck.quests),
@@ -450,7 +535,7 @@ class DashboardService:
                     "host": LOOPBACK_HOST,
                     "storage": "Local SQLite",
                     "model_access": "Hosted Responses API",
-                    "practice_api_version": 5,
+                    "practice_api_version": PRACTICE_API_VERSION,
                 },
             }
 
@@ -504,6 +589,64 @@ class DashboardService:
         with LearningStore(self.database_path, self.skills_path) as store:
             return store.recent_problems(skill_id, limit=ADAPTIVE_PROMPT_HISTORY)
 
+    def topic_materials(self, skill_id: str) -> list[dict[str, Any]]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            store.study_topic(skill_id)
+            return store.topic_materials(skill_id)
+
+    def add_topic_materials(
+        self, skill_id: str, materials: Collection[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.add_topic_materials(skill_id, materials)
+
+    def delete_topic_material(self, material_id: str) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.delete_topic_material(material_id)
+
+    def subject_profile(self, subject: str) -> str:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.subject_profile(subject)
+
+    def set_subject_profile(self, subject: str, profile: str) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.set_subject_profile(subject, profile)
+
+    def generation_context(self, skill_id: str) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.generation_context(skill_id)
+
+    def create_study_plan(
+        self,
+        *,
+        subject: str,
+        set_name: str,
+        course_profile: str,
+        topics: Collection[dict[str, Any]],
+    ) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.create_study_plan(
+                subject=subject,
+                set_name=set_name,
+                course_profile=course_profile,
+                topics=topics,
+            )
+
+    def generation_brief(self, skill_id: str) -> dict[str, Any]:
+        """Collect everything one adaptive generation needs in one store session."""
+
+        with LearningStore(self.database_path, self.skills_path) as store:
+            skill = store.study_topic(skill_id)
+            return {
+                "skill": skill,
+                "avoid_prompts": store.recent_problems(
+                    skill_id, limit=ADAPTIVE_PROMPT_HISTORY
+                ),
+                "materials": store.topic_materials(skill_id),
+                "subject_profile": store.subject_profile(str(skill["course"])),
+                "learner_signal": store.generation_context(skill_id),
+            }
+
     def public_generated_quest(self, quest: QuestTemplate) -> dict[str, str]:
         deck = QuestDeck.load(
             self.quests_path,
@@ -528,9 +671,22 @@ class DashboardService:
         quest: PracticeQuest,
         answer: str,
     ) -> VerificationResult:
+        return self.evaluate_quest(quest, answer).result
+
+    def evaluate_quest(self, quest: PracticeQuest, answer: object) -> AttemptCheck:
+        """Check a single answer or a mapping of multi-part answers."""
+
         if isinstance(quest, AdaptiveQuest):
-            return quest.check(answer)
-        return quest.check(answer, CalculusVerifier())
+            return quest.evaluate(answer)
+        if not isinstance(answer, str):
+            raise ValueError("Enter one answer for this question.")
+        result = quest.check(answer, CalculusVerifier())
+        outcome = (
+            Outcome.CORRECT
+            if result.status is VerificationStatus.VERIFIED_CORRECT
+            else Outcome.INCORRECT
+        )
+        return AttemptCheck(result, outcome)
 
     def record_attempt(
         self,
@@ -539,23 +695,32 @@ class DashboardService:
         result = attempt.result
         if result.status is VerificationStatus.INCONCLUSIVE:
             raise ValueError("An inconclusive check cannot be recorded as a quest result.")
-        outcome = (
-            Outcome.CORRECT
-            if result.status is VerificationStatus.VERIFIED_CORRECT
-            else Outcome.INCORRECT
-        )
-        evidence = (
-            "The local verifier confirmed the submitted dashboard quest answer."
-            if outcome is Outcome.CORRECT
-            else "The local verifier rejected the submitted dashboard quest answer."
+        outcome = attempt.outcome
+        default_evidence = {
+            Outcome.CORRECT: (
+                "The local verifier confirmed the submitted dashboard quest answer."
+            ),
+            Outcome.PARTIAL: (
+                "The local verifier confirmed some parts of the submitted dashboard "
+                "quest answer."
+            ),
+            Outcome.INCORRECT: (
+                "The local verifier rejected the submitted dashboard quest answer."
+            ),
+        }[outcome]
+        evidence = attempt.misconception_evidence or default_evidence
+        problem = (
+            attempt.quest.full_text
+            if isinstance(attempt.quest, AdaptiveQuest)
+            else attempt.quest.prompt
         )
         event = LearningEvent(
             skill_id=attempt.quest.skill_id,
             outcome=outcome,
-            misconception=None,
+            misconception=attempt.misconception,
             evidence=evidence,
             confidence=1.0,
-            problem=attempt.quest.prompt,
+            problem=problem,
             hints_used=attempt.hints_used,
             solution_revealed=attempt.solution_revealed,
             tutor_turns=1 + attempt.hints_used,
@@ -588,12 +753,18 @@ class SenseiDashboardServer(ThreadingHTTPServer):
         quest_factory: GeneratedQuestFactory | None = None,
         adaptive_factory: AdaptiveQuestFactory | None = None,
         error_recorder: ErrorRecorder | None = None,
+        material_scanner: MaterialScanner | None = None,
+        misconception_classifier: MisconceptionClassifier | None = None,
+        study_plan_scanner: StudyPlanScanner | None = None,
     ) -> None:
         self.service = service
         self.error_recorder = error_recorder or ErrorRecorder()
         self.csrf_token = secrets.token_urlsafe(32)
         self.challenges = ChallengeStore(quest_factory, adaptive_factory)
         self.adaptive_available = adaptive_factory is not None
+        self.material_scanner = material_scanner
+        self.misconception_classifier = misconception_classifier
+        self.study_plan_scanner = study_plan_scanner
         self.pending_attempts = PendingAttemptStore()
         self.topic_state_lock = threading.RLock()
         self.assets = {
@@ -706,7 +877,13 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         body = json.dumps(document, ensure_ascii=False).encode("utf-8")
         self._send_bytes(status, body, "application/json; charset=utf-8")
 
-    def _read_json(self, expected_fields: set[str]) -> dict[str, object]:
+    def _read_json(
+        self,
+        expected_fields: set[str],
+        *,
+        optional_fields: set[str] | None = None,
+        max_bytes: int = MAX_REQUEST_BYTES,
+    ) -> dict[str, object]:
         content_type = self.headers.get("Content-Type", "").split(";", 1)[0]
         if content_type.strip().lower() != "application/json":
             raise ValueError("Requests must use application/json.")
@@ -714,19 +891,76 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", ""))
         except ValueError as error:
             raise ValueError("A valid Content-Length is required.") from error
-        if not 1 <= length <= MAX_REQUEST_BYTES:
-            raise ValueError(
-                f"Request body must be from 1 to {MAX_REQUEST_BYTES} bytes."
-            )
+        if not 1 <= length <= max_bytes:
+            raise ValueError(f"Request body must be from 1 to {max_bytes} bytes.")
         try:
             document = json.loads(self.rfile.read(length))
         except (json.JSONDecodeError, UnicodeDecodeError) as error:
             raise ValueError("Request body must be valid UTF-8 JSON.") from error
-        if not isinstance(document, dict) or set(document) != expected_fields:
+        optional = optional_fields or set()
+        supplied = set(document) if isinstance(document, dict) else set()
+        if (
+            not isinstance(document, dict)
+            or not expected_fields.issubset(supplied)
+            or not supplied.issubset(expected_fields | optional)
+        ):
+            if optional:
+                raise ValueError(
+                    f"Request fields must include {sorted(expected_fields)} and may "
+                    f"also include {sorted(optional)}."
+                )
             raise ValueError(
                 f"Request fields must be exactly {sorted(expected_fields)}."
             )
         return document
+
+    @staticmethod
+    def _skill_id(value: object) -> str:
+        if not isinstance(value, str) or not value.strip() or len(value) > 80:
+            raise ValueError("Study topic ID must be valid text.")
+        return value
+
+    def _diagnose(
+        self,
+        quest: AdaptiveQuest,
+        check: AttemptCheck,
+        hints_used: int,
+    ) -> MisconceptionFinding | None:
+        """Best-effort naming of the mistake behind a wrong or partial answer."""
+
+        classifier = self.server.misconception_classifier
+        if classifier is None:
+            return None
+        if check.parts:
+            wrong = [
+                (label, result)
+                for label, result in check.parts
+                if result.status is not VerificationStatus.VERIFIED_CORRECT
+            ]
+            expected = "; ".join(f"({label}) {result.expected}" for label, result in wrong)
+            submitted = "; ".join(
+                f"({label}) {result.submitted}" for label, result in wrong
+            )
+        else:
+            expected = check.result.expected or ""
+            submitted = check.result.submitted
+        try:
+            return classifier.classify(
+                subject=quest.subject,
+                topic=quest.topic,
+                problem=quest.full_text,
+                expected=expected,
+                submitted=submitted,
+                solution=quest.solution,
+                help_steps_used=hints_used,
+            )
+        except (ProviderError, LearningEventError, ValueError) as error:
+            self._record_exception(
+                error,
+                "classify misconception",
+                context={"skill_id": quest.skill_id},
+            )
+            return None
 
     def _write_is_allowed(self) -> bool:
         supplied = self.headers.get("X-Sensei-CSRF", "")
@@ -771,7 +1005,32 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             document["runtime"]["adaptive_generation"] = (
                 "ready" if self.server.adaptive_available else "unavailable"
             )
+            document["runtime"]["material_scan"] = (
+                "ready" if self.server.material_scanner is not None else "unavailable"
+            )
+            document["runtime"]["study_plan_scan"] = (
+                "ready" if self.server.study_plan_scanner is not None else "unavailable"
+            )
             self._send_json(200, document)
+            return
+        if path == "/api/study/materials":
+            query = parse_qs(urlsplit(self.path).query)
+            skill_id = (query.get("skill_id") or [""])[0]
+            try:
+                skill_id = self._skill_id(skill_id)
+                materials = self.server.service.topic_materials(skill_id)
+            except ValueError as error:
+                error_id = self._record_exception(error, "list class material")
+                self._send_json(400, {"error": str(error), "error_id": error_id})
+                return
+            except Exception as error:  # keep request failures inside the server
+                error_id = self._record_exception(error, "list class material")
+                self._send_json(
+                    500,
+                    {"error": "Class material is unavailable.", "error_id": error_id},
+                )
+                return
+            self._send_json(200, {"skill_id": skill_id, "materials": materials})
             return
         asset = self.server.assets.get(path)
         if asset is None:
@@ -906,17 +1165,206 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     folder = self.server.service.delete_topic_folder(folder_id)
                 self._send_json(200, {"deleted_folder": folder})
                 return
+            if path == "/api/study/plan/scan":
+                document = self._read_json(
+                    {"filename", "media_base64", "media_type", "subject_hint", "set_name_hint"},
+                    max_bytes=MAX_UPLOAD_REQUEST_BYTES,
+                )
+                if not all(isinstance(value, str) for value in document.values()):
+                    raise ValueError("Study-guide fields must be text.")
+                try:
+                    media_bytes = base64.b64decode(
+                        str(document["media_base64"]), validate=True
+                    )
+                except (binascii.Error, ValueError) as error:
+                    raise ValueError("The uploaded file data is invalid.") from error
+                scanner = self.server.study_plan_scanner
+                if scanner is None:
+                    raise RuntimeError(
+                        "Study-guide analysis is unavailable. Restart Sensei with a "
+                        "valid hosted LLM API connection."
+                    )
+                plan = scanner.scan(
+                    media_bytes,
+                    filename=str(document["filename"]),
+                    media_type=str(document["media_type"]),
+                    subject_hint=str(document["subject_hint"]),
+                    set_name_hint=str(document["set_name_hint"]),
+                )
+                self._send_json(200, {"plan": plan.public_dict()})
+                return
+            if path == "/api/study/plan/create":
+                document = self._read_json(
+                    {"subject", "set_name", "course_profile", "topics"},
+                    max_bytes=MAX_PLAN_REQUEST_BYTES,
+                )
+                raw_topics = document["topics"]
+                if not all(
+                    isinstance(document[field], str)
+                    for field in ("subject", "set_name", "course_profile")
+                ):
+                    raise ValueError("Study-plan fields must be text.")
+                if (
+                    not isinstance(raw_topics, list)
+                    or not 1 <= len(raw_topics) <= MAX_PLAN_TOPICS_PER_REQUEST
+                    or not all(isinstance(item, dict) for item in raw_topics)
+                ):
+                    raise ValueError(
+                        "A study plan must list 1 to "
+                        f"{MAX_PLAN_TOPICS_PER_REQUEST} topics."
+                    )
+                for item in raw_topics:
+                    if not set(item) <= {"name", "section", "description", "materials"}:
+                        raise ValueError(
+                            "Each topic may only include name, section, description, "
+                            "and materials."
+                        )
+                    for field in ("name", "section", "description"):
+                        if item.get(field) is not None and not isinstance(item[field], str):
+                            raise ValueError("Study-plan topic fields must be text.")
+                    materials = item.get("materials") or []
+                    if not isinstance(materials, list) or not all(
+                        isinstance(material, dict)
+                        and set(material) <= {"kind", "body", "solution", "source_label"}
+                        and all(
+                            value is None or isinstance(value, str)
+                            for value in material.values()
+                        )
+                        for material in materials
+                    ):
+                        raise ValueError("Study-plan materials must be text objects.")
+                with self.server.topic_state_lock:
+                    result = self.server.service.create_study_plan(
+                        subject=str(document["subject"]),
+                        set_name=str(document["set_name"]),
+                        course_profile=str(document["course_profile"]),
+                        topics=raw_topics,
+                    )
+                self._send_json(200, result)
+                return
+            if path == "/api/study/materials/add":
+                document = self._read_json(
+                    {"skill_id", "materials"}, max_bytes=MAX_MATERIALS_REQUEST_BYTES
+                )
+                skill_id = self._skill_id(document["skill_id"])
+                raw_materials = document["materials"]
+                if (
+                    not isinstance(raw_materials, list)
+                    or not 1 <= len(raw_materials) <= MAX_MATERIALS_PER_REQUEST
+                    or not all(isinstance(item, dict) for item in raw_materials)
+                ):
+                    raise ValueError(
+                        "Class material must be a list of 1 to "
+                        f"{MAX_MATERIALS_PER_REQUEST} entries."
+                    )
+                for item in raw_materials:
+                    if not set(item) <= {"kind", "body", "solution", "source_label"}:
+                        raise ValueError(
+                            "Each class material may only include kind, body, "
+                            "solution, and source_label."
+                        )
+                    if not all(
+                        value is None or isinstance(value, str)
+                        for value in item.values()
+                    ):
+                        raise ValueError("Class material fields must be text.")
+                with self.server.topic_state_lock:
+                    added = self.server.service.add_topic_materials(
+                        skill_id, raw_materials
+                    )
+                    materials = self.server.service.topic_materials(skill_id)
+                self._send_json(
+                    200,
+                    {
+                        "skill_id": skill_id,
+                        "added": added,
+                        "materials": materials,
+                        "material_count": len(materials),
+                    },
+                )
+                return
+            if path == "/api/study/materials/delete":
+                document = self._read_json({"material_id"})
+                material_id = document["material_id"]
+                if not isinstance(material_id, str) or len(material_id) > 80:
+                    raise ValueError("Class material ID must be valid text.")
+                with self.server.topic_state_lock:
+                    deleted = self.server.service.delete_topic_material(material_id)
+                    materials = self.server.service.topic_materials(
+                        str(deleted["skill_id"])
+                    )
+                self._send_json(
+                    200,
+                    {
+                        "deleted_material": deleted,
+                        "materials": materials,
+                        "material_count": len(materials),
+                    },
+                )
+                return
+            if path == "/api/study/materials/scan":
+                document = self._read_json(
+                    {"skill_id", "filename", "media_base64", "media_type"},
+                    max_bytes=MAX_UPLOAD_REQUEST_BYTES,
+                )
+                skill_id = self._skill_id(document["skill_id"])
+                if not all(
+                    isinstance(document[field], str)
+                    for field in ("filename", "media_base64", "media_type")
+                ):
+                    raise ValueError("Scan fields must be text.")
+                try:
+                    media_bytes = base64.b64decode(
+                        str(document["media_base64"]), validate=True
+                    )
+                except (binascii.Error, ValueError) as error:
+                    raise ValueError("The uploaded file data is invalid.") from error
+                scanner = self.server.material_scanner
+                if scanner is None:
+                    raise RuntimeError(
+                        "Class-material scanning is unavailable. Restart Sensei with "
+                        "a valid hosted LLM API connection."
+                    )
+                skill = self.server.service.study_topic(skill_id)
+                generation_context = {"skill_id": skill_id}
+                proposals = scanner.scan(
+                    media_bytes,
+                    filename=str(document["filename"]),
+                    media_type=str(document["media_type"]),
+                    subject=str(skill["course"]),
+                    topic=str(skill["name"]),
+                    practice_instructions=str(skill.get("description") or ""),
+                )
+                self._send_json(
+                    200,
+                    {
+                        "skill_id": skill_id,
+                        "proposals": [proposal.public_dict() for proposal in proposals],
+                    },
+                )
+                return
+            if path == "/api/study/profile":
+                document = self._read_json({"subject", "profile"})
+                if not all(isinstance(value, str) for value in document.values()):
+                    raise ValueError("Course profile fields must be text.")
+                with self.server.topic_state_lock:
+                    profile = self.server.service.set_subject_profile(
+                        str(document["subject"]), str(document["profile"])
+                    )
+                self._send_json(200, {"subject_profile": profile})
+                return
             if path == "/api/study/generate":
                 document = self._read_json({"skill_id"})
-                skill_id = document["skill_id"]
-                if not isinstance(skill_id, str) or len(skill_id) > 80:
-                    raise ValueError("Study topic ID must be valid text.")
+                skill_id = self._skill_id(document["skill_id"])
                 generation_context = {"skill_id": skill_id}
                 with self.server.topic_state_lock:
-                    skill = self.server.service.study_topic(skill_id)
+                    brief = self.server.service.generation_brief(skill_id)
                     challenge_token, quest = self.server.challenges.issue_adaptive(
-                        skill,
-                        avoid_prompts=self.server.service.recent_topic_prompts(skill_id),
+                        brief["skill"],
+                        avoid_prompts=brief["avoid_prompts"],
+                        materials=brief["materials"],
+                        subject_profile=brief["subject_profile"],
+                        learner_signal=brief["learner_signal"],
                     )
                 self._send_json(
                     200,
@@ -963,35 +1411,57 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 document = self._read_json({"challenge_token", "answer"})
                 challenge_token = document["challenge_token"]
                 answer = document["answer"]
-                if (
-                    not isinstance(challenge_token, str)
-                    or len(challenge_token) > 200
-                    or not isinstance(answer, str)
-                ):
+                if not isinstance(challenge_token, str) or len(challenge_token) > 200:
+                    raise ValueError("Challenge token and answer must be text.")
+                if isinstance(answer, dict):
+                    if len(answer) > 8 or not all(
+                        isinstance(label, str) and isinstance(value, str)
+                        for label, value in answer.items()
+                    ):
+                        raise ValueError("Part answers must be text.")
+                elif not isinstance(answer, str):
                     raise ValueError("Challenge token and answer must be text.")
                 with self.server.topic_state_lock:
                     quest, hints_used, solution_revealed = (
                         self.server.challenges.attempt_context(challenge_token)
                     )
-                    result = self.server.service.check_quest(quest, answer)
-                    attempt_token = (
-                        None
-                        if result.status is VerificationStatus.INCONCLUSIVE
-                        else self.server.pending_attempts.issue(
-                            quest,
-                            result,
-                            hints_used=hints_used,
-                            solution_revealed=solution_revealed,
-                        )
+                    check = self.server.service.evaluate_quest(quest, answer)
+                result = check.result
+                conclusive = result.status is not VerificationStatus.INCONCLUSIVE
+                finding = None
+                if (
+                    conclusive
+                    and isinstance(quest, AdaptiveQuest)
+                    and check.outcome is not Outcome.CORRECT
+                    and not solution_revealed
+                ):
+                    finding = self._diagnose(quest, check, hints_used)
+                attempt_token = (
+                    self.server.pending_attempts.issue(
+                        quest,
+                        result,
+                        hints_used=hints_used,
+                        solution_revealed=solution_revealed,
+                        outcome=check.outcome,
+                        parts=check.parts,
+                        misconception=finding.misconception if finding else None,
+                        misconception_evidence=finding.evidence if finding else None,
                     )
+                    if conclusive
+                    else None
+                )
+                spec = quest.spec if isinstance(quest, AdaptiveQuest) else None
                 self._send_json(
                     200,
                     {
-                        "result": verification_document(result),
+                        "result": verification_document(result, spec),
+                        "outcome": check.outcome.value if conclusive else None,
+                        "parts": part_documents(quest, check),
                         "attempt_token": attempt_token,
                         "solution": (
                             quest.solution if isinstance(quest, AdaptiveQuest) else None
                         ),
+                        "likely_mistake": finding.misconception if finding else None,
                     },
                 )
                 return
@@ -1053,6 +1523,16 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             message = (
                 "Sensei could not generate a new encounter. Please try again."
                 if path in {"/api/study/generate", "/api/quest/generate"}
+                else "Sensei could not analyze that document. Please try again."
+                if path == "/api/study/plan/scan"
+                else "The study plan could not be saved."
+                if path == "/api/study/plan/create"
+                else "Sensei could not scan that page. Please try again."
+                if path == "/api/study/materials/scan"
+                else "Class material could not be saved."
+                if path.startswith("/api/study/materials/")
+                else "The course profile could not be saved."
+                if path == "/api/study/profile"
                 else "The topic and its learning data could not be deleted."
                 if path == "/api/study/delete"
                 else "The topic's progress could not be restarted."
@@ -1100,6 +1580,9 @@ def create_server(
     quest_factory: GeneratedQuestFactory | None = None,
     adaptive_factory: AdaptiveQuestFactory | None = None,
     error_recorder: ErrorRecorder | None = None,
+    material_scanner: MaterialScanner | None = None,
+    misconception_classifier: MisconceptionClassifier | None = None,
+    study_plan_scanner: StudyPlanScanner | None = None,
 ) -> SenseiDashboardServer:
     if not 0 <= port <= 65_535:
         raise ValueError("Dashboard port must be from 0 to 65535.")
@@ -1109,6 +1592,9 @@ def create_server(
         quest_factory,
         adaptive_factory,
         error_recorder,
+        material_scanner=material_scanner,
+        misconception_classifier=misconception_classifier,
+        study_plan_scanner=study_plan_scanner,
     )
 
 
@@ -1141,6 +1627,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--scanner-model",
+        help=(
+            "Hosted model used only to scan uploaded class material (default: the "
+            f"practice model, or {SCANNER_MODEL_ENVIRONMENT})."
+        ),
+    )
+    parser.add_argument(
         "--api-base-url",
         help=(
             f"Responses-compatible API root (default: {DEFAULT_API_BASE_URL}, "
@@ -1156,16 +1649,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _adaptive_factory(
-    args: argparse.Namespace,
-    stack: ExitStack,
-) -> AdaptiveQuestFactory:
-    del stack
+@dataclass(frozen=True)
+class HostedComponents:
+    """Every hosted-model client the dashboard builds from one credential."""
+
+    factory: AdaptiveQuestFactory
+    scanner: MaterialScanner
+    classifier: MisconceptionClassifier
+    plan_scanner: StudyPlanScanner
+    practice_model: str
+    scanner_model: str
+
+
+def _hosted_components(args: argparse.Namespace) -> HostedComponents:
     settings = api_settings_from_environment(
         model=args.model,
         base_url=args.api_base_url,
     )
-    return AdaptiveQuestFactory(
+    scanner_model = (
+        getattr(args, "scanner_model", None)
+        or os.environ.get(SCANNER_MODEL_ENVIRONMENT)
+        or settings.model
+    ).strip() or settings.model
+    factory = AdaptiveQuestFactory(
         ResponsesAPIProvider(
             settings.api_key,
             settings.model,
@@ -1174,6 +1680,46 @@ def _adaptive_factory(
             json_mode=True,
         )
     )
+    scanner = MaterialScanner(
+        ResponsesAPIProvider(
+            settings.api_key,
+            scanner_model,
+            base_url=settings.base_url,
+            timeout_seconds=300,
+            max_output_tokens=SCANNER_MAX_OUTPUT_TOKENS,
+            json_mode=True,
+        )
+    )
+    classifier = MisconceptionClassifier(
+        ResponsesAPIProvider(
+            settings.api_key,
+            settings.model,
+            base_url=settings.base_url,
+            max_output_tokens=CLASSIFIER_MAX_OUTPUT_TOKENS,
+            json_mode=True,
+        )
+    )
+    plan_scanner = StudyPlanScanner(
+        ResponsesAPIProvider(
+            settings.api_key,
+            scanner_model,
+            base_url=settings.base_url,
+            timeout_seconds=300,
+            max_output_tokens=PLAN_SCANNER_MAX_OUTPUT_TOKENS,
+            json_mode=True,
+        )
+    )
+    return HostedComponents(
+        factory, scanner, classifier, plan_scanner, settings.model, scanner_model
+    )
+
+
+def _adaptive_factory(
+    args: argparse.Namespace,
+    stack: ExitStack,
+) -> AdaptiveQuestFactory:
+    del stack
+    return _hosted_components(args).factory
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1183,12 +1729,15 @@ def main(argv: list[str] | None = None) -> int:
         try:
             service = DashboardService(args.database)
             service.state()
-            adaptive_factory = _adaptive_factory(args, stack)
+            components = _hosted_components(args)
             server = create_server(
                 service,
                 port=args.port,
-                adaptive_factory=adaptive_factory,
+                adaptive_factory=components.factory,
                 error_recorder=error_recorder,
+                material_scanner=components.scanner,
+                misconception_classifier=components.classifier,
+                study_plan_scanner=components.plan_scanner,
             )
         except (OSError, RuntimeError, ValueError, sqlite3.Error) as error:
             error_id = error_recorder.record_exception(
@@ -1218,6 +1767,10 @@ def main(argv: list[str] | None = None) -> int:
         url = f"http://{host}:{port}/"
         print(f"Sensei dashboard: {url}")
         print("Learning data stays in local SQLite; tutoring uses the configured API.")
+        print(
+            f"Practice model: {components.practice_model}; class-material scanner: "
+            f"{components.scanner_model}"
+        )
         print(f"Structured error log: {error_recorder.path}")
         if not args.no_open:
             webbrowser.open(url)

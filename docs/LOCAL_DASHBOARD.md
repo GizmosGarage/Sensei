@@ -19,24 +19,81 @@ The default address is `http://127.0.0.1:8765/`. Available options are:
 - `--port PORT`: select the loopback port.
 - `--no-open`: do not open a browser automatically.
 - `--model NAME`: override the hosted model.
+- `--scanner-model NAME`: model used only to scan uploaded class material.
 - `--api-base-url URL`: override the Responses-compatible API root.
 - `--error-log PATH`: select the local structured error log.
 
 The dashboard requires API credentials at startup. See [API setup](API_SETUP.md).
 
+## Import a study guide
+
+The Dojo opens with **Turn a study guide into a study plan**. Upload a PDF or photo, or
+paste the text, optionally with a subject and study-set name. Sensei sends the document
+to the scanner model once (with one compact retry if the answer is cut off) and returns
+a plan to review:
+
+- **Subject** and **study set name** (for example `MAC2311 Calculus I` and `Test 1`).
+- **Course profile**: document-wide rules such as calculator policy or required
+  notation, saved for the subject when it has no profile yet.
+- **Topics**: 3-24 skill-level topics in document order, each with a section label, a
+  practice brief, and up to six example problems transcribed from the document with
+  their printed answers.
+
+Uncheck topics you do not need, rename them, edit briefs, then **Create study plan**.
+The study set becomes an Atlas folder; each topic keeps its brief and examples as class
+material. Importing the same guide again reuses the folder, refreshes the briefs, and
+skips example problems that are already saved. The document itself is never stored.
+There is no manual topic form; topics come from analyzed documents, and a topic's
+brief and examples can be edited in its Class material panel.
+
+## Class material
+
+Every topic card has a **Class material** button that opens a panel with three
+tools:
+
+- **Course profile** for the subject: the professor's conventions, exam format,
+  calculator policy, and answer expectations. It applies to every topic in that
+  subject and is stored in `subject_profiles`.
+- **Paste a problem**: the problem text (keep parts (a), (b), (c) on their own
+  lines), an optional solution or answer key, a kind (problem, worked example, or
+  notes), and a source label such as `HW 4 #7`. Up to 40 items per topic, 4,000
+  characters each.
+- **Scan a page**: upload one PDF (20 MB) or PNG, JPEG, or WebP image (8 MB). The
+  scanner model transcribes the problems it finds; you review, edit, and choose
+  which to save. The file is sent only to the scanner request and is never stored.
+
+Saved material becomes the exemplars the practice model must imitate. Each new
+problem is anchored to one exemplar in rotation, so every saved style gets covered.
+Restart keeps a topic's material; Delete removes it.
+
 ## Practice flow
 
-1. Enter a broad subject, a specific topic, and optional practice instructions.
-2. Sensei stores or reuses that learner-created topic in SQLite.
-3. The hosted LLM drafts one confined problem.
-4. A separate LLM pass reviews the answer and checks topic fit.
-5. Sensei validates the returned schema and deterministic answer contract.
-6. The protected answer and ordered help steps remain process-local.
-7. **Ask Sensei for help** reveals only the next step. Each click reduces the pending
+1. Choose **Train this topic** on a card in a study set (Dojo) or the Atlas (Profile).
+2. Sensei loads that topic's practice brief from SQLite.
+3. Sensei gathers the topic's class material, the course profile, and a learner
+   signal: mastery score and label, the last five outcomes, unresolved
+   misconceptions, and the difficulty tier derived from them.
+4. The hosted LLM drafts one problem isomorphic to the anchor exemplar at the target
+   tier, using one of the answer formats: expression, numeric with tolerance,
+   solution set, interval, point, multiple choice, or multi-part.
+5. A separate LLM pass recomputes every answer and rejects drafts that ignore the
+   brief, are easier or shorter than the class examples, use a different method, or
+   copy an exemplar.
+6. Sensei validates the returned schema and checks every answer key against its own
+   checker before the problem is issued.
+7. The protected answer keys and ordered help steps remain process-local.
+8. **Ask Sensei for help** reveals only the next step. Each click reduces the pending
    correct-answer ceiling by 5 XP and 15 mastery-evidence points.
-8. If the next help step reveals the final answer, both reward ceilings become zero.
-9. Submitting an answer captures the server-counted help use, and recording the attempt
-   atomically updates the SQLite mastery and XP records.
+9. If the next help step reveals the final answer, both reward ceilings become zero.
+10. Submitting an answer checks it locally. Multi-part problems are checked part by
+    part: all parts right is **correct**, some right is **partial** (55 evidence,
+    12 XP), none right is **incorrect**.
+11. When the result is not fully correct and the final answer was not revealed, one
+    short classification call names the likely mistake. It is shown as "Sensei
+    noticed" and saved with the attempt.
+12. Recording the attempt atomically updates the SQLite mastery, XP, and
+    misconception records; two independent correct answers in a row resolve that
+    topic's open misconceptions.
 
 Each topic card has **Restart** and **Delete** actions. After a reset warning,
 **Restart** removes that topic's attempts, XP events, mastery, misconceptions, review
@@ -57,6 +114,9 @@ Symbolic math answers are checked with the restricted SymPy verifier.
 - Hidden answers and verification targets are not returned in public quest documents.
 - API keys never enter dashboard JSON or browser storage.
 - Personal learning history remains in `data/sensei.db`.
-- Relevant prompt and learner-context text is sent to the configured LLM API.
+- Relevant prompt and learner-context text is sent to the configured LLM API,
+  including saved class material and the course profile.
+- An uploaded page is sent only to the scanner model request; Sensei keeps only the
+  transcribed items you choose to save.
 
 The browser is a local interface, not a second durable data store.

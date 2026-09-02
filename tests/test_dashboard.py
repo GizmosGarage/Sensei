@@ -47,7 +47,7 @@ class DashboardTests(unittest.TestCase):
             self.assertNotIn("sample_answer", quest)
             self.assertNotIn("verification", quest)
         self.assertEqual("Local SQLite", state["runtime"]["storage"])
-        self.assertEqual(5, state["runtime"]["practice_api_version"])
+        self.assertEqual(6, state["runtime"]["practice_api_version"])
         self.assertEqual(40, state["catalog"]["quest_count"])
         self.assertEqual(20, state["catalog"]["courses"]["precalculus"])
         self.assertEqual(37, state["catalog"]["generated_skill_count"])
@@ -119,11 +119,14 @@ class DashboardTests(unittest.TestCase):
                 html = response.read().decode("utf-8")
                 self.assertIn("Sensei // Adaptive Dojo", html)
                 self.assertNotIn("Forge a questline", html)
-                self.assertIn("Start practice chat", html)
+                self.assertNotIn("Start practice chat", html)
+                self.assertIn("Analyze with Sensei", html)
+                self.assertIn('id="plan-review"', html)
+                self.assertIn('id="study-sets"', html)
+                self.assertIn("Practice brief", html)
                 self.assertIn("Ask Sensei for help", html)
                 self.assertNotIn("Ask Sensei for a hint", html)
                 self.assertIn("Your study brief", html)
-                self.assertIn("Practice instructions", html)
                 self.assertIn("Next problem", html)
                 self.assertIn('data-view="profile"', html)
                 self.assertIn('data-view="past-quest"', html)
@@ -137,7 +140,7 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn("/assets/vendor/katex/katex.min.js", html)
                 self.assertIn("/assets/vendor/katex/contrib/mhchem.min.js", html)
             with urlopen(f"{base_url}/assets/app.js", timeout=5) as response:
-                javascript = response.read().decode("utf-8")
+                javascript = response.read().decode("utf-8").replace("\r\n", "\n")
                 self.assertIn("It cannot be recovered once deleted.", javascript)
                 self.assertIn('postJson("/api/study/restart"', javascript)
                 self.assertIn("The topic and its folder will stay in your Atlas.", javascript)
@@ -158,16 +161,15 @@ class DashboardTests(unittest.TestCase):
                     'container.addEventListener("toggle", () => rememberFolderState',
                     javascript,
                 )
-                self.assertIn("function prepareTopicForPractice(topic)", javascript)
+                self.assertIn("function trainTopic(topic, statusTarget)", javascript)
                 self.assertIn(
                     'practiceButton.addEventListener("click", () => '
-                    "prepareTopicForPractice(topic));",
+                    "trainTopic(topic, generationStatus));",
                     javascript,
                 )
-                self.assertIn(
-                    'byId("context-input").value = "";',
-                    javascript,
-                )
+                self.assertIn('postJson("/api/study/plan/scan"', javascript)
+                self.assertIn('postJson("/api/study/plan/create"', javascript)
+                self.assertNotIn("async function createFocus(event)", javascript)
                 self.assertNotIn(
                     'byId("context-input").value = topic.description || "";',
                     javascript,
@@ -933,3 +935,508 @@ class DashboardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+import base64 as _base64  # noqa: E402
+import sqlite3 as _sqlite3  # noqa: E402
+
+from sensei.materials import MaterialProposal  # noqa: E402
+
+
+MULTI_PART_DRAFT = {
+    "title": "Sliding ladder",
+    "prompt": (
+        r"A 10 ft ladder leans against a wall. Its base slides away from the "
+        r"wall at \(2\) ft/s."
+    ),
+    "answer_type": "multi_part",
+    "answer": "",
+    "options": [],
+    "parts": [
+        {
+            "label": "a",
+            "prompt": r"Find \(\frac{dy}{dt}\) when \(x = 6\). Enter only the value in ft/s.",
+            "answer_type": "expression",
+            "answer": "-3/2",
+        },
+        {
+            "label": "b",
+            "prompt": "For which base distances is the top moving faster than 1 ft/s downward? Use interval notation.",
+            "answer_type": "interval",
+            "answer": "(4, 10)",
+        },
+        {
+            "label": "c",
+            "prompt": "Which quantity stays constant? Choose the best answer.",
+            "answer_type": "multiple_choice",
+            "answer": "C",
+            "options": ["x", "y", "The ladder length", r"\(\frac{dy}{dt}\)"],
+        },
+    ],
+    "help_steps": [
+        "Relate the base distance and height with the Pythagorean theorem.",
+        r"Differentiate both sides with respect to \(t\).",
+        "Substitute the known values and solve for the unknown rate.",
+    ],
+    "solution": (
+        r"From \(x^2 + y^2 = 100\), \(2x\,x' + 2y\,y' = 0\), so at \(x = 6\), "
+        r"\(y = 8\) and \(y' = -\frac{3}{2}\) ft/s."
+    ),
+    "graph": None,
+}
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + bytes(16)
+
+
+class _ScriptedProvider:
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = list(responses)
+        self.requests: list[list[dict[str, object]]] = []
+
+    def complete(self, messages, on_token=None):
+        self.requests.append(list(messages))
+        return CompletionResult(self.responses.pop(0), "completed")
+
+
+class _StubScanner:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def scan(self, media_bytes, *, filename, media_type, subject, topic, practice_instructions=""):
+        self.calls.append(
+            {
+                "size": len(media_bytes),
+                "filename": filename,
+                "media_type": media_type,
+                "subject": subject,
+                "topic": topic,
+                "practice_instructions": practice_instructions,
+            }
+        )
+        return (
+            MaterialProposal("example_problem", "Scanned: find dy/dt for the cone.", None, "HW 5 #2"),
+        )
+
+
+class _StubClassifier:
+    def __init__(self, finding) -> None:
+        self.finding = finding
+        self.calls: list[dict[str, object]] = []
+
+    def classify(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.finding
+
+
+class _LiveDashboardCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.database = Path(self.temporary.name) / "sensei.db"
+        self.error_log = Path(self.temporary.name) / "errors.jsonl"
+        self.error_recorder = ErrorRecorder(self.error_log)
+        self.service = DashboardService(self.database)
+        self.server = None
+        self.thread = None
+
+    def tearDown(self) -> None:
+        if self.server is not None:
+            self.server.shutdown()
+            self.server.server_close()
+        if self.thread is not None:
+            self.thread.join(timeout=5)
+        self.temporary.cleanup()
+
+    def _start(self, **components) -> str:
+        self.server = create_server(
+            self.service, port=0, error_recorder=self.error_recorder, **components
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base_url = f"http://{LOOPBACK_HOST}:{self.server.server_address[1]}"
+        with urlopen(f"{self.base_url}/api/dashboard", timeout=5) as response:
+            self.csrf_token = json.load(response)["csrf_token"]
+        return self.base_url
+
+    def _post(self, path: str, document: dict) -> dict:
+        request = Request(
+            f"{self.base_url}{path}",
+            data=json.dumps(document).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Origin": self.base_url,
+                "X-Sensei-CSRF": self.csrf_token,
+            },
+            method="POST",
+        )
+        with urlopen(request, timeout=5) as response:
+            return json.load(response)
+
+    def _post_error(self, path: str, document: dict) -> tuple[int, dict]:
+        request = Request(
+            f"{self.base_url}{path}",
+            data=json.dumps(document).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Origin": self.base_url,
+                "X-Sensei-CSRF": self.csrf_token,
+            },
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as rejected:
+            urlopen(request, timeout=5)
+        return rejected.exception.code, json.load(rejected.exception)
+
+    def _get(self, path: str) -> dict:
+        with urlopen(f"{self.base_url}{path}", timeout=5) as response:
+            return json.load(response)
+
+
+class ClassMaterialDashboardTests(_LiveDashboardCase):
+    def test_class_material_shapes_generation_and_multi_part_checks_award_partial_credit(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider(
+            [json.dumps(MULTI_PART_DRAFT), json.dumps({"approved": True, "reason": "Recomputed."})]
+        )
+        scanner = _StubScanner()
+        classifier = _StubClassifier(
+            type(
+                "Finding",
+                (),
+                {
+                    "misconception": "Confuses open and closed interval endpoints.",
+                    "evidence": "The submitted interval closed both endpoints.",
+                    "confidence": 0.8,
+                },
+            )()
+        )
+        self._start(
+            adaptive_factory=AdaptiveQuestFactory(provider),
+            material_scanner=scanner,
+            misconception_classifier=classifier,
+        )
+
+        focus = self._post(
+            "/api/study/focus",
+            {"subject": "Calculus I", "topic": "Related rates", "context": "Match homework style"},
+        )
+        skill_id = focus["study_topic"]["id"]
+        self.assertEqual(0, focus["study_topic"]["material_count"])
+
+        profile = self._post(
+            "/api/study/profile",
+            {"subject": "calculus i", "profile": "Five free-response problems, no calculator."},
+        )
+        self.assertEqual("Calculus I", profile["subject_profile"]["subject"])
+
+        added = self._post(
+            "/api/study/materials/add",
+            {
+                "skill_id": skill_id,
+                "materials": [
+                    {
+                        "kind": "example_problem",
+                        "body": "A 13 ft ladder slides down a wall at 2 ft/s.\n(a) Find dy/dt.\n(b) Find the angle rate.",
+                        "solution": "dy/dt = -5/6 ft/s",
+                        "source_label": "HW 4 #7",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(1, added["material_count"])
+        self.assertEqual("HW 4 #7", added["added"][0]["source_label"])
+
+        scanned = self._post(
+            "/api/study/materials/scan",
+            {
+                "skill_id": skill_id,
+                "filename": "hw5.png",
+                "media_base64": _base64.b64encode(PNG_BYTES).decode("ascii"),
+                "media_type": "image/png",
+            },
+        )
+        self.assertEqual("Scanned: find dy/dt for the cone.", scanned["proposals"][0]["body"])
+        self.assertEqual(
+            {
+                "size": len(PNG_BYTES),
+                "filename": "hw5.png",
+                "media_type": "image/png",
+                "subject": "Calculus I",
+                "topic": "Related rates",
+                "practice_instructions": "Match homework style",
+            },
+            scanner.calls[0],
+        )
+        saved = self._post(
+            "/api/study/materials/add",
+            {"skill_id": skill_id, "materials": scanned["proposals"]},
+        )
+        self.assertEqual(2, saved["material_count"])
+
+        listing = self._get(f"/api/study/materials?skill_id={skill_id}")
+        self.assertEqual(2, len(listing["materials"]))
+        state = self._get("/api/dashboard")
+        self.assertEqual(2, state["study_topics"][0]["material_count"])
+        self.assertEqual(
+            {"Calculus I": "Five free-response problems, no calculator."},
+            state["subject_profiles"],
+        )
+        self.assertEqual("ready", state["runtime"]["material_scan"])
+        self.assertEqual(6, state["runtime"]["practice_api_version"])
+
+        generated = self._post("/api/study/generate", {"skill_id": skill_id})
+        quest = generated["quest"]
+        self.assertEqual("multi_part", quest["answer_type"])
+        self.assertEqual(["a", "b", "c"], [part["label"] for part in quest["parts"]])
+        self.assertNotIn("answer", quest["parts"][0])
+        self.assertEqual("standard", quest["difficulty_tier"])
+        self.assertEqual(2, quest["material_count"])
+        prompt = provider.requests[0][-1]["content"]
+        self.assertIn("Course profile: Five free-response problems, no calculator.", prompt)
+        self.assertIn("[1] (HW 4 #7)", prompt)
+        self.assertIn("Anchor exemplar for this problem: [1]", prompt)
+        self.assertIn("Target difficulty tier: standard", prompt)
+        self.assertIn("Learner signal: no recorded attempts", prompt)
+
+        code, error = self._post_error(
+            "/api/quest/check",
+            {"challenge_token": generated["challenge_token"], "answer": "-1.5"},
+        )
+        self.assertEqual(400, code)
+        self.assertIn("several parts", error["error"])
+        code, error = self._post_error(
+            "/api/quest/check",
+            {"challenge_token": generated["challenge_token"], "answer": {"a": "-1.5", "c": "C"}},
+        )
+        self.assertEqual(400, code)
+        self.assertIn("part (b)", error["error"])
+
+        checked = self._post(
+            "/api/quest/check",
+            {
+                "challenge_token": generated["challenge_token"],
+                "answer": {"a": "-1.5", "b": "[4, 10]", "c": "A"},
+            },
+        )
+        self.assertEqual("partial", checked["outcome"])
+        self.assertEqual("verified_incorrect", checked["result"]["status"])
+        self.assertEqual(3, len(checked["parts"]))
+        self.assertEqual("verified_correct", checked["parts"][0]["status"])
+        self.assertEqual("verified_incorrect", checked["parts"][1]["status"])
+        self.assertEqual(r"\left(4, 10\right)", checked["parts"][1]["expected_latex"])
+        self.assertEqual("C. The ladder length", checked["parts"][2]["expected"])
+        self.assertEqual(
+            "Confuses open and closed interval endpoints.", checked["likely_mistake"]
+        )
+        self.assertEqual("(b) (4, 10); (c) C. The ladder length", classifier.calls[0]["expected"])
+        self.assertIn("(a) Find", classifier.calls[0]["problem"])
+        self.assertTrue(checked["attempt_token"])
+
+        recorded = self._post("/api/quest/record", {"attempt_token": checked["attempt_token"]})
+        self.assertEqual(12, recorded["progress"]["xp_awarded"])
+        self.assertEqual(55.0, recorded["progress"]["mastery_evidence"])
+
+        connection = _sqlite3.connect(self.database)
+        try:
+            misconceptions = connection.execute(
+                "SELECT description, occurrence_count FROM misconceptions WHERE skill_id = ?",
+                (skill_id,),
+            ).fetchall()
+            problem, outcome, evidence = connection.execute(
+                "SELECT problem, outcome, evidence FROM attempts WHERE skill_id = ?",
+                (skill_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertEqual([("Confuses open and closed interval endpoints.", 1)], misconceptions)
+        self.assertEqual("partial", outcome)
+        self.assertIn("(a) Find", problem)
+        self.assertEqual("The submitted interval closed both endpoints.", evidence)
+
+        material_id = listing["materials"][1]["id"]
+        removed = self._post("/api/study/materials/delete", {"material_id": material_id})
+        self.assertEqual(1, removed["material_count"])
+        code, error = self._post_error("/api/study/materials/delete", {"material_id": material_id})
+        self.assertEqual(400, code)
+
+    def test_help_final_step_lists_every_part_and_scan_needs_a_scanner(self) -> None:
+        provider = _ScriptedProvider(
+            [json.dumps(MULTI_PART_DRAFT), json.dumps({"approved": True, "reason": "Recomputed."})]
+        )
+        self._start(adaptive_factory=AdaptiveQuestFactory(provider))
+        focus = self._post(
+            "/api/study/focus",
+            {"subject": "Calculus I", "topic": "Related rates", "context": ""},
+        )
+        skill_id = focus["study_topic"]["id"]
+        state = self._get("/api/dashboard")
+        self.assertEqual("unavailable", state["runtime"]["material_scan"])
+
+        code, error = self._post_error(
+            "/api/study/materials/scan",
+            {
+                "skill_id": skill_id,
+                "filename": "hw5.png",
+                "media_base64": _base64.b64encode(PNG_BYTES).decode("ascii"),
+                "media_type": "image/png",
+            },
+        )
+        self.assertEqual(500, code)
+        self.assertIn("could not scan", error["error"])
+        code, error = self._post_error(
+            "/api/study/materials/scan",
+            {
+                "skill_id": skill_id,
+                "filename": "hw5.png",
+                "media_base64": "not base64!",
+                "media_type": "image/png",
+            },
+        )
+        self.assertEqual(400, code)
+
+        generated = self._post("/api/study/generate", {"skill_id": skill_id})
+        steps = []
+        for _ in range(4):
+            reveal = self._post("/api/quest/help", {"challenge_token": generated["challenge_token"]})
+            steps.append(reveal["step"])
+        self.assertTrue(reveal["final_answer"])
+        self.assertTrue(steps[-1].startswith("Final answers: (a) "))
+        self.assertIn(r"(b) \(", steps[-1])
+        self.assertIn("(c) C. The ladder length", steps[-1])
+        self.assertEqual(0, reveal["reward"]["xp_if_correct"])
+
+        code, error = self._post_error(
+            "/api/study/materials/add",
+            {"skill_id": skill_id, "materials": []},
+        )
+        self.assertEqual(400, code)
+        self.assertIn("1 to 40", error["error"])
+
+
+from sensei.curriculum import PlannedTopic, StudyPlan  # noqa: E402
+
+
+class _StubPlanScanner:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def scan(self, media_bytes, *, filename, media_type, subject_hint="", set_name_hint=""):
+        self.calls.append(
+            {
+                "size": len(media_bytes),
+                "filename": filename,
+                "media_type": media_type,
+                "subject_hint": subject_hint,
+                "set_name_hint": set_name_hint,
+            }
+        )
+        return StudyPlan(
+            subject=subject_hint or "MAC2311 Calculus I",
+            set_name=set_name_hint or "Test 1",
+            course_profile="Calculator in radian mode.",
+            topics=(
+                PlannedTopic(
+                    "Limits from a table",
+                    "1.2",
+                    "Estimate a limit from a table of values.",
+                    (
+                        MaterialProposal(
+                            "example_problem",
+                            "[Graph of f with a hole at (2, 1/2).] Find the limit at 2.",
+                            "L = 1/2",
+                            "Exercise 12",
+                        ),
+                    ),
+                ),
+                PlannedTopic("Squeeze theorem", "1.4", "Bound h(x) between two functions.", ()),
+                PlannedTopic(
+                    "Vertical asymptotes versus holes", "1.5", "Classify discontinuities.", ()
+                ),
+            ),
+        )
+
+
+class StudyPlanDashboardTests(_LiveDashboardCase):
+    def test_study_guide_scan_and_plan_creation_round_trip(self) -> None:
+        provider = _ScriptedProvider(
+            [json.dumps(MULTI_PART_DRAFT), json.dumps({"approved": True, "reason": "Recomputed."})]
+        )
+        scanner = _StubPlanScanner()
+        self._start(
+            adaptive_factory=AdaptiveQuestFactory(provider), study_plan_scanner=scanner
+        )
+        state = self._get("/api/dashboard")
+        self.assertEqual("ready", state["runtime"]["study_plan_scan"])
+
+        scanned = self._post(
+            "/api/study/plan/scan",
+            {
+                "filename": "MAC2311_test_1_study_guide.pdf",
+                "media_base64": _base64.b64encode(b"%PDF-1.7 guide").decode("ascii"),
+                "media_type": "application/pdf",
+                "subject_hint": "",
+                "set_name_hint": "Test 1",
+            },
+        )
+        plan = scanned["plan"]
+        self.assertEqual(3, len(plan["topics"]))
+        self.assertEqual(1, plan["material_count"])
+        self.assertEqual("Test 1", scanner.calls[0]["set_name_hint"])
+        self.assertEqual("application/pdf", scanner.calls[0]["media_type"])
+
+        created = self._post(
+            "/api/study/plan/create",
+            {
+                "subject": plan["subject"],
+                "set_name": plan["set_name"],
+                "course_profile": plan["course_profile"],
+                "topics": plan["topics"][:2],
+            },
+        )
+        self.assertEqual("Test 1", created["folder"]["name"])
+        self.assertEqual(2, len(created["topics"]))
+        self.assertEqual(2, created["created_topics"])
+        self.assertEqual(1, created["added_materials"])
+        self.assertTrue(created["profile_saved"])
+        self.assertEqual("Section 1.2", created["topics"][0]["unit"])
+
+        state = self._get("/api/dashboard")
+        self.assertEqual(2, len(state["study_topics"]))
+        self.assertEqual(1, len(state["topic_folders"]))
+        self.assertEqual(2, len(state["topic_folders"][0]["topic_ids"]))
+        self.assertEqual(
+            {"MAC2311 Calculus I": "Calculator in radian mode."}, state["subject_profiles"]
+        )
+
+        generated = self._post("/api/study/generate", {"skill_id": created["topics"][0]["id"]})
+        self.assertEqual(1, generated["quest"]["material_count"])
+        prompt = provider.requests[0][-1]["content"]
+        self.assertIn("[1] (Exercise 12)", prompt)
+        self.assertIn("Course profile: Calculator in radian mode.", prompt)
+        self.assertIn("Topic or skill: Limits from a table", prompt)
+
+        code, error = self._post_error(
+            "/api/study/plan/create",
+            {"subject": "X", "set_name": "T", "course_profile": "", "topics": []},
+        )
+        self.assertEqual(400, code)
+        self.assertIn("1 to 40", error["error"])
+
+    def test_plan_scan_requires_a_scanner_and_a_valid_upload(self) -> None:
+        self._start()
+        state = self._get("/api/dashboard")
+        self.assertEqual("unavailable", state["runtime"]["study_plan_scan"])
+        upload = {
+            "filename": "guide.pdf",
+            "media_base64": _base64.b64encode(b"%PDF-1.7 guide").decode("ascii"),
+            "media_type": "application/pdf",
+            "subject_hint": "",
+            "set_name_hint": "",
+        }
+        code, error = self._post_error("/api/study/plan/scan", upload)
+        self.assertEqual(500, code)
+        self.assertIn("could not analyze", error["error"])
+        code, error = self._post_error(
+            "/api/study/plan/scan", {**upload, "media_base64": "not base64!"}
+        )
+        self.assertEqual(400, code)
+        self.assertIn("invalid", error["error"])

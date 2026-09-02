@@ -15,6 +15,10 @@ Repository: [GizmosGarage/Sensei](https://github.com/GizmosGarage/Sensei)
 - API credentials are read from a local `.env` file or process environment variables
   and are never saved to SQLite or committed to the repository.
 - Deterministic SymPy checks remain the correctness boundary for supported math.
+- Study guides are analyzed once by the scanner model into a reviewable plan of
+  skill-level topics; only the plan you create is stored. Class material (imported,
+  pasted, or scanned problems) is stored per topic in SQLite and steers generation.
+  Uploaded documents are never written to disk or SQLite.
 - The API is called with remote response storage disabled.
 
 The current default is OpenAI's `gpt-5.4-mini`, but both the model name and API base
@@ -38,6 +42,7 @@ Copy-Item .env.example .env
 OPENAI_API_KEY=your-api-key
 SENSEI_LLM_MODEL=gpt-5.6-sol
 SENSEI_LLM_BASE_URL=https://api.openai.com/v1
+SENSEI_SCANNER_MODEL=gpt-5.6-sol
 ```
 
 Sensei loads `.env` from the directory where it is started. The file is ignored by
@@ -76,13 +81,53 @@ Choose a different API model or endpoint without changing source code:
 python -m sensei.dashboard --model "gpt-5.4-mini" --api-base-url "https://api.openai.com/v1"
 ```
 
-The dashboard lets a learner name a subject, topic, and practice instructions. The
-configured LLM drafts and reviews one problem at a time, while protected answer keys
-stay in the dashboard process until the attempt is checked and recorded. Every Atlas
+`--scanner-model` (or `SENSEI_SCANNER_MODEL`) selects the model used only to read
+uploaded class material; it must accept PDF and image inputs. It defaults to the
+practice model.
+
+The dashboard starts with a study guide. Upload an exam study guide, syllabus, review
+sheet, or textbook section (PDF, photo, or pasted text) and Sensei returns a study
+plan to review: the subject, a study-set name, a course profile, and skill-level
+topics, each with a practice brief and example problems taken from the document.
+Creating the plan builds the study set in the Atlas. **Train this topic** on any card
+starts a practice chat; the configured LLM drafts and reviews one problem at a time,
+while protected answer keys stay in the dashboard process until the attempt is
+checked and recorded. Every Atlas
 topic also has two confirmed data controls: **Restart** clears that topic's attempts,
 mastery, misconceptions, review progress, and earned XP while keeping the topic in the
 Atlas; **Delete** removes the topic and its topic-specific learning data from the active
 database.
+
+## Class-accurate practice
+
+An imported study plan fills each topic's class material with the document's own
+problems. Each Atlas topic also has a **Class material** panel. Paste real homework, quiz, or exam
+problems (with their solutions when you have them), or upload a PDF or photo of a
+page and let the scanner model transcribe the problems for review before saving. A
+subject-level **course profile** records the professor's conventions. Every
+generated problem is built to be isomorphic to one saved exemplar: the same
+structure, method, notation, and difficulty with different numbers or scenario. The
+independent reviewer sees the same exemplars and rejects drafts that are easier or
+use a different method than the class examples.
+
+Problems use the answer forms a class actually collects:
+
+| Format | Learner enters | Checked by |
+| --- | --- | --- |
+| `expression` | one expression, or `DNE` | symbolic equivalence |
+| `numeric` | a number, optionally with its unit | relative tolerance (default 1%) |
+| `solution_set` | `2, -3` or `x = 2, x = -3`; `none` when there is no solution | order-independent symbolic match |
+| `interval` | `(-oo, 1) U [3, oo)` | SymPy set equality |
+| `point` | `(2, -5)`; several points separated by commas | order-independent match |
+| `multiple_choice` | A, B, C, or D | exact key |
+| `multi_part` | one answer per part (a), (b), (c) | each part separately; some right parts record a **partial** outcome |
+
+Generation also receives a learner signal: the topic's mastery, its last five
+outcomes, unresolved misconceptions, and a difficulty tier (`foundational`,
+`standard`, `challenging`, `synthesis`) derived from them. When an answer is wrong
+or partial, one short classification call names the likely mistake; it is stored
+with the attempt, shown as "Sensei noticed", targeted by later problems, and
+resolved after two independent correct answers in a row.
 
 During a generated problem, **Ask Sensei for help** reveals one solution step at a
 time. Each request lowers the available XP and mastery evidence; reaching the final
