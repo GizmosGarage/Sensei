@@ -58,7 +58,7 @@ Only the active problem, structured event, and concise observable evidence cross
 | `attempts` | Stores one completed problem's structured evidence and help use. |
 | `misconceptions` | Consolidates repeated misconception descriptions by skill. |
 | `mastery` | Stores the current evidence score, counts, streak, and review date per skill. |
-| `xp_events` | Stores additive XP linked one-to-one with attempts. |
+| `xp_events` | Stores additive XP linked one-to-one with an attempt or, since schema version 11, a completed lesson. |
 
 Foreign keys are enabled and the mutation for one attempt is atomic. The database uses SQLite WAL mode and defaults to `data/sensei.db`, which is ignored by Git.
 
@@ -175,6 +175,17 @@ Default exports and backups are created under ignored `data/exports/` and `data/
 
 Materials are course content rather than progress: **Restart** keeps them and
 **Delete** removes them with the topic. JSON exports include both tables.
+
+## Schema version 11
+
+| Table | Purpose |
+| --- | --- |
+| `topic_lessons` | One guided lesson per topic: the validated lesson JSON (including private check-in answers), `step_count`, `current_step`, `completed_at`, and `xp_awarded`. |
+| `xp_events` | Rebuilt so `attempt_id` is nullable and a new `lesson_id` column references `topic_lessons`; a check constraint requires exactly one of them. |
+
+Completing a lesson inserts one `xp_events` row of 25 points. Replacing a lesson with
+**Start lesson over** keeps the row id and `xp_awarded`, so the bonus is one-time per
+topic. Lessons never write to `attempts` or `mastery`.
 
 ## Difficulty tiers
 

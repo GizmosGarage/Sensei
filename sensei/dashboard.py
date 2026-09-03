@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass
 from datetime import timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Collection
+from typing import Any, Collection, Mapping
 from urllib.parse import parse_qs, urlsplit
 
 from sensei.answers import AnswerSpec, answer_key_display, answer_key_latex, submitted_latex
@@ -32,6 +32,12 @@ from sensei.learning import (
     MisconceptionClassifier,
     MisconceptionFinding,
     Outcome,
+)
+from sensei.lessons import (
+    MAX_LEARNER_ANSWER_CHARACTERS,
+    MAX_LEARNER_QUESTION_CHARACTERS,
+    Lesson,
+    LessonFactory,
 )
 from sensei.materials import MAX_PDF_BYTES, MaterialScanError, MaterialScanner
 from sensei.practice import (
@@ -78,8 +84,32 @@ ATTEMPT_TOKEN_LIFETIME_SECONDS = 15 * 60
 CHALLENGE_TOKEN_LIFETIME_SECONDS = 60 * 60
 ADAPTIVE_PROMPT_HISTORY = 8
 ADAPTIVE_DISTINCT_ATTEMPTS = 3
-PRACTICE_API_VERSION = 6
+PRACTICE_API_VERSION = 7
 PRACTICE_MAX_OUTPUT_TOKENS = 8_192
+LESSON_MAX_OUTPUT_TOKENS = 12_000
+LESSON_COACH_MAX_OUTPUT_TOKENS = 1_500
+MAX_LESSON_STEP_INDEX = 100
+LESSON_PROGRESS_FIELDS = (
+    "status",
+    "current_step",
+    "step_count",
+    "completed_at",
+    "xp_awarded",
+)
+LESSON_FAILURE_MESSAGES = {
+    "/api/study/learn/start": (
+        "generate and validate guided lesson",
+        "Sensei could not finish a valid lesson. Please try again.",
+    ),
+    "/api/study/learn/check": (
+        "grade lesson check-in",
+        "Sensei could not read that answer. Please try again.",
+    ),
+    "/api/study/learn/ask": (
+        "answer lesson question",
+        "Sensei could not answer that question. Please try again.",
+    ),
+}
 SCANNER_MAX_OUTPUT_TOKENS = 6_000
 CLASSIFIER_MAX_OUTPUT_TOKENS = 400
 SCANNER_MODEL_ENVIRONMENT = "SENSEI_SCANNER_MODEL"
@@ -647,6 +677,53 @@ class DashboardService:
                 "learner_signal": store.generation_context(skill_id),
             }
 
+    def lesson_brief(self, skill_id: str) -> dict[str, Any]:
+        """Collect everything one guided lesson needs in one store session."""
+
+        with LearningStore(self.database_path, self.skills_path) as store:
+            skill = store.study_topic(skill_id)
+            return {
+                "skill": skill,
+                "materials": store.topic_materials(skill_id),
+                "subject_profile": store.subject_profile(str(skill["course"])),
+                "learner_signal": store.generation_context(skill_id),
+            }
+
+    def lesson_for_topic(self, skill_id: str) -> dict[str, Any] | None:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.lesson_for_topic(skill_id)
+
+    def save_lesson(self, lesson: Lesson) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.save_lesson(
+                lesson.skill_id, lesson.id, lesson.private_dict(), lesson.step_count
+            )
+
+    def advance_lesson(self, skill_id: str, step_index: int) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            return store.advance_lesson(skill_id, step_index)
+
+    def profile(self) -> dict[str, Any]:
+        with LearningStore(self.database_path, self.skills_path) as store:
+            profile = store.profile()
+            profile["rank_name"] = rank_name(int(profile["level"]))
+            return profile
+
+    @staticmethod
+    def public_lesson(record: Mapping[str, Any]) -> dict[str, Any]:
+        """Return the learner-facing lesson without any check-in answer keys."""
+
+        lesson = Lesson.from_private_dict(
+            record["document"],
+            lesson_id=str(record["id"]),
+            skill_id=str(record["skill_id"]),
+        )
+        return lesson.public_dict()
+
+    @staticmethod
+    def lesson_progress_document(record: Mapping[str, Any]) -> dict[str, Any]:
+        return {field: record[field] for field in LESSON_PROGRESS_FIELDS}
+
     def public_generated_quest(self, quest: QuestTemplate) -> dict[str, str]:
         deck = QuestDeck.load(
             self.quests_path,
@@ -756,6 +833,7 @@ class SenseiDashboardServer(ThreadingHTTPServer):
         material_scanner: MaterialScanner | None = None,
         misconception_classifier: MisconceptionClassifier | None = None,
         study_plan_scanner: StudyPlanScanner | None = None,
+        lesson_factory: LessonFactory | None = None,
     ) -> None:
         self.service = service
         self.error_recorder = error_recorder or ErrorRecorder()
@@ -765,6 +843,7 @@ class SenseiDashboardServer(ThreadingHTTPServer):
         self.material_scanner = material_scanner
         self.misconception_classifier = misconception_classifier
         self.study_plan_scanner = study_plan_scanner
+        self.lesson_factory = lesson_factory
         self.pending_attempts = PendingAttemptStore()
         self.topic_state_lock = threading.RLock()
         self.assets = {
@@ -920,6 +999,65 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             raise ValueError("Study topic ID must be valid text.")
         return value
 
+    @staticmethod
+    def _step_index(value: object) -> int:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value <= MAX_LESSON_STEP_INDEX
+        ):
+            raise ValueError("Lesson step must be a whole number.")
+        return value
+
+    @staticmethod
+    def _learner_text(value: object, *, maximum: int, empty_message: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError(empty_message)
+        text = value.strip()
+        if not text:
+            raise ValueError(empty_message)
+        if len(text) > maximum:
+            raise ValueError(f"Keep it under {maximum} characters.")
+        return text
+
+    def _lesson_factory(self) -> LessonFactory:
+        factory = self.server.lesson_factory
+        if factory is None:
+            raise RuntimeError(
+                "Guided lessons are unavailable. Restart Sensei with a valid hosted "
+                "LLM API connection."
+            )
+        return factory
+
+    def _lesson_response(
+        self, record: Mapping[str, Any], *, generated: bool
+    ) -> dict[str, Any]:
+        service = self.server.service
+        return {
+            "lesson": service.public_lesson(record),
+            "progress": service.lesson_progress_document(record),
+            "generated": generated,
+        }
+
+    def _active_lesson(
+        self, skill_id: str, step_index: int
+    ) -> tuple[dict[str, Any], Lesson, dict[str, Any]]:
+        """Load one topic's stored lesson for a step the learner has reached."""
+
+        service = self.server.service
+        skill = service.study_topic(skill_id)
+        record = service.lesson_for_topic(skill_id)
+        if record is None:
+            raise ValueError("Start the lesson before working on a step.")
+        if step_index >= int(record["step_count"]):
+            raise ValueError("That lesson step does not exist.")
+        if step_index > int(record["current_step"]):
+            raise ValueError("Finish the earlier steps first.")
+        lesson = Lesson.from_private_dict(
+            record["document"], lesson_id=str(record["id"]), skill_id=skill_id
+        )
+        return skill, lesson, record
+
     def _diagnose(
         self,
         quest: AdaptiveQuest,
@@ -1007,6 +1145,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             )
             document["runtime"]["material_scan"] = (
                 "ready" if self.server.material_scanner is not None else "unavailable"
+            )
+            document["runtime"]["lessons"] = (
+                "ready" if self.server.lesson_factory is not None else "unavailable"
             )
             document["runtime"]["study_plan_scan"] = (
                 "ready" if self.server.study_plan_scanner is not None else "unavailable"
@@ -1374,6 +1515,90 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+            if path == "/api/study/learn/start":
+                document = self._read_json({"skill_id", "restart"})
+                skill_id = self._skill_id(document["skill_id"])
+                restart = document["restart"]
+                if not isinstance(restart, bool):
+                    raise ValueError("The restart flag must be true or false.")
+                generation_context = {"skill_id": skill_id}
+                with self.server.topic_state_lock:
+                    brief = self.server.service.lesson_brief(skill_id)
+                    existing = self.server.service.lesson_for_topic(skill_id)
+                if existing is not None and not restart:
+                    self._send_json(200, self._lesson_response(existing, generated=False))
+                    return
+                factory = self._lesson_factory()
+                # The long lesson call runs outside the topic lock, like scans do.
+                lesson = factory.generate(
+                    brief["skill"],
+                    materials=brief["materials"],
+                    subject_profile=brief["subject_profile"],
+                    learner_signal=brief["learner_signal"],
+                )
+                with self.server.topic_state_lock:
+                    record = self.server.service.save_lesson(lesson)
+                self._send_json(200, self._lesson_response(record, generated=True))
+                return
+            if path == "/api/study/learn/check":
+                document = self._read_json({"skill_id", "step_index", "answer"})
+                skill_id = self._skill_id(document["skill_id"])
+                step_index = self._step_index(document["step_index"])
+                answer = self._learner_text(
+                    document["answer"],
+                    maximum=MAX_LEARNER_ANSWER_CHARACTERS,
+                    empty_message="Enter an answer to the check-in question first.",
+                )
+                generation_context = {"skill_id": skill_id, "step_index": step_index}
+                with self.server.topic_state_lock:
+                    skill, lesson, record = self._active_lesson(skill_id, step_index)
+                factory = self._lesson_factory()
+                grade = factory.grade_check_in(skill, lesson, step_index, answer)
+                progress = self.server.service.lesson_progress_document(record)
+                xp_awarded = 0
+                completed = False
+                profile = None
+                if grade.passed and step_index == int(record["current_step"]):
+                    with self.server.topic_state_lock:
+                        advanced = self.server.service.advance_lesson(
+                            skill_id, step_index
+                        )
+                        xp_awarded = int(advanced.pop("xp_awarded_now"))
+                        progress = advanced
+                        completed = (
+                            advanced["status"] == "complete"
+                            and record["status"] != "complete"
+                        )
+                        if completed:
+                            profile = self.server.service.profile()
+                self._send_json(
+                    200,
+                    {
+                        "verdict": grade.verdict,
+                        "feedback": grade.feedback,
+                        "progress": progress,
+                        "completed": completed,
+                        "xp_awarded": xp_awarded,
+                        "profile": profile,
+                    },
+                )
+                return
+            if path == "/api/study/learn/ask":
+                document = self._read_json({"skill_id", "step_index", "question"})
+                skill_id = self._skill_id(document["skill_id"])
+                step_index = self._step_index(document["step_index"])
+                question = self._learner_text(
+                    document["question"],
+                    maximum=MAX_LEARNER_QUESTION_CHARACTERS,
+                    empty_message="Type a question for Sensei first.",
+                )
+                generation_context = {"skill_id": skill_id, "step_index": step_index}
+                with self.server.topic_state_lock:
+                    skill, lesson, _record = self._active_lesson(skill_id, step_index)
+                factory = self._lesson_factory()
+                answer = factory.answer_question(skill, lesson, step_index, question)
+                self._send_json(200, {"answer": answer})
+                return
             if path == "/api/quest/generate":
                 document = self._read_json({"skill_id"})
                 skill_id = document["skill_id"]
@@ -1479,23 +1704,27 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
         except PracticeGenerationError as error:
+            operation, message = LESSON_FAILURE_MESSAGES.get(
+                path,
+                (
+                    "generate and validate adaptive encounter",
+                    "Sensei could not finish a valid new encounter. Please try again.",
+                ),
+            )
             error_id = self._record_exception(
                 error,
-                "generate and validate adaptive encounter",
+                operation,
                 context=generation_context,
             )
             self.log_error(
-                "Adaptive generation failed validation (%s): %s",
+                "Hosted generation failed validation (%s): %s",
                 error_reference(error_id),
                 error,
             )
             self._send_json(
                 503,
                 {
-                    "error": (
-                        "Sensei could not finish a valid new encounter. "
-                        "Please try again."
-                    ),
+                    "error": message,
                     "error_id": error_id,
                 },
             )
@@ -1523,6 +1752,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             message = (
                 "Sensei could not generate a new encounter. Please try again."
                 if path in {"/api/study/generate", "/api/quest/generate"}
+                else "Sensei could not build the lesson. Please try again."
+                if path == "/api/study/learn/start"
+                else "Sensei could not finish that lesson step. Please try again."
+                if path.startswith("/api/study/learn/")
                 else "Sensei could not analyze that document. Please try again."
                 if path == "/api/study/plan/scan"
                 else "The study plan could not be saved."
@@ -1583,6 +1816,7 @@ def create_server(
     material_scanner: MaterialScanner | None = None,
     misconception_classifier: MisconceptionClassifier | None = None,
     study_plan_scanner: StudyPlanScanner | None = None,
+    lesson_factory: LessonFactory | None = None,
 ) -> SenseiDashboardServer:
     if not 0 <= port <= 65_535:
         raise ValueError("Dashboard port must be from 0 to 65535.")
@@ -1595,6 +1829,7 @@ def create_server(
         material_scanner=material_scanner,
         misconception_classifier=misconception_classifier,
         study_plan_scanner=study_plan_scanner,
+        lesson_factory=lesson_factory,
     )
 
 
@@ -1659,6 +1894,7 @@ class HostedComponents:
     plan_scanner: StudyPlanScanner
     practice_model: str
     scanner_model: str
+    lesson_factory: LessonFactory
 
 
 def _hosted_components(args: argparse.Namespace) -> HostedComponents:
@@ -1709,8 +1945,31 @@ def _hosted_components(args: argparse.Namespace) -> HostedComponents:
             json_mode=True,
         )
     )
+    lesson_factory = LessonFactory(
+        ResponsesAPIProvider(
+            settings.api_key,
+            settings.model,
+            base_url=settings.base_url,
+            timeout_seconds=300,
+            max_output_tokens=LESSON_MAX_OUTPUT_TOKENS,
+            json_mode=True,
+        ),
+        coach_provider=ResponsesAPIProvider(
+            settings.api_key,
+            settings.model,
+            base_url=settings.base_url,
+            max_output_tokens=LESSON_COACH_MAX_OUTPUT_TOKENS,
+            json_mode=True,
+        ),
+    )
     return HostedComponents(
-        factory, scanner, classifier, plan_scanner, settings.model, scanner_model
+        factory,
+        scanner,
+        classifier,
+        plan_scanner,
+        settings.model,
+        scanner_model,
+        lesson_factory,
     )
 
 
@@ -1738,6 +1997,7 @@ def main(argv: list[str] | None = None) -> int:
                 material_scanner=components.scanner,
                 misconception_classifier=components.classifier,
                 study_plan_scanner=components.plan_scanner,
+                lesson_factory=components.lesson_factory,
             )
         except (OSError, RuntimeError, ValueError, sqlite3.Error) as error:
             error_id = error_recorder.record_exception(

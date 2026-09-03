@@ -31,7 +31,7 @@ const FOLDER_STATE_STORAGE_KEY = "sensei.closed-topic-folders.v1";
 const MAX_PENDING_CLIENT_ERRORS = 25;
 const reportedClientErrors = new WeakSet();
 const closedFolderIds = readClosedFolderIds();
-const PRACTICE_API_VERSION = 6;
+const PRACTICE_API_VERSION = 7;
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
@@ -41,6 +41,14 @@ let materialProposals = [];
 let currentPlan = null;
 let importMode = "file";
 let analyzing = false;
+let activeLesson = null;
+let activeLessonSkillId = null;
+let lessonProgress = null;
+let revealedLessonStep = 0;
+let lessonAwardedNow = 0;
+let generatingLesson = false;
+let checkingLesson = false;
+let askingLesson = false;
 
 function readClosedFolderIds() {
   try {
@@ -458,9 +466,13 @@ function topicCard(topic) {
   const generationStatus = card.querySelector(".card-generation-status");
   restoreGenerationStatus(generationStatus, topic.id);
   const practiceButton = card.querySelector(".practice-button");
+  const learnButton = card.querySelector(".learn-button");
   const restartButton = card.querySelector(".restart-topic-button");
   const deleteButton = card.querySelector(".delete-topic-button");
   const materialButton = card.querySelector(".material-button");
+  learnButton.textContent = lessonButtonLabel(topic);
+  learnButton.setAttribute("aria-label", `${lessonButtonLabel(topic)} for ${topic.name}`);
+  learnButton.addEventListener("click", () => learnTopic(topic, generationStatus));
   const materialCount = Number(topic.material_count) || 0;
   materialButton.textContent = materialCount
     ? `Class material · ${materialCount}`
@@ -476,6 +488,7 @@ function topicCard(topic) {
     deleteButton,
     practiceButton,
     generationStatus,
+    learnButton,
   ));
   deleteButton.addEventListener("click", () => deleteTopic(
     topic,
@@ -483,8 +496,22 @@ function topicCard(topic) {
     restartButton,
     practiceButton,
     generationStatus,
+    learnButton,
   ));
   return card;
+}
+
+function lessonButtonLabel(topic) {
+  if (topic.lesson_status === "complete") return "Review lesson";
+  if (topic.lesson_status === "in_progress") {
+    return `Resume lesson · step ${Math.min(topic.lesson_step + 1, topic.lesson_step_count)} of ${topic.lesson_step_count}`;
+  }
+  return "Learn this topic";
+}
+
+function learnTopic(topic, statusTarget) {
+  showView("dojo");
+  void startLesson(topic.id, statusTarget || byId("lesson-generation-status"), { restart: false });
 }
 
 function folderById(folderId) {
@@ -600,9 +627,9 @@ async function deleteFolder() {
   }
 }
 
-async function restartTopic(topic, restartButton, deleteButton, practiceButton, statusTarget) {
+async function restartTopic(topic, restartButton, deleteButton, practiceButton, statusTarget, learnButton) {
   const confirmed = window.confirm(
-    `Restart “${topic.name}” from the beginning?\n\nThis permanently removes this topic’s saved attempts, XP, mastery, misconceptions, and review progress. The topic and its folder will stay in your Atlas.`,
+    `Restart “${topic.name}” from the beginning?\n\nThis permanently removes this topic’s saved attempts, XP, mastery, misconceptions, lesson progress, and review progress. The topic and its folder will stay in your Atlas.`,
   );
   if (!confirmed) return;
 
@@ -610,11 +637,13 @@ async function restartTopic(topic, restartButton, deleteButton, practiceButton, 
   restartButton.disabled = true;
   deleteButton.disabled = true;
   practiceButton.disabled = true;
+  learnButton.disabled = true;
   setGenerationStatus(statusTarget, "Resetting this topic’s mastery and XP…", "working", topic.id);
   try {
     await postJson("/api/study/restart", { skill_id: topic.id });
     generationStatuses.delete(topic.id);
     if (activeSessionSkillId === topic.id) closeArena();
+    if (activeLessonSkillId === topic.id) closeLesson();
     await loadDashboard();
   } catch (error) {
     void reportClientProblem(error, "restartTopic");
@@ -624,12 +653,13 @@ async function restartTopic(topic, restartButton, deleteButton, practiceButton, 
     restartButton.disabled = false;
     deleteButton.disabled = false;
     practiceButton.disabled = false;
+    learnButton.disabled = false;
   }
 }
 
-async function deleteTopic(topic, deleteButton, restartButton, practiceButton, statusTarget) {
+async function deleteTopic(topic, deleteButton, restartButton, practiceButton, statusTarget, learnButton) {
   const confirmed = window.confirm(
-    `Delete “${topic.name}” from your Atlas?\n\nThis permanently deletes all saved attempts, XP, mastery, misconceptions, and other Atlas data for this topic. It cannot be recovered once deleted.`,
+    `Delete “${topic.name}” from your Atlas?\n\nThis permanently deletes all saved attempts, XP, mastery, misconceptions, lessons, and other Atlas data for this topic. It cannot be recovered once deleted.`,
   );
   if (!confirmed) return;
 
@@ -637,11 +667,13 @@ async function deleteTopic(topic, deleteButton, restartButton, practiceButton, s
   deleteButton.disabled = true;
   restartButton.disabled = true;
   practiceButton.disabled = true;
+  learnButton.disabled = true;
   setGenerationStatus(statusTarget, "Permanently deleting this topic and its learning data…", "working", topic.id);
   try {
     await postJson("/api/study/delete", { skill_id: topic.id });
     generationStatuses.delete(topic.id);
     if (activeSessionSkillId === topic.id) closeArena();
+    if (activeLessonSkillId === topic.id) closeLesson();
     await loadDashboard();
   } catch (error) {
     void reportClientProblem(error, "deleteTopic");
@@ -651,6 +683,7 @@ async function deleteTopic(topic, deleteButton, restartButton, practiceButton, s
     deleteButton.disabled = false;
     restartButton.disabled = false;
     practiceButton.disabled = false;
+    learnButton.disabled = false;
   }
 }
 
@@ -877,6 +910,7 @@ function renderOptions(quest) {
 
 function openArena(quest) {
   byId("chat-history").replaceChildren();
+  closeLesson();
   activeQuest = quest;
   showView("dojo");
   resetArenaFeedback();
@@ -912,7 +946,7 @@ async function startAdaptiveQuest(
   statusTarget = byId("arena-generation-status"),
   { resetSession = false } = {},
 ) {
-  if (!dashboardState || generatingQuestion || changingTopicIds.has(skillId)) return;
+  if (!dashboardState || generatingQuestion || generatingLesson || changingTopicIds.has(skillId)) return;
   if (dashboardState.runtime.practice_api_version !== PRACTICE_API_VERSION) {
     setGenerationStatus(
       statusTarget,
@@ -969,6 +1003,361 @@ function closeArena() {
   renderGraph(null);
   byId("chat-history").replaceChildren();
   byId("quest-arena").hidden = true;
+}
+
+// ---------------------------------------------------------------------------
+// Guided lessons (separate from practice)
+// ---------------------------------------------------------------------------
+
+function lessonMessage(roleText, { learner = false, feedback = "" } = {}) {
+  const article = document.createElement("article");
+  if (feedback) {
+    article.className = `answer-feedback sensei-feedback-message ${feedback}`;
+  } else {
+    article.className = `chat-message ${learner ? "learner-message" : "sensei-chat-message"}`;
+  }
+  const avatar = document.createElement("span");
+  avatar.className = learner ? "chat-avatar" : "chat-avatar sensei-chat-avatar";
+  avatar.setAttribute("aria-hidden", "true");
+  avatar.textContent = learner ? "You" : "道";
+  const bubble = document.createElement("div");
+  bubble.className = "chat-bubble";
+  const role = document.createElement("p");
+  role.className = "chat-role";
+  role.textContent = roleText;
+  bubble.append(role);
+  article.append(avatar, bubble);
+  return { article, bubble };
+}
+
+function notationParagraph(copy, className = "") {
+  const paragraph = document.createElement("p");
+  if (className) paragraph.className = className;
+  setNotationText(paragraph, copy);
+  return paragraph;
+}
+
+function lessonStepMessage(step, index) {
+  const passed = index < lessonProgress.current_step;
+  const { article, bubble } = lessonMessage(`Sensei · Step ${index + 1} of ${activeLesson.step_count}`);
+  bubble.classList.add("lesson-step-bubble");
+  const heading = document.createElement("h3");
+  setNotationText(heading, step.title);
+  bubble.append(heading, notationParagraph(step.explanation));
+  if (step.worked_example) {
+    const example = document.createElement("div");
+    example.className = "solution-copy lesson-example";
+    const label = document.createElement("strong");
+    label.textContent = "Worked example";
+    example.append(label, notationParagraph(step.worked_example));
+    bubble.append(example);
+  }
+  const takeaway = document.createElement("div");
+  takeaway.className = "help-panel lesson-takeaway";
+  const takeawayLabel = document.createElement("strong");
+  takeawayLabel.textContent = "Key takeaway";
+  takeaway.append(takeawayLabel, notationParagraph(step.key_takeaway));
+  bubble.append(takeaway);
+  const checkIn = document.createElement("div");
+  checkIn.className = "lesson-check-in";
+  const checkLabel = document.createElement("strong");
+  checkLabel.textContent = passed ? "Check-in · passed" : "Check-in";
+  if (passed) checkLabel.classList.add("lesson-passed");
+  checkIn.append(checkLabel, notationParagraph(step.check_in));
+  bubble.append(checkIn);
+  return article;
+}
+
+function lessonCompletionMessage() {
+  const { article, bubble } = lessonMessage("Sensei", { feedback: "correct lesson-complete" });
+  const status = document.createElement("p");
+  status.className = "feedback-status";
+  status.textContent = lessonAwardedNow ? `Lesson complete · +${lessonAwardedNow} XP` : "Lesson complete";
+  const note = document.createElement("p");
+  note.textContent = lessonAwardedNow
+    ? "The lesson bonus is awarded once per topic. Mastery only moves when you train, so take the method into practice."
+    : "You already earned this topic’s lesson bonus. Review any step above, or train to build mastery.";
+  const actions = document.createElement("div");
+  actions.className = "feedback-actions";
+  const train = document.createElement("button");
+  train.type = "button";
+  train.className = "primary-button";
+  train.textContent = "Train this topic";
+  train.addEventListener("click", () => {
+    const topic = studyTopicById(activeLessonSkillId);
+    if (topic) trainTopic(topic);
+  });
+  const restart = document.createElement("button");
+  restart.type = "button";
+  restart.className = "secondary-button";
+  restart.textContent = "Start lesson over";
+  restart.addEventListener("click", restartLesson);
+  actions.append(train, restart);
+  bubble.append(status, note, actions);
+  return article;
+}
+
+function renderLesson() {
+  const thread = byId("lesson-thread");
+  thread.replaceChildren();
+  if (!activeLesson || !lessonProgress) return;
+  const total = activeLesson.step_count;
+  const current = lessonProgress.current_step;
+  const complete = lessonProgress.status === "complete";
+  const overview = lessonMessage("Sensei · Lesson plan");
+  overview.bubble.classList.add("lesson-step-bubble");
+  const title = document.createElement("h3");
+  setNotationText(title, activeLesson.title);
+  overview.bubble.append(title, notationParagraph(activeLesson.overview));
+  thread.append(overview.article);
+  const lastVisible = complete ? total - 1 : Math.min(revealedLessonStep, total - 1);
+  activeLesson.steps.slice(0, lastVisible + 1).forEach((step, index) => {
+    thread.append(lessonStepMessage(step, index));
+  });
+  if (complete) {
+    const summary = lessonMessage("Sensei · Closing summary");
+    summary.bubble.classList.add("lesson-step-bubble");
+    summary.article.classList.add("lesson-closing");
+    summary.bubble.append(notationParagraph(activeLesson.closing_summary));
+    thread.append(summary.article, lessonCompletionMessage());
+  }
+  renderLessonProgress();
+  byId("lesson-check-composer").hidden = complete || revealedLessonStep !== current;
+  byId("lesson-answer").value = "";
+}
+
+function renderLessonProgress() {
+  if (!activeLesson || !lessonProgress) return;
+  const total = activeLesson.step_count;
+  const current = lessonProgress.current_step;
+  const complete = lessonProgress.status === "complete";
+  byId("lesson-progress-label").textContent = complete
+    ? `All ${total} steps complete`
+    : `${current} of ${total} steps passed · now on step ${Math.min(current + 1, total)}`;
+  byId("lesson-progress-bar").style.width = `${clamp((current / total) * 100, 0, 100)}%`;
+}
+
+function openLesson(topic, lesson, progress) {
+  closeArena();
+  activeLesson = lesson;
+  activeLessonSkillId = topic.id;
+  lessonProgress = progress;
+  lessonAwardedNow = 0;
+  revealedLessonStep = Math.min(progress.current_step, lesson.step_count - 1);
+  showView("dojo");
+  byId("lesson-skill").textContent = `${topic.course} · ${topic.name}`;
+  byId("lesson-title").textContent = "Guided lesson";
+  renderLesson();
+  const panel = byId("lesson-panel");
+  panel.hidden = false;
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (!byId("lesson-check-composer").hidden) byId("lesson-answer").focus({ preventScroll: true });
+}
+
+function closeLesson() {
+  activeLesson = null;
+  activeLessonSkillId = null;
+  lessonProgress = null;
+  revealedLessonStep = 0;
+  lessonAwardedNow = 0;
+  byId("lesson-thread").replaceChildren();
+  byId("lesson-panel").hidden = true;
+}
+
+async function startLesson(
+  skillId,
+  statusTarget = byId("lesson-generation-status"),
+  { restart = false } = {},
+) {
+  if (!dashboardState || generatingLesson || generatingQuestion || changingTopicIds.has(skillId)) return;
+  if (dashboardState.runtime.practice_api_version !== PRACTICE_API_VERSION) {
+    setGenerationStatus(
+      statusTarget,
+      "Sensei was updated while this dashboard was running. Restart Sensei, then try again.",
+      "error",
+      skillId,
+    );
+    return;
+  }
+  const topic = studyTopicById(skillId);
+  if (!topic) {
+    setGenerationStatus(statusTarget, "That Atlas topic is no longer available.", "error", skillId);
+    return;
+  }
+  const fresh = restart || topic.lesson_status === "none";
+  generatingLesson = true;
+  document.body.classList.add("generating");
+  setGenerationStatus(
+    statusTarget,
+    fresh ? "Sensei is writing and independently checking your lesson…" : "Opening your saved lesson…",
+    "working",
+    skillId,
+  );
+  byId("lesson-restart").disabled = true;
+  try {
+    const response = await postJson("/api/study/learn/start", { skill_id: skillId, restart }, {
+        retries: fresh ? 1 : 0,
+        onRetry: () => setGenerationStatus(
+          statusTarget,
+          "The first draft did not finish cleanly. Sensei is trying once more…",
+          "working",
+          skillId,
+        ),
+      },
+    );
+    if (changingTopicIds.has(skillId) || !studyTopicById(skillId)) return;
+    openLesson(topic, response.lesson, response.progress);
+    setGenerationStatus(
+      statusTarget,
+      response.generated ? "Lesson validated. Work through it one step at a time." : "Lesson loaded from your Atlas.",
+      "success",
+      skillId,
+    );
+    if (response.generated) void loadDashboard();
+  } catch (error) {
+    void reportClientProblem(error, "startLesson");
+    setGenerationStatus(statusTarget, error.message, "error", skillId);
+  } finally {
+    generatingLesson = false;
+    document.body.classList.remove("generating");
+    byId("lesson-restart").disabled = false;
+  }
+}
+
+function restartLesson() {
+  if (!activeLessonSkillId || generatingLesson) return;
+  const confirmed = window.confirm(
+    "Start this lesson over?\n\nSensei writes a new lesson for this topic and replaces your progress in the current one. The one-time XP bonus is not awarded twice.",
+  );
+  if (!confirmed) return;
+  void startLesson(activeLessonSkillId, byId("lesson-generation-status"), { restart: true });
+}
+
+function lessonErrorMessage(message) {
+  const { article, bubble } = lessonMessage("Sensei", { feedback: "incorrect" });
+  const status = document.createElement("p");
+  status.className = "feedback-status";
+  status.textContent = message;
+  bubble.append(status);
+  return article;
+}
+
+async function checkLessonStep() {
+  if (!activeLesson || !lessonProgress || checkingLesson || lessonProgress.status === "complete") return;
+  const input = byId("lesson-answer");
+  const answer = input.value.trim();
+  if (!answer) {
+    input.focus();
+    return;
+  }
+  const skillId = activeLessonSkillId;
+  const stepIndex = lessonProgress.current_step;
+  checkingLesson = true;
+  input.disabled = true;
+  byId("lesson-check").disabled = true;
+  const thread = byId("lesson-thread");
+  const learner = lessonMessage("Your answer", { learner: true });
+  learner.bubble.append(notationParagraph(answer));
+  thread.append(learner.article);
+  try {
+    const response = await postJson("/api/study/learn/check", {
+      skill_id: skillId,
+      step_index: stepIndex,
+      answer,
+    });
+    if (activeLessonSkillId !== skillId) return;
+    lessonProgress = response.progress;
+    renderLessonProgress();
+    const feedback = lessonMessage("Sensei", { feedback: response.verdict });
+    const verdict = document.createElement("p");
+    verdict.className = "feedback-status";
+    verdict.textContent = {
+      correct: "Correct — step passed",
+      partial: "Close enough — step passed",
+      incorrect: "Not yet — try again",
+    }[response.verdict] || "Checked";
+    feedback.bubble.append(verdict, notationParagraph(response.feedback));
+    if (response.completed) {
+      lessonAwardedNow = response.xp_awarded;
+      renderLesson();
+      const closing = thread.querySelector(".lesson-closing");
+      if (closing) {
+        thread.insertBefore(feedback.article, closing);
+      } else {
+        thread.append(feedback.article);
+      }
+      void loadDashboard();
+    } else {
+      if (response.verdict !== "incorrect") {
+        const actions = document.createElement("div");
+        actions.className = "feedback-actions";
+        const next = document.createElement("button");
+        next.type = "button";
+        next.className = "primary-button";
+        next.textContent = "Next step";
+        next.addEventListener("click", () => {
+          revealedLessonStep = lessonProgress.current_step;
+          renderLesson();
+          byId("lesson-answer").focus({ preventScroll: true });
+          thread.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+        actions.append(next);
+        feedback.bubble.append(actions);
+        byId("lesson-check-composer").hidden = true;
+        void loadDashboard();
+      }
+      thread.append(feedback.article);
+      input.value = "";
+    }
+    feedback.article.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (error) {
+    void reportClientProblem(error, "checkLessonStep");
+    thread.append(lessonErrorMessage(error.message));
+  } finally {
+    checkingLesson = false;
+    input.disabled = false;
+    byId("lesson-check").disabled = false;
+  }
+}
+
+async function askLessonQuestion() {
+  if (!activeLesson || !lessonProgress || askingLesson) return;
+  const input = byId("lesson-question");
+  const question = input.value.trim();
+  if (!question) {
+    input.focus();
+    return;
+  }
+  const skillId = activeLessonSkillId;
+  const stepIndex = Math.min(revealedLessonStep, activeLesson.step_count - 1);
+  askingLesson = true;
+  input.disabled = true;
+  byId("lesson-ask").disabled = true;
+  const thread = byId("lesson-thread");
+  const learner = lessonMessage("Your question", { learner: true });
+  learner.bubble.append(notationParagraph(question));
+  thread.append(learner.article);
+  try {
+    const response = await postJson("/api/study/learn/ask", {
+      skill_id: skillId,
+      step_index: stepIndex,
+      question,
+    });
+    if (activeLessonSkillId !== skillId) return;
+    const reply = lessonMessage(`Sensei · About step ${stepIndex + 1}`);
+    reply.bubble.classList.add("lesson-step-bubble");
+    reply.bubble.append(notationParagraph(response.answer));
+    thread.append(reply.article);
+    reply.article.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    input.value = "";
+  } catch (error) {
+    void reportClientProblem(error, "askLessonQuestion");
+    thread.append(lessonErrorMessage(error.message));
+  } finally {
+    askingLesson = false;
+    input.disabled = false;
+    byId("lesson-ask").disabled = false;
+  }
 }
 
 async function askSenseiForHelp() {
@@ -1860,6 +2249,12 @@ byId("continue-practice").addEventListener("click", () => {
   if (activeQuest) startAdaptiveQuest(activeQuest.skill_id, byId("arena-generation-status"));
 });
 byId("close-arena").addEventListener("click", closeArena);
+byId("close-lesson").addEventListener("click", closeLesson);
+byId("lesson-restart").addEventListener("click", restartLesson);
+byId("lesson-check").addEventListener("click", checkLessonStep);
+byId("lesson-answer").addEventListener("keydown", (event) => { if (event.key === "Enter") checkLessonStep(); });
+byId("lesson-ask").addEventListener("click", askLessonQuestion);
+byId("lesson-question").addEventListener("keydown", (event) => { if (event.key === "Enter") askLessonQuestion(); });
 byId("ask-sensei-help").addEventListener("click", askSenseiForHelp);
 byId("check-answer").addEventListener("click", checkAnswer);
 byId("record-attempt").addEventListener("click", recordAttempt);
@@ -1883,4 +2278,4 @@ byId("folder-dialog").addEventListener("click", (event) => {
 });
 showView(viewFromHash());
 loadDashboard();
-setInterval(() => { if (!document.hidden && !generatingQuestion) loadDashboard(); }, 30000);
+setInterval(() => { if (!document.hidden && !generatingQuestion && !generatingLesson) loadDashboard(); }, 30000);

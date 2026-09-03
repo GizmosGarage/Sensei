@@ -87,14 +87,14 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(10, version)
+        self.assertEqual(11, version)
         self.assertEqual(37, len(self.store.skill_names()))
         self.store.close()
         self.store = LearningStore(self.database)
         migration_count = self.store.connection.execute(
             "SELECT COUNT(*) AS count FROM schema_migrations"
         ).fetchone()["count"]
-        self.assertEqual(10, migration_count)
+        self.assertEqual(11, migration_count)
 
     def test_schema_v1_database_migrates_and_backfills_provenance(self) -> None:
         self.store.close()
@@ -141,7 +141,7 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(10, version)
+        self.assertEqual(11, version)
         self.assertIsNone(attempt["quest_id"])
         self.assertEqual(100.0, attempt["mastery_evidence"])
         progress = self.store.connection.execute(
@@ -171,7 +171,7 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(10, version)
+        self.assertEqual(11, version)
 
     def test_schema_v3_database_migrates_course_and_preserves_old_skills(self) -> None:
         self.store.close()
@@ -200,7 +200,7 @@ class LearningStoreTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(10, version)
+        self.assertEqual(11, version)
 
     def test_schema_v6_removes_obsolete_skill_metadata_without_losing_topics(self) -> None:
         self.store.close()
@@ -553,9 +553,11 @@ if __name__ == "__main__":
 from datetime import timedelta  # noqa: E402
 
 from sensei.storage import (  # noqa: E402
+    LESSON_XP,
     MIGRATION_7,
     MIGRATION_8,
     MIGRATION_9,
+    MIGRATION_10,
     difficulty_tier,
 )
 
@@ -627,7 +629,7 @@ class ClassMaterialTests(unittest.TestCase):
         version = self.store.connection.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        self.assertEqual(10, version)
+        self.assertEqual(11, version)
         tables = {
             row["name"]
             for row in self.store.connection.execute(
@@ -818,6 +820,228 @@ class ClassMaterialTests(unittest.TestCase):
         )
         self.assertEqual([("Dropped the negative sign.", 2)], unresolved())
 
+
+
+class GuidedLessonStorageTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.store = LearningStore(self.root / "sensei.db")
+
+    def tearDown(self) -> None:
+        self.store.close()
+        self.temporary.cleanup()
+
+    def _topic(self, name: str = "Related rates") -> str:
+        return str(
+            self.store.create_study_topic(
+                subject="Calculus I", topic=name, context=""
+            )["id"]
+        )
+
+    @staticmethod
+    def _document(step_count: int = 2) -> dict:
+        return {
+            "title": "How to solve related-rates problems",
+            "overview": "Relate, differentiate, substitute.",
+            "steps": [
+                {
+                    "title": f"Step {index + 1}",
+                    "explanation": "Why this move works.",
+                    "worked_example": "",
+                    "check_in": "What comes next?",
+                    "check_in_answer": "The next move.",
+                    "key_takeaway": "One idea.",
+                }
+                for index in range(step_count)
+            ],
+            "closing_summary": "Run the checklist.",
+        }
+
+    def _total_xp(self) -> int:
+        return int(self.store.profile()["total_xp"])
+
+    def test_schema_v10_database_migrates_lessons_and_rebuilds_xp_events(self) -> None:
+        self.store.close()
+        old_database = self.root / "version-ten.db"
+        connection = sqlite3.connect(old_database)
+        for migration in (
+            MIGRATION_1,
+            MIGRATION_2,
+            MIGRATION_3,
+            MIGRATION_4,
+            MIGRATION_5,
+            MIGRATION_7,
+            MIGRATION_8,
+            MIGRATION_9,
+            MIGRATION_10,
+        ):
+            connection.executescript(migration)
+        connection.executemany(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+            [(version, NOW.isoformat()) for version in range(1, 11)],
+        )
+        connection.execute(
+            """INSERT INTO skills(
+                   id, name, unit, description, prerequisites_json, sort_order,
+                   course, source, created_at
+               ) VALUES ('legacy-topic', 'Legacy topic', 'Legacy', 'Test', '[]',
+                         100, 'Calculus I', 'learner', ?)""",
+            (NOW.isoformat(),),
+        )
+        connection.execute(
+            """INSERT INTO attempts(
+                   skill_id, problem, outcome, outcome_source, evidence, confidence,
+                   hints_used, solution_revealed, tutor_turns, created_at
+               ) VALUES (
+                   'legacy-topic', 'Find dy/dt', 'correct', 'student',
+                   'Student answer.', 1, 0, 0, 1, ?
+               )""",
+            (NOW.isoformat(),),
+        )
+        connection.execute(
+            """INSERT INTO xp_events(attempt_id, points, reason, created_at)
+               VALUES (1, 25, 'practice', ?)""",
+            (NOW.isoformat(),),
+        )
+        connection.commit()
+        connection.close()
+
+        self.store = LearningStore(old_database)
+        version = self.store.connection.execute(
+            "SELECT MAX(version) AS version FROM schema_migrations"
+        ).fetchone()["version"]
+        self.assertEqual(11, version)
+        tables = {
+            row["name"]
+            for row in self.store.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        self.assertIn("topic_lessons", tables)
+        self.assertIn("xp_events", tables)
+        self.assertNotIn("xp_events_v11", tables)
+        columns = {
+            row["name"]: row
+            for row in self.store.connection.execute("PRAGMA table_info(xp_events)")
+        }
+        self.assertIn("lesson_id", columns)
+        self.assertEqual(0, columns["attempt_id"]["notnull"])
+        preserved = self.store.connection.execute(
+            "SELECT id, attempt_id, lesson_id, points FROM xp_events"
+        ).fetchall()
+        self.assertEqual([(1, 1, None, 25)], [tuple(row) for row in preserved])
+        self.assertEqual(25, self._total_xp())
+        topic = self.store.study_topic("legacy-topic")
+        self.assertEqual("none", topic["lesson_status"])
+        self.assertEqual(0, topic["lesson_step_count"])
+        self.assertEqual(
+            [], list(self.store.connection.execute("PRAGMA foreign_key_check"))
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.connection.execute(
+                "INSERT INTO xp_events(points, reason, created_at) VALUES (1, 'x', 'now')"
+            )
+
+    def test_lesson_completion_awards_xp_once_per_topic(self) -> None:
+        skill_id = self._topic()
+        self.assertEqual("none", self.store.lesson_progress(skill_id)["status"])
+        record = self.store.save_lesson(skill_id, "lesson-abc", self._document(), 2)
+        self.assertEqual("lesson-abc", record["id"])
+        self.assertEqual("in_progress", record["status"])
+        self.assertEqual(0, record["current_step"])
+        self.assertEqual(2, record["step_count"])
+        self.assertEqual("Step 2", record["document"]["steps"][1]["title"])
+        topic = self.store.study_topic(skill_id)
+        self.assertEqual(("in_progress", 0, 2), (
+            topic["lesson_status"], topic["lesson_step"], topic["lesson_step_count"]
+        ))
+
+        progress = self.store.advance_lesson(skill_id, 0)
+        self.assertEqual((1, 0, "in_progress"), (
+            progress["current_step"], progress["xp_awarded_now"], progress["status"]
+        ))
+        self.assertEqual(1, self.store.advance_lesson(skill_id, 0)["current_step"])
+        self.assertEqual(1, self.store.advance_lesson(skill_id, 5)["current_step"])
+        self.assertEqual(0, self._total_xp())
+
+        progress = self.store.advance_lesson(skill_id, 1)
+        self.assertEqual("complete", progress["status"])
+        self.assertEqual(LESSON_XP, progress["xp_awarded_now"])
+        self.assertEqual(LESSON_XP, progress["xp_awarded"])
+        self.assertIsNotNone(progress["completed_at"])
+        self.assertEqual(LESSON_XP, self._total_xp())
+        self.assertEqual(0, self.store.profile()["attempts"])
+        self.assertEqual("complete", self.store.study_topic(skill_id)["lesson_status"])
+        self.assertEqual(
+            [topic["id"] for topic in self.store.study_topics() if topic["lesson_status"] == "complete"],
+            [skill_id],
+        )
+
+        replaced = self.store.save_lesson(skill_id, "lesson-new", self._document(3), 3)
+        self.assertEqual("lesson-abc", replaced["id"])
+        self.assertEqual(("in_progress", 0, 3, LESSON_XP), (
+            replaced["status"], replaced["current_step"], replaced["step_count"],
+            replaced["xp_awarded"],
+        ))
+        finished = self.store.complete_lesson(skill_id)
+        self.assertEqual("complete", finished["status"])
+        self.assertEqual(0, finished["xp_awarded_now"])
+        self.assertEqual(LESSON_XP, self._total_xp())
+
+        document = json.loads(self.store.export_json(self.root / "export.json").read_text("utf-8"))
+        self.assertEqual(1, len(document["topic_lessons"]))
+        self.assertEqual(1, len(document["xp_events"]))
+        with self.assertRaises(ValueError):
+            self.store.save_lesson("missing-topic", "lesson-x", self._document(), 2)
+        with self.assertRaises(ValueError):
+            self.store.advance_lesson("missing-topic", 0)
+        with self.assertRaises(ValueError):
+            self.store.save_lesson(skill_id, "lesson-x", self._document(), 0)
+
+    def test_restart_and_delete_remove_lessons_and_their_xp(self) -> None:
+        skill_id = self._topic()
+        self.store.save_lesson(skill_id, "lesson-1", self._document(), 2)
+        self.store.complete_lesson(skill_id)
+        self.assertEqual(LESSON_XP, self._total_xp())
+
+        restarted = self.store.restart_study_topic(skill_id)
+        self.assertEqual(LESSON_XP, restarted["removed_xp"])
+        self.assertIsNone(self.store.lesson_for_topic(skill_id))
+        self.assertEqual(0, self._total_xp())
+        self.assertEqual("none", self.store.study_topic(skill_id)["lesson_status"])
+
+        self.store.save_lesson(skill_id, "lesson-2", self._document(), 2)
+        self.assertEqual(LESSON_XP, self.store.complete_lesson(skill_id)["xp_awarded_now"])
+        deleted = self.store.delete_study_topic(skill_id)
+        self.assertEqual(LESSON_XP, deleted["removed_xp"])
+        self.assertEqual(0, self._total_xp())
+        self.assertEqual(
+            0,
+            self.store.connection.execute(
+                "SELECT COUNT(*) AS count FROM topic_lessons"
+            ).fetchone()["count"],
+        )
+
+        self.store.record_event(event(), now=NOW)
+        self.store.save_lesson("chain_rule", "lesson-3", self._document(), 2)
+        self.store.complete_lesson("chain_rule")
+        self.assertEqual(25 + LESSON_XP, self._total_xp())
+        self.assertTrue(self.store.delete_lesson("chain_rule"))
+        self.assertFalse(self.store.delete_lesson("chain_rule"))
+        self.assertEqual(25, self._total_xp())
+        self.store.save_lesson("chain_rule", "lesson-4", self._document(), 2)
+        self.store.delete_study_topic("chain_rule")
+        self.assertIsNone(self.store.lesson_for_topic("chain_rule"))
+        self.assertIn("chain_rule", self.store.skill_names())
+        self.assertEqual(
+            [], list(self.store.connection.execute("PRAGMA foreign_key_check"))
+        )
+
+        other = self._topic("Optimization")
+        self.store.save_lesson(other, "lesson-5", self._document(), 2)
+        self.store.delete_learning_data()
+        self.assertIsNone(self.store.lesson_for_topic(other))
 
 
 class StudyPlanStorageTests(unittest.TestCase):

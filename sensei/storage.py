@@ -19,7 +19,17 @@ from sensei.learning import LearningEvent, Outcome
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = REPOSITORY_ROOT / "data" / "sensei.db"
 DEFAULT_SKILLS_PATH = REPOSITORY_ROOT / "config" / "skills.json"
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
+LESSON_XP = 25
+LESSON_STATUS_COLUMNS = """
+    CASE
+        WHEN tl.id IS NULL THEN 'none'
+        WHEN tl.completed_at IS NOT NULL THEN 'complete'
+        ELSE 'in_progress'
+    END AS lesson_status,
+    COALESCE(tl.current_step, 0) AS lesson_step,
+    COALESCE(tl.step_count, 0) AS lesson_step_count
+"""
 FULL_MASTERY_PRACTICE_ATTEMPTS = 10
 MATERIAL_KINDS = ("example_problem", "worked_example", "notes")
 MAX_TOPIC_MATERIALS = 40
@@ -262,6 +272,40 @@ CREATE TABLE subject_profiles (
     profile TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+"""
+
+MIGRATION_11 = """
+CREATE TABLE topic_lessons (
+    id TEXT PRIMARY KEY,
+    skill_id TEXT NOT NULL UNIQUE REFERENCES skills(id) ON DELETE CASCADE,
+    document_json TEXT NOT NULL CHECK (length(document_json) > 0),
+    step_count INTEGER NOT NULL CHECK (step_count >= 1),
+    current_step INTEGER NOT NULL DEFAULT 0
+        CHECK (current_step >= 0 AND current_step <= step_count),
+    completed_at TEXT,
+    xp_awarded INTEGER NOT NULL DEFAULT 0 CHECK (xp_awarded >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE xp_events_v11 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempt_id INTEGER UNIQUE REFERENCES attempts(id) ON DELETE CASCADE,
+    lesson_id TEXT UNIQUE REFERENCES topic_lessons(id) ON DELETE CASCADE,
+    points INTEGER NOT NULL CHECK (points >= 0),
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK ((attempt_id IS NULL) <> (lesson_id IS NULL))
+);
+
+INSERT INTO xp_events_v11(id, attempt_id, lesson_id, points, reason, created_at)
+SELECT id, attempt_id, NULL, points, reason, created_at FROM xp_events;
+
+DROP TABLE xp_events;
+
+ALTER TABLE xp_events_v11 RENAME TO xp_events;
+
+CREATE INDEX idx_xp_events_lesson ON xp_events(lesson_id);
 """
 
 
@@ -546,6 +590,19 @@ class LearningStore:
                 (10, utc_now().isoformat()),
             )
             self.connection.commit()
+            applied.add(10)
+        if 11 not in applied:
+            self.connection.commit()
+            self.connection.execute("PRAGMA foreign_keys = OFF")
+            try:
+                self.connection.executescript(MIGRATION_11)
+                self.connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (11, utc_now().isoformat()),
+                )
+                self.connection.commit()
+            finally:
+                self.connection.execute("PRAGMA foreign_keys = ON")
         current = self.connection.execute(
             "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations"
         ).fetchone()["version"]
@@ -712,12 +769,14 @@ class LearningStore:
 
     def study_topic(self, skill_id: str) -> dict[str, Any]:
         row = self.connection.execute(
-            """SELECT s.id, s.course, s.name, s.unit, s.description,
+            f"""SELECT s.id, s.course, s.name, s.unit, s.description,
                       s.source, s.created_at, aft.folder_id,
                       (SELECT COUNT(*) FROM topic_materials tm
-                        WHERE tm.skill_id = s.id) AS material_count
+                        WHERE tm.skill_id = s.id) AS material_count,
+                      {LESSON_STATUS_COLUMNS}
                  FROM skills s
                  LEFT JOIN atlas_folder_topics aft ON aft.skill_id = s.id
+                 LEFT JOIN topic_lessons tl ON tl.skill_id = s.id
                 WHERE s.id = ?""",
             (skill_id,),
         ).fetchone()
@@ -748,7 +807,14 @@ class LearningStore:
                 WHERE a.skill_id = ?""",
             (skill_id,),
         ).fetchone()
-        return int(row["attempts"]), int(row["xp"])
+        lesson_xp = self.connection.execute(
+            """SELECT COALESCE(SUM(x.points), 0) AS xp
+                 FROM xp_events x
+                 JOIN topic_lessons tl ON tl.id = x.lesson_id
+                WHERE tl.skill_id = ?""",
+            (skill_id,),
+        ).fetchone()["xp"]
+        return int(row["attempts"]), int(row["xp"]) + int(lesson_xp)
 
     def _clear_topic_progress(self, skill_id: str) -> None:
         self.connection.execute(
@@ -757,6 +823,16 @@ class LearningStore:
                     SELECT id FROM attempts WHERE skill_id = ?
                 )""",
             (skill_id,),
+        )
+        self.connection.execute(
+            """DELETE FROM xp_events
+                WHERE lesson_id IN (
+                    SELECT id FROM topic_lessons WHERE skill_id = ?
+                )""",
+            (skill_id,),
+        )
+        self.connection.execute(
+            "DELETE FROM topic_lessons WHERE skill_id = ?", (skill_id,)
         )
         self.connection.execute(
             "DELETE FROM attempts WHERE skill_id = ?", (skill_id,)
@@ -1022,7 +1098,7 @@ class LearningStore:
 
     def skill_progress(self) -> list[dict[str, Any]]:
         rows = self.connection.execute(
-            """SELECT s.id, s.course, s.name, s.unit, s.description,
+            f"""SELECT s.id, s.course, s.name, s.unit, s.description,
                       s.source, s.created_at, s.sort_order,
                       aft.folder_id,
                       (SELECT COUNT(*) FROM topic_materials tm
@@ -1030,10 +1106,12 @@ class LearningStore:
                       COALESCE(m.mastery_score, 0) AS mastery_score,
                       COALESCE(m.attempts_count, 0) AS attempts_count,
                       COALESCE(m.correct_count, 0) AS correct_count,
-                      m.next_review_at
+                      m.next_review_at,
+                      {LESSON_STATUS_COLUMNS}
                FROM skills s
                LEFT JOIN mastery m ON m.skill_id = s.id
                LEFT JOIN atlas_folder_topics aft ON aft.skill_id = s.id
+               LEFT JOIN topic_lessons tl ON tl.skill_id = s.id
                ORDER BY s.sort_order"""
         )
         return [
@@ -1629,6 +1707,171 @@ class LearningStore:
             "profile_saved": profile_saved,
         }
 
+    # ------------------------------------------------------------------
+    # Guided lessons
+    # ------------------------------------------------------------------
+
+    def _lesson_row(self, skill_id: str) -> sqlite3.Row | None:
+        return self.connection.execute(
+            "SELECT * FROM topic_lessons WHERE skill_id = ?", (skill_id,)
+        ).fetchone()
+
+    @staticmethod
+    def _lesson_progress_dict(row: sqlite3.Row | None) -> dict[str, Any]:
+        if row is None:
+            return {
+                "status": "none",
+                "current_step": 0,
+                "step_count": 0,
+                "completed_at": None,
+                "xp_awarded": 0,
+            }
+        return {
+            "status": "complete" if row["completed_at"] else "in_progress",
+            "current_step": int(row["current_step"]),
+            "step_count": int(row["step_count"]),
+            "completed_at": row["completed_at"],
+            "xp_awarded": int(row["xp_awarded"]),
+        }
+
+    def lesson_progress(self, skill_id: str) -> dict[str, Any]:
+        """Return the public progress summary for one topic's guided lesson."""
+
+        return self._lesson_progress_dict(self._lesson_row(skill_id))
+
+    def lesson_for_topic(self, skill_id: str) -> dict[str, Any] | None:
+        """Return the stored lesson document and its progress, or None."""
+
+        row = self._lesson_row(skill_id)
+        if row is None:
+            return None
+        return {
+            "id": str(row["id"]),
+            "skill_id": str(row["skill_id"]),
+            "document": json.loads(str(row["document_json"])),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            **self._lesson_progress_dict(row),
+        }
+
+    def save_lesson(
+        self,
+        skill_id: str,
+        lesson_id: str,
+        document: Mapping[str, Any],
+        step_count: int,
+    ) -> dict[str, Any]:
+        """Store a validated lesson, replacing any earlier lesson for the topic.
+
+        A replacement keeps the original row id and its one-time XP award so a
+        learner cannot farm the completion bonus by starting over.
+        """
+
+        self.study_topic(skill_id)
+        if int(step_count) < 1:
+            raise ValueError("A lesson needs at least one step.")
+        timestamp = utc_now().isoformat()
+        with self.connection:
+            self.connection.execute(
+                """INSERT INTO topic_lessons(
+                       id, skill_id, document_json, step_count, current_step,
+                       completed_at, xp_awarded, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, 0, NULL, 0, ?, ?)
+                   ON CONFLICT(skill_id) DO UPDATE SET
+                       document_json = excluded.document_json,
+                       step_count = excluded.step_count,
+                       current_step = 0,
+                       completed_at = NULL,
+                       updated_at = excluded.updated_at""",
+                (
+                    lesson_id,
+                    skill_id,
+                    json.dumps(dict(document), ensure_ascii=False),
+                    int(step_count),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        record = self.lesson_for_topic(skill_id)
+        assert record is not None
+        return record
+
+    def advance_lesson(
+        self, skill_id: str, step_index: int, *, now: datetime | None = None
+    ) -> dict[str, Any]:
+        """Mark one step passed when it is the current step; otherwise no-op.
+
+        Completing the final step awards ``LESSON_XP`` once per topic.
+        """
+
+        now = now or utc_now()
+        timestamp = now.astimezone(timezone.utc).isoformat()
+        awarded_now = 0
+        with self.connection:
+            row = self._lesson_row(skill_id)
+            if row is None:
+                raise ValueError("Start the lesson before checking a step.")
+            current = int(row["current_step"])
+            step_count = int(row["step_count"])
+            if int(step_index) == current and current < step_count:
+                next_step = current + 1
+                completed_at = row["completed_at"]
+                xp_awarded = int(row["xp_awarded"])
+                if next_step >= step_count:
+                    completed_at = completed_at or timestamp
+                    if xp_awarded == 0:
+                        self.connection.execute(
+                            """INSERT INTO xp_events(
+                                   lesson_id, points, reason, created_at
+                               ) VALUES (?, ?, ?, ?)""",
+                            (
+                                row["id"],
+                                LESSON_XP,
+                                "completed a guided lesson",
+                                timestamp,
+                            ),
+                        )
+                        xp_awarded = LESSON_XP
+                        awarded_now = LESSON_XP
+                self.connection.execute(
+                    """UPDATE topic_lessons
+                          SET current_step = ?, completed_at = ?, xp_awarded = ?,
+                              updated_at = ?
+                        WHERE id = ?""",
+                    (next_step, completed_at, xp_awarded, timestamp, row["id"]),
+                )
+                row = self._lesson_row(skill_id)
+        return {**self._lesson_progress_dict(row), "xp_awarded_now": awarded_now}
+
+    def complete_lesson(self, skill_id: str) -> dict[str, Any]:
+        """Pass every remaining step of one lesson (used by tooling and tests)."""
+
+        progress = self.lesson_progress(skill_id)
+        if progress["status"] == "none":
+            raise ValueError("Start the lesson before completing it.")
+        awarded = 0
+        result: dict[str, Any] = {**progress, "xp_awarded_now": 0}
+        for step in range(progress["current_step"], progress["step_count"]):
+            result = self.advance_lesson(skill_id, step)
+            awarded += int(result["xp_awarded_now"])
+        return {**result, "xp_awarded_now": awarded}
+
+    def delete_lesson(self, skill_id: str) -> bool:
+        """Remove one topic's lesson and its completion XP."""
+
+        with self.connection:
+            self.connection.execute(
+                """DELETE FROM xp_events
+                    WHERE lesson_id IN (
+                        SELECT id FROM topic_lessons WHERE skill_id = ?
+                    )""",
+                (skill_id,),
+            )
+            cursor = self.connection.execute(
+                "DELETE FROM topic_lessons WHERE skill_id = ?", (skill_id,)
+            )
+        return cursor.rowcount > 0
+
     def generation_context(self, skill_id: str) -> dict[str, Any]:
         """Summarize one topic's evidence so practice generation can adapt."""
 
@@ -1693,6 +1936,9 @@ class LearningStore:
             "subject_profiles": rows(
                 "SELECT * FROM subject_profiles ORDER BY subject COLLATE NOCASE"
             ),
+            "topic_lessons": rows(
+                "SELECT * FROM topic_lessons ORDER BY created_at, rowid"
+            ),
             "attempts": rows("SELECT * FROM attempts ORDER BY id"),
             "misconceptions": rows("SELECT * FROM misconceptions ORDER BY id"),
             "xp_events": rows("SELECT * FROM xp_events ORDER BY id"),
@@ -1722,6 +1968,7 @@ class LearningStore:
         )
         with self.connection:
             self.connection.execute("DELETE FROM xp_events")
+            self.connection.execute("DELETE FROM topic_lessons")
             self.connection.execute("DELETE FROM attempts")
             self.connection.execute("DELETE FROM misconceptions")
             self.connection.execute("DELETE FROM mastery")
