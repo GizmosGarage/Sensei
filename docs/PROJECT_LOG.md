@@ -1,5 +1,15 @@
 # Project log
 
+## 2026-09-02 - Guided lessons
+
+- Added **Learn this topic** as a mode separate from practice: `sensei/lessons.py`
+  writes and independently reviews a step-by-step lesson from the same study brief,
+  grades each check-in against a private rubric, and answers follow-up questions.
+- Added schema version 11: `topic_lessons` stores the lesson and its progress, and
+  `xp_events` now links to either an attempt or a lesson. Finishing a lesson awards
+  25 XP once per topic and never changes mastery.
+- Added `/api/study/learn/start`, `/check`, and `/ask`; practice API version 7.
+
 ## 2026-09-02 - Study-guide ingestion
 
 - Made study-guide analysis the Dojo's entry point: `sensei/curriculum.py` turns a

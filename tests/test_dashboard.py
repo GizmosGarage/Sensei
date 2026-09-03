@@ -47,7 +47,7 @@ class DashboardTests(unittest.TestCase):
             self.assertNotIn("sample_answer", quest)
             self.assertNotIn("verification", quest)
         self.assertEqual("Local SQLite", state["runtime"]["storage"])
-        self.assertEqual(6, state["runtime"]["practice_api_version"])
+        self.assertEqual(7, state["runtime"]["practice_api_version"])
         self.assertEqual(40, state["catalog"]["quest_count"])
         self.assertEqual(20, state["catalog"]["courses"]["precalculus"])
         self.assertEqual(37, state["catalog"]["generated_skill_count"])
@@ -134,6 +134,11 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn("file its topics into named folders", html)
                 self.assertIn('class="restart-topic-button"', html)
                 self.assertIn('class="delete-topic-button"', html)
+                self.assertIn('class="learn-button"', html)
+                self.assertIn("Learn this topic", html)
+                self.assertIn('id="lesson-panel"', html)
+                self.assertIn('id="lesson-check-composer"', html)
+                self.assertIn("Ask Sensei about this step", html)
                 self.assertIn('id="folder-dialog"', html)
                 self.assertNotIn("Name the quest.", html)
                 self.assertIn("/assets/app.js", html)
@@ -162,6 +167,15 @@ class DashboardTests(unittest.TestCase):
                     javascript,
                 )
                 self.assertIn("function trainTopic(topic, statusTarget)", javascript)
+                self.assertIn("function learnTopic(topic, statusTarget)", javascript)
+                self.assertIn('postJson("/api/study/learn/start"', javascript)
+                self.assertIn('postJson("/api/study/learn/check"', javascript)
+                self.assertIn('postJson("/api/study/learn/ask"', javascript)
+                self.assertIn("!generatingQuestion && !generatingLesson", javascript)
+                self.assertIn(
+                    'function openArena(quest) {\n  byId("chat-history").replaceChildren();\n  closeLesson();',
+                    javascript,
+                )
                 self.assertIn(
                     'practiceButton.addEventListener("click", () => '
                     "trainTopic(topic, generationStatus));",
@@ -1181,7 +1195,7 @@ class ClassMaterialDashboardTests(_LiveDashboardCase):
             state["subject_profiles"],
         )
         self.assertEqual("ready", state["runtime"]["material_scan"])
-        self.assertEqual(6, state["runtime"]["practice_api_version"])
+        self.assertEqual(7, state["runtime"]["practice_api_version"])
 
         generated = self._post("/api/study/generate", {"skill_id": skill_id})
         quest = generated["quest"]
@@ -1313,6 +1327,201 @@ class ClassMaterialDashboardTests(_LiveDashboardCase):
 
 
 from sensei.curriculum import PlannedTopic, StudyPlan  # noqa: E402
+
+
+from sensei.lessons import LessonFactory  # noqa: E402
+
+
+LESSON_DRAFT = {
+    "title": "How to solve related-rates problems",
+    "overview": r"Every related-rates problem gives one rate and asks for \(\frac{dy}{dt}\).",
+    "steps": [
+        {
+            "title": "Name the changing quantities",
+            "explanation": r"Assign a variable to every quantity that changes with \(t\).",
+            "worked_example": r"Let \(x\) be the base distance and \(y\) the height.",
+            "check_in": "Which quantities change as the ladder slides?",
+            "check_in_answer": "The base distance and the height; partial credit for one.",
+            "key_takeaway": "Variables belong to changing quantities.",
+        },
+        {
+            "title": "Differentiate the relationship",
+            "explanation": r"Apply \(\frac{d}{dt}\) to both sides with the chain rule.",
+            "worked_example": "",
+            "check_in": r"Differentiate \(x^{2} + y^{2} = 100\).",
+            "check_in_answer": r"\(2xx' + 2yy' = 0\); partial credit for a missing 2.",
+            "key_takeaway": "Every variable picks up its own rate.",
+        },
+    ],
+    "closing_summary": "Name, relate, differentiate, substitute, answer with units.",
+}
+
+
+class GuidedLessonDashboardTests(_LiveDashboardCase):
+    def test_guided_lesson_round_trip_awards_xp_once(self) -> None:
+        approved = json.dumps({"approved": True, "reason": "Recomputed."})
+        provider = _ScriptedProvider(
+            [
+                json.dumps(LESSON_DRAFT),
+                approved,
+                json.dumps({"verdict": "incorrect", "feedback": "Think about what moves."}),
+                json.dumps({"verdict": "correct", "feedback": "Both quantities named."}),
+                json.dumps({"answer": r"Because \(x\) depends on \(t\)."}),
+                json.dumps({"verdict": "partial", "feedback": "Missing a factor of 2."}),
+                json.dumps({**LESSON_DRAFT, "title": "Related rates, second pass"}),
+                approved,
+            ]
+        )
+        self._start(lesson_factory=LessonFactory(provider))
+        skill_id = self._post(
+            "/api/study/focus",
+            {"subject": "Calculus I", "topic": "Related rates", "context": "Ladders and cones."},
+        )["study_topic"]["id"]
+        state = self._get("/api/dashboard")
+        self.assertEqual("ready", state["runtime"]["lessons"])
+        self.assertEqual(7, state["runtime"]["practice_api_version"])
+        topic = next(item for item in state["study_topics"] if item["id"] == skill_id)
+        self.assertEqual(("none", 0, 0), (
+            topic["lesson_status"], topic["lesson_step"], topic["lesson_step_count"]
+        ))
+
+        started = self._post("/api/study/learn/start", {"skill_id": skill_id, "restart": False})
+        self.assertTrue(started["generated"])
+        self.assertNotIn("check_in_answer", json.dumps(started))
+        self.assertEqual(
+            {"status": "in_progress", "current_step": 0, "step_count": 2, "completed_at": None, "xp_awarded": 0},
+            started["progress"],
+        )
+        self.assertEqual([0, 1], [step["index"] for step in started["lesson"]["steps"]])
+        self.assertEqual("Name the changing quantities", started["lesson"]["steps"][0]["title"])
+        lesson_id = started["lesson"]["id"]
+        self.assertIn("Subject: Calculus I", provider.requests[0][-1]["content"])
+        self.assertIn("Practice instructions: Ladders and cones.", provider.requests[0][-1]["content"])
+        self.assertIn("lesson architect", provider.requests[0][0]["content"])
+
+        wrong = self._post(
+            "/api/study/learn/check", {"skill_id": skill_id, "step_index": 0, "answer": "no idea"}
+        )
+        self.assertEqual("incorrect", wrong["verdict"])
+        self.assertEqual(0, wrong["progress"]["current_step"])
+        self.assertFalse(wrong["completed"])
+        self.assertEqual(0, wrong["xp_awarded"])
+        self.assertIsNone(wrong["profile"])
+        grader_request = provider.requests[2][-1]["content"]
+        self.assertIn("Expected answer and rubric: The base distance and the height", grader_request)
+        self.assertIn("Learner answer: no idea", grader_request)
+
+        code, body = self._post_error(
+            "/api/study/learn/check", {"skill_id": skill_id, "step_index": 1, "answer": "x"}
+        )
+        self.assertEqual(400, code)
+        self.assertIn("earlier steps", body["error"])
+
+        right = self._post(
+            "/api/study/learn/check",
+            {"skill_id": skill_id, "step_index": 0, "answer": "base and height"},
+        )
+        self.assertEqual("correct", right["verdict"])
+        self.assertEqual(1, right["progress"]["current_step"])
+        self.assertFalse(right["completed"])
+
+        asked = self._post(
+            "/api/study/learn/ask", {"skill_id": skill_id, "step_index": 0, "question": "Why?"}
+        )
+        self.assertEqual(r"Because \(x\) depends on \(t\).", asked["answer"])
+        self.assertIn("Learner question: Why?", provider.requests[4][-1]["content"])
+        self.assertNotIn("partial credit", provider.requests[4][-1]["content"])
+        code, body = self._post_error(
+            "/api/study/learn/ask", {"skill_id": skill_id, "step_index": 2, "question": "Why?"}
+        )
+        self.assertEqual(400, code)
+        self.assertIn("does not exist", body["error"])
+
+        final = self._post(
+            "/api/study/learn/check",
+            {"skill_id": skill_id, "step_index": 1, "answer": "2x x' + 2y y'"},
+        )
+        self.assertEqual("partial", final["verdict"])
+        self.assertTrue(final["completed"])
+        self.assertEqual(25, final["xp_awarded"])
+        self.assertEqual("complete", final["progress"]["status"])
+        self.assertEqual(2, final["progress"]["current_step"])
+        self.assertEqual(25, final["profile"]["total_xp"])
+        self.assertEqual(0, final["profile"]["attempts"])
+        self.assertEqual("Dojo Novice", final["profile"]["rank_name"])
+
+        state = self._get("/api/dashboard")
+        topic = next(item for item in state["study_topics"] if item["id"] == skill_id)
+        self.assertEqual(("complete", 2, 2), (
+            topic["lesson_status"], topic["lesson_step"], topic["lesson_step_count"]
+        ))
+        self.assertEqual(25, state["profile"]["total_xp"])
+        self.assertEqual(0, topic["attempts_count"])
+        self.assertNotIn("check_in_answer", json.dumps(state))
+
+        same = self._post("/api/study/learn/start", {"skill_id": skill_id, "restart": False})
+        self.assertFalse(same["generated"])
+        self.assertEqual(lesson_id, same["lesson"]["id"])
+        self.assertEqual("complete", same["progress"]["status"])
+        self.assertEqual(6, len(provider.requests))
+
+        again = self._post("/api/study/learn/start", {"skill_id": skill_id, "restart": True})
+        self.assertTrue(again["generated"])
+        self.assertEqual(lesson_id, again["lesson"]["id"])
+        self.assertEqual("Related rates, second pass", again["lesson"]["title"])
+        self.assertEqual(("in_progress", 0, 25), (
+            again["progress"]["status"], again["progress"]["current_step"], again["progress"]["xp_awarded"]
+        ))
+        self.assertEqual(25, self._get("/api/dashboard")["profile"]["total_xp"])
+
+        self._post("/api/study/restart", {"skill_id": skill_id})
+        state = self._get("/api/dashboard")
+        topic = next(item for item in state["study_topics"] if item["id"] == skill_id)
+        self.assertEqual("none", topic["lesson_status"])
+        self.assertEqual(0, state["profile"]["total_xp"])
+        code, body = self._post_error(
+            "/api/study/learn/check", {"skill_id": skill_id, "step_index": 0, "answer": "x"}
+        )
+        self.assertEqual(400, code)
+        self.assertIn("Start the lesson", body["error"])
+
+    def test_lesson_routes_validate_input_and_need_a_factory(self) -> None:
+        self._start()
+        skill_id = self._post(
+            "/api/study/focus",
+            {"subject": "Calculus I", "topic": "Limits", "context": ""},
+        )["study_topic"]["id"]
+        self.assertEqual("unavailable", self._get("/api/dashboard")["runtime"]["lessons"])
+        code, body = self._post_error(
+            "/api/study/learn/start", {"skill_id": skill_id, "restart": False}
+        )
+        self.assertEqual(500, code)
+        self.assertIn("could not build the lesson", body["error"])
+        code, _ = self._post_error(
+            "/api/study/learn/start", {"skill_id": skill_id, "restart": "yes"}
+        )
+        self.assertEqual(400, code)
+        code, body = self._post_error(
+            "/api/study/learn/start", {"skill_id": "missing-topic", "restart": False}
+        )
+        self.assertEqual(400, code)
+        code, _ = self._post_error(
+            "/api/study/learn/check", {"skill_id": skill_id, "step_index": "1", "answer": "x"}
+        )
+        self.assertEqual(400, code)
+        code, _ = self._post_error(
+            "/api/study/learn/check", {"skill_id": skill_id, "step_index": True, "answer": "x"}
+        )
+        self.assertEqual(400, code)
+        code, body = self._post_error(
+            "/api/study/learn/ask", {"skill_id": skill_id, "step_index": 0, "question": "  "}
+        )
+        self.assertEqual(400, code)
+        self.assertIn("Type a question", body["error"])
+        code, _ = self._post_error(
+            "/api/study/learn/check", {"skill_id": skill_id, "answer": "x"}
+        )
+        self.assertEqual(400, code)
 
 
 class _StubPlanScanner:

@@ -106,6 +106,37 @@ when its personal learning records are cleared.
 Curated and deterministic generators remain available for their supported skills.
 Symbolic math answers are checked with the restricted SymPy verifier.
 
+## Learn flow
+
+Learn is separate from practice: its own panel, routes, and saved state. Opening a
+lesson closes the practice chat and vice versa.
+
+1. Choose **Learn this topic** on a card. A card with a saved lesson shows **Resume
+   lesson · step k of n** or **Review lesson** instead.
+2. Sensei gathers the same study brief practice uses: practice brief, class material,
+   course profile, and learner signal. Known weak spots get their own step.
+3. The hosted LLM writes one lesson: an overview, four to seven steps (explanation,
+   optional worked example, key takeaway, and a check-in question with a private
+   expected answer and rubric), and a closing summary.
+4. A separate LLM pass recomputes every worked example and check-in answer and rejects
+   lessons that drift from the subject, reorder the method, or copy an exemplar.
+5. The validated lesson is stored in `topic_lessons`. The browser receives the lesson
+   without the check-in answers.
+6. Steps appear one at a time. Answering the check-in sends the answer to a short
+   grading call that compares it with the private rubric: **correct** or **partial**
+   unlocks the next step; **incorrect** explains the gap and lets you try again.
+7. **Ask Sensei about this step** sends a free-text question with the current step as
+   context and shows the explanation in the thread.
+8. Passing the last step marks the lesson complete and awards 25 XP once per topic.
+   Mastery does not change. **Start lesson over** writes a new lesson and resets the
+   step without awarding the bonus again.
+9. **Restart** or **Delete** on the topic removes the lesson and its XP.
+
+Routes: `POST /api/study/learn/start` (`skill_id`, `restart`), `POST
+/api/study/learn/check` (`skill_id`, `step_index`, `answer`), and `POST
+/api/study/learn/ask` (`skill_id`, `step_index`, `question`). All three require the
+CSRF header like every other write.
+
 ## Security and privacy
 
 - The HTTP server binds only to `127.0.0.1`.

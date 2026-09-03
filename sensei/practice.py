@@ -1113,9 +1113,8 @@ ANSWER_CONTRACT_RULES = (
     "is numeric. "
 )
 
-NOTATION_RULES = (
-    "In every learner-visible field (prompt, part prompts, options, help_steps, "
-    "and solution), typeset mathematical notation with valid KaTeX-compatible "
+NOTATION_CORE_RULES = (
+    "typeset mathematical notation with valid KaTeX-compatible "
     "LaTeX: wrap inline notation in \\(...\\) and a standalone equation in "
     "\\[...\\]. Use real constructs such as \\frac{a}{b}, x^{2}, \\sqrt{x}, "
     "\\lim, \\frac{d}{dx}, and \\int instead of spelling formulas in ASCII. For "
@@ -1128,7 +1127,14 @@ NOTATION_RULES = (
     "display delimiters, for example \\[\\begin{array}{c|cc} x & 1.9 & 2.1 \\\\ "
     "\\hline f(x) & 4.9 & 5.1 \\end{array}\\]. Separate every table row with "
     "\\\\ before using \\hline; never emit array or tabular source as prose. Keep "
-    "prose outside the notation delimiters. Within options, use inline \\(...\\) "
+    "prose outside the notation delimiters. "
+)
+
+NOTATION_RULES = (
+    "In every learner-visible field (prompt, part prompts, options, help_steps, "
+    "and solution), "
+    + NOTATION_CORE_RULES
+    + "Within options, use inline \\(...\\) "
     "notation only—never standalone \\[...\\] notation—and keep each option as one "
     "compact paragraph. Do not prefix option text with A, B, C, or D because the "
     "interface supplies those labels. "

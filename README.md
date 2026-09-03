@@ -92,11 +92,17 @@ topics, each with a practice brief and example problems taken from the document.
 Creating the plan builds the study set in the Atlas. **Train this topic** on any card
 starts a practice chat; the configured LLM drafts and reviews one problem at a time,
 while protected answer keys stay in the dashboard process until the attempt is
-checked and recorded. Every Atlas
+checked and recorded. **Learn this topic** opens a guided lesson instead: Sensei
+writes and independently reviews a step-by-step lesson that teaches how to tackle the
+topic in the class's own method and notation, reveals one step at a time, and asks a
+short check-in question before the next step unlocks. You can ask Sensei follow-up
+questions about any revealed step. Lessons are saved, so a card offers **Resume
+lesson** or **Review lesson** later. Finishing a lesson earns a one-time 25 XP bonus
+and never changes mastery; mastery only moves when you train. Every Atlas
 topic also has two confirmed data controls: **Restart** clears that topic's attempts,
-mastery, misconceptions, review progress, and earned XP while keeping the topic in the
-Atlas; **Delete** removes the topic and its topic-specific learning data from the active
-database.
+mastery, misconceptions, review progress, lesson, and earned XP while keeping the
+topic in the Atlas; **Delete** removes the topic and its topic-specific learning data
+from the active database.
 
 ## Class-accurate practice
 

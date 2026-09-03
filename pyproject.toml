@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sensei-calculus-tutor"
-version = "0.10.0"
+version = "0.11.0"
 description = "An API-backed tutor with learner-owned local SQLite memory"
 readme = "README.md"
 requires-python = ">=3.11"
