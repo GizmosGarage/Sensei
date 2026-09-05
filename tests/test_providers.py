@@ -9,7 +9,6 @@ from sensei.providers import (
     ResponsesAPIProvider,
     api_settings_from_environment,
     parse_response,
-    parse_sse_data,
 )
 
 
@@ -43,28 +42,7 @@ class ProviderTests(unittest.TestCase):
                 }
             )
 
-    def test_parse_sse_data_ignores_done_marker(self) -> None:
-        self.assertIsNone(parse_sse_data(b"data: [DONE]\n"))
-        event = {"type": "response.output_text.delta", "delta": "hello"}
-        parsed = parse_sse_data(f"data: {json.dumps(event)}\n".encode())
-        self.assertEqual(event, parsed)
 
-    def test_stream_assembles_tokens_and_reports_usage(self) -> None:
-        events = [
-            b'data: {"type":"response.output_text.delta","delta":"Chain "}\n',
-            b'data: {"type":"response.output_text.delta","delta":"rule"}\n',
-            (
-                b'data: {"type":"response.completed","response":'
-                b'{"status":"completed","usage":{"input_tokens":12,'
-                b'"output_tokens":2}}}\n'
-            ),
-            b"data: [DONE]\n",
-        ]
-        tokens: list[str] = []
-        result = ResponsesAPIProvider._read_stream(events, tokens.append)
-        self.assertEqual("Chain rule", result.text)
-        self.assertEqual(["Chain ", "rule"], tokens)
-        self.assertEqual(12, result.prompt_tokens)
 
     def test_payload_uses_responses_api_and_disables_remote_storage(self) -> None:
         provider = ResponsesAPIProvider(
@@ -74,7 +52,7 @@ class ProviderTests(unittest.TestCase):
             json_mode=True,
         )
         payload = json.loads(
-            provider._payload([{"role": "user", "content": "new problem"}], False)
+            provider._payload([{"role": "user", "content": "new problem"}])
         )
         self.assertEqual("https://example.test/v1/responses", provider.endpoint)
         self.assertEqual("test-model", payload["model"])

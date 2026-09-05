@@ -1,4 +1,4 @@
-from sensei.cli import main
+from sensei.dashboard import main
 
 
 if __name__ == "__main__":

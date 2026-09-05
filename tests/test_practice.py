@@ -113,7 +113,7 @@ class AdaptivePracticeTests(unittest.TestCase):
                 "answer_type": "expression",
                 "answer": "100",
                 "options": [],
-                "hint": "There are 100 centimeters in one meter.",
+                "help_steps": ["There are 100 centimeters in one meter.", "Apply that relationship to the given values."],
                 "solution": "The keyed answer is 100.",
                 "graph": None,
             }
@@ -125,7 +125,7 @@ class AdaptivePracticeTests(unittest.TestCase):
                 "answer_type": "expression",
                 "answer": "1",
                 "options": [],
-                "hint": "There are 100 centimeters in one meter.",
+                "help_steps": ["There are 100 centimeters in one meter.", "Apply that relationship to the given values."],
                 "solution": "Divide 100 by 100 to get 1.",
                 "graph": None,
             }
@@ -162,7 +162,7 @@ class AdaptivePracticeTests(unittest.TestCase):
                 "answer_type": "multiple_choice",
                 "answer": "A",
                 "options": ["Lighter ion", "Heavier ion", "Both", "Neither"],
-                "hint": "Compare the masses.",
+                "help_steps": ["Compare the masses.", "Apply that relationship to the given values."],
                 "solution": "The lighter ion bends more.",
                 "graph": None,
             }
@@ -174,7 +174,7 @@ class AdaptivePracticeTests(unittest.TestCase):
                 "answer_type": "multiple_choice",
                 "answer": "B",
                 "options": ["40/1", "20/2", "30/1", "60/2"],
-                "hint": "Compare each mass divided by charge magnitude.",
+                "help_steps": ["Compare each mass divided by charge magnitude.", "Apply that relationship to the given values."],
                 "solution": "The second ratio is the smallest.",
                 "graph": None,
             }
@@ -228,7 +228,7 @@ class AdaptivePracticeTests(unittest.TestCase):
                 "answer_type": "expression",
                 "answer": "3",
                 "options": [],
-                "hint": "Follow the curve from both sides.",
+                "help_steps": ["Follow the curve from both sides.", "Apply that relationship to the given values."],
                 "solution": "Both sides approach 3, so the limit is 3.",
                 "graph": {
                     "x_min": -2,
@@ -252,7 +252,7 @@ class AdaptivePracticeTests(unittest.TestCase):
                 "answer_type": "multiple_choice",
                 "answer": "D",
                 "options": ["-1", "4", "5", "The limit does not exist"],
-                "hint": "A two-sided limit needs matching one-sided behavior.",
+                "help_steps": ["A two-sided limit needs matching one-sided behavior.", "Apply that relationship to the given values."],
                 "solution": "The sides approach different values, so the limit DNE.",
                 "graph": {
                     "x_min": 0,
@@ -316,7 +316,7 @@ class AdaptivePracticeTests(unittest.TestCase):
                         "C. Solvent",
                         "D) Excess reagent",
                     ],
-                    "hint": "Its name describes the cap it places on product.",
+                    "help_steps": ["Its name describes the cap it places on product.", "Apply that relationship to the given values."],
                     "solution": "The limiting reagent is exhausted first.",
                     "graph": None,
                 }
@@ -341,7 +341,7 @@ class AdaptivePracticeTests(unittest.TestCase):
             "answer_type": "multiple_choice",
             "answer": "A",
             "options": ["x" * 501, "Second", "Third", "Fourth"],
-            "hint": "Compare the choices.",
+            "help_steps": ["Compare the choices.", "Apply that relationship to the given values."],
             "solution": "The first choice is keyed.",
             "graph": None,
         }
@@ -389,7 +389,7 @@ class AdaptivePracticeTests(unittest.TestCase):
             "answer_type": "expression",
             "answer": "4",
             "options": [],
-            "hint": "Substitute the value.",
+            "help_steps": ["Substitute the value.", "Apply that relationship to the given values."],
             "solution": r"The value is \(4\).",
             "graph": None,
         }
@@ -432,7 +432,7 @@ class AdaptivePracticeTests(unittest.TestCase):
             "answer_type": "expression",
             "answer": "1",
             "options": [],
-            "hint": "Read the value.",
+            "help_steps": ["Read the value.", "Apply that relationship to the given values."],
             "solution": r"The value is \(1\).",
             "graph": None,
         }
@@ -447,7 +447,7 @@ class AdaptivePracticeTests(unittest.TestCase):
             "answer_type": "expression",
             "answer": "DNE",
             "options": [],
-            "hint": "Compare both sides.",
+            "help_steps": ["Compare both sides.", "Apply that relationship to the given values."],
             "solution": "The sides differ, so the limit does not exist.",
             "graph": None,
         }
@@ -470,7 +470,7 @@ class AdaptivePracticeTests(unittest.TestCase):
             "answer_type": "expression",
             "answer": "not-a-number",
             "options": [],
-            "hint": "Recompute it.",
+            "help_steps": ["Recompute it.", "Apply that relationship to the given values."],
             "solution": "The draft used an invalid answer key.",
             "graph": None,
         }
@@ -488,7 +488,7 @@ class AdaptivePracticeTests(unittest.TestCase):
             "answer_type": "expression",
             "answer": "2",
             "options": [],
-            "hint": "Add the two values.",
+            "help_steps": ["Add the two values.", "Apply that relationship to the given values."],
             "solution": "Reason carefully. " * 75,
             "graph": None,
         }
@@ -513,7 +513,7 @@ class AdaptivePracticeTests(unittest.TestCase):
             "answer_type": "expression",
             "answer": "9/2",
             "options": [],
-            "hint": "Use a trigonometric identity.",
+            "help_steps": ["Use a trigonometric identity.", "Apply that relationship to the given values."],
             "solution": "Rewrite 1-cos(3x), use the sine limit, and obtain 9/2.",
             "graph": None,
         }
@@ -534,7 +534,7 @@ class AdaptivePracticeTests(unittest.TestCase):
             "answer_type": "expression",
             "answer": "2",
             "options": [],
-            "hint": "Read the curve.",
+            "help_steps": ["Read the curve.", "Apply that relationship to the given values."],
             "solution": "The curve approaches 2.",
             "graph": None,
         }
@@ -551,7 +551,7 @@ class AdaptivePracticeTests(unittest.TestCase):
             "answer_type": "expression",
             "answer": "5",
             "options": [],
-            "hint": "Read the graph near x = 2.",
+            "help_steps": ["Read the graph near x = 2.", "Apply that relationship to the given values."],
             "solution": "The curve approaches 5.",
             "graph": {
                 "x_min": -2,
@@ -614,7 +614,7 @@ class AdaptivePracticeTests(unittest.TestCase):
             "answer_type": "expression",
             "answer": "3",
             "options": [],
-            "hint": "Follow the curve toward x = 1.",
+            "help_steps": ["Follow the curve toward x = 1.", "Apply that relationship to the given values."],
             "solution": "Both sides approach 3.",
             "graph": {
                 "x_min": -2,
@@ -653,7 +653,7 @@ class AdaptivePracticeTests(unittest.TestCase):
                 "answer_type": "expression",
                 "answer": "2",
                 "options": [],
-                "hint": "Divide.",
+                "help_steps": ["Divide.", "Apply that relationship to the given values."],
                 "solution": "Four divided by two is two.",
                 "graph": None,
             }

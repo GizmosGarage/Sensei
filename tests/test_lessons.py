@@ -2,7 +2,6 @@ import json
 import unittest
 
 from sensei.lessons import (
-    LESSON_XP,
     MAX_EXPLANATION_CHARACTERS,
     Lesson,
     LessonFactory,
@@ -269,9 +268,6 @@ class LessonFactoryTests(unittest.TestCase):
         self.assertIn("Learner question: Why does x get a rate?", request)
         self.assertNotIn("check_in_answer", request)
         self.assertNotIn("missing factor of 2", request)
-
-    def test_lesson_xp_is_a_small_fixed_bonus(self) -> None:
-        self.assertEqual(25, LESSON_XP)
 
 
 if __name__ == "__main__":

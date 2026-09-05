@@ -16,16 +16,15 @@ import webbrowser
 from collections import deque
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass
-from datetime import timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Collection, Mapping
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 from sensei.answers import AnswerSpec, answer_key_display, answer_key_latex, submitted_latex
 from sensei.curriculum import StudyPlanScanner
+from sensei.study import guide_progress
 from sensei.errorlog import DEFAULT_ERROR_LOG_PATH, ErrorRecorder, error_reference
-from sensei.generation import GENERATED_SKILL_IDS, GeneratedQuestFactory
 from sensei.learning import (
     LearningEvent,
     LearningEventError,
@@ -39,7 +38,7 @@ from sensei.lessons import (
     Lesson,
     LessonFactory,
 )
-from sensei.materials import MAX_PDF_BYTES, MaterialScanError, MaterialScanner
+from sensei.materials import MAX_PDF_BYTES
 from sensei.practice import (
     AdaptiveQuest,
     AdaptiveQuestFactory,
@@ -54,29 +53,18 @@ from sensei.providers import (
     ResponsesAPIProvider,
     api_settings_from_environment,
 )
-from sensei.quests import DEFAULT_QUESTS_PATH, QuestDeck, QuestTemplate
 from sensei.storage import (
     DEFAULT_DATABASE_PATH,
-    DEFAULT_SKILLS_PATH,
     LearningStore,
-    help_reward_preview,
     utc_now,
 )
-from sensei.verification import (
-    CalculusVerifier,
-    MathInputError,
-    VerificationResult,
-    VerificationStatus,
-    math_expression_latex,
-)
+from sensei.verification import MathInputError, VerificationResult, VerificationStatus, math_expression_latex
 
 
 LOOPBACK_HOST = "127.0.0.1"
 DEFAULT_DASHBOARD_PORT = 8765
 MAX_REQUEST_BYTES = 4_096
-MAX_MATERIALS_REQUEST_BYTES = 64 * 1024
 MAX_UPLOAD_REQUEST_BYTES = (MAX_PDF_BYTES * 4 // 3) + 16_384
-MAX_MATERIALS_PER_REQUEST = 40
 MAX_PLAN_REQUEST_BYTES = 256 * 1024
 MAX_PLAN_TOPICS_PER_REQUEST = 40
 PLAN_SCANNER_MAX_OUTPUT_TOKENS = 16_384
@@ -84,7 +72,7 @@ ATTEMPT_TOKEN_LIFETIME_SECONDS = 15 * 60
 CHALLENGE_TOKEN_LIFETIME_SECONDS = 60 * 60
 ADAPTIVE_PROMPT_HISTORY = 8
 ADAPTIVE_DISTINCT_ATTEMPTS = 3
-PRACTICE_API_VERSION = 7
+PRACTICE_API_VERSION = 8
 PRACTICE_MAX_OUTPUT_TOKENS = 8_192
 LESSON_MAX_OUTPUT_TOKENS = 12_000
 LESSON_COACH_MAX_OUTPUT_TOKENS = 1_500
@@ -94,7 +82,6 @@ LESSON_PROGRESS_FIELDS = (
     "current_step",
     "step_count",
     "completed_at",
-    "xp_awarded",
 )
 LESSON_FAILURE_MESSAGES = {
     "/api/study/learn/start": (
@@ -110,12 +97,11 @@ LESSON_FAILURE_MESSAGES = {
         "Sensei could not answer that question. Please try again.",
     ),
 }
-SCANNER_MAX_OUTPUT_TOKENS = 6_000
 CLASSIFIER_MAX_OUTPUT_TOKENS = 400
 SCANNER_MODEL_ENVIRONMENT = "SENSEI_SCANNER_MODEL"
 WEB_DIRECTORY = Path(__file__).resolve().parent / "web"
 KATEX_DIRECTORY = WEB_DIRECTORY / "vendor" / "katex"
-PracticeQuest = QuestTemplate | AdaptiveQuest
+PracticeQuest = AdaptiveQuest
 ASSETS = {
     "/": (WEB_DIRECTORY / "index.html", "text/html; charset=utf-8"),
     "/assets/app.js": (
@@ -140,17 +126,6 @@ for katex_asset in KATEX_DIRECTORY.rglob("*"):
         katex_asset,
         content_type,
     )
-
-def rank_name(level: int) -> str:
-    if level >= 10:
-        return "Grand Sensei"
-    if level >= 7:
-        return "Realm Scholar"
-    if level >= 4:
-        return "Dojo Adept"
-    if level >= 2:
-        return "Quest Initiate"
-    return "Dojo Novice"
 
 
 def _answer_latex(value: str | None) -> str | None:
@@ -189,7 +164,7 @@ def part_documents(
 ) -> list[dict[str, object]]:
     """Serialize per-part results for a multi-part adaptive quest."""
 
-    if not isinstance(quest, AdaptiveQuest) or not check.parts:
+    if not check.parts:
         return []
     specs = {part.label: part.spec for part in quest.parts}
     return [
@@ -221,6 +196,7 @@ class PendingAttemptStore:
     def __init__(self) -> None:
         self._attempts: dict[str, PendingAttempt] = {}
         self._lock = threading.Lock()
+
 
     def issue(
         self,
@@ -268,17 +244,6 @@ class PendingAttemptStore:
                     "This checked attempt is missing, expired, or already recorded."
                 ) from error
 
-    def discard_skill(self, skill_id: str) -> None:
-        """Forget every checked, unrecorded attempt for one topic."""
-
-        with self._lock:
-            tokens = [
-                token
-                for token, attempt in self._attempts.items()
-                if attempt.quest.skill_id == skill_id
-            ]
-            for token in tokens:
-                del self._attempts[token]
 
     def _prune(self, now: float) -> None:
         expired = [
@@ -291,44 +256,15 @@ class PendingAttemptStore:
 
 
 def quest_help_steps(quest: PracticeQuest) -> tuple[str, ...]:
-    """Build the private, ordered help sequence for one generated problem."""
-
-    if isinstance(quest, AdaptiveQuest):
-        steps = quest.help_steps
-        if quest.is_multi_part:
-            final = "Final answers: " + " ".join(
-                f"({part.label}) {answer_key_display(part.spec)}"
-                for part in quest.parts
-            )
-        else:
-            spec = quest.spec
-            assert spec is not None
-            final = f"Final answer: {answer_key_display(spec)}"
-        return (*steps, final)
-
-    first_moves = {
-        "derivative": (
-            "Identify the outermost operation, then apply its derivative rule before "
-            "simplifying."
-        ),
-        "limit": (
-            "Try direct substitution first. If it is indeterminate, simplify the "
-            "expression before evaluating the limit again."
-        ),
-        "antiderivative": (
-            "Choose the matching antiderivative rule term by term, then include the "
-            "constant of integration."
-        ),
-        "equivalent": (
-            "Rewrite the expression into a common form and simplify one operation at "
-            "a time."
-        ),
-    }
-    first = first_moves.get(
-        quest.kind.value,
-        "Identify the rule that matches the requested operation and apply it first.",
-    )
-    return first, f"Final answer: \\({math_expression_latex(quest.sample_answer)}\\)"
+    """Return validated help followed by the protected answer."""
+    if quest.is_multi_part:
+        final = "Final answers: " + " ".join(
+            f"({part.label}) {answer_key_display(part.spec)}" for part in quest.parts
+        )
+    else:
+        assert quest.spec is not None
+        final = f"Final answer: {answer_key_display(quest.spec)}"
+    return (*quest.help_steps, final)
 
 
 @dataclass(frozen=True)
@@ -352,10 +288,8 @@ class ChallengeStore:
 
     def __init__(
         self,
-        factory: GeneratedQuestFactory | None = None,
         adaptive_factory: AdaptiveQuestFactory | None = None,
     ) -> None:
-        self.factory = factory or GeneratedQuestFactory()
         self.adaptive_factory = adaptive_factory
         self._challenges: dict[str, PendingChallenge] = {}
         self._last_prompts: dict[str, str] = {}
@@ -364,22 +298,6 @@ class ChallengeStore:
         self._anchor_cursor: dict[str, int] = {}
         self._lock = threading.Lock()
 
-    def issue(self, skill_id: str) -> tuple[str, QuestTemplate]:
-        now = time.monotonic()
-        with self._lock:
-            self._prune(now)
-            last_prompt = self._last_prompts.get(skill_id)
-            quest = self.factory.generate(skill_id)
-            for _ in range(19):
-                if quest.prompt != last_prompt:
-                    break
-                quest = self.factory.generate(skill_id)
-            if quest.prompt == last_prompt:
-                raise RuntimeError("A distinct question could not be generated.")
-            token = secrets.token_urlsafe(32)
-            self._challenges[token] = PendingChallenge(quest, now)
-            self._last_prompts[skill_id] = quest.prompt
-            return token, quest
 
     def issue_adaptive(
         self,
@@ -437,7 +355,7 @@ class ChallengeStore:
                 self._anchor_cursor[skill_id] = anchor_index + 1
                 return token, quest
         raise RuntimeError(
-            "Sensei could not produce a distinct new encounter for this topic."
+            "Sensei could not produce a distinct new question for this topic."
         )
 
     def get(self, token: str) -> PracticeQuest:
@@ -490,21 +408,6 @@ class ChallengeStore:
             )
             return challenge.quest, challenge.help_used, solution_revealed
 
-    def discard_skill(self, skill_id: str) -> None:
-        """Forget generated questions and duplicate history for one topic."""
-
-        with self._lock:
-            tokens = [
-                token
-                for token, challenge in self._challenges.items()
-                if challenge.quest.skill_id == skill_id
-            ]
-            for token in tokens:
-                del self._challenges[token]
-            self._last_prompts.pop(skill_id, None)
-            self._adaptive_prompts.pop(skill_id, None)
-            self._adaptive_fingerprints.pop(skill_id, None)
-            self._anchor_cursor.pop(skill_id, None)
 
     def _prune(self, now: float) -> None:
         expired = [
@@ -522,129 +425,33 @@ class DashboardService:
     def __init__(
         self,
         database_path: Path = DEFAULT_DATABASE_PATH,
-        *,
-        skills_path: Path = DEFAULT_SKILLS_PATH,
-        quests_path: Path = DEFAULT_QUESTS_PATH,
     ) -> None:
         self.database_path = database_path.resolve()
-        self.skills_path = skills_path.resolve()
-        self.quests_path = quests_path.resolve()
 
     def state(self) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            deck = QuestDeck.load(
-                self.quests_path,
-                skills_path=self.skills_path,
-            )
-            profile = store.profile()
-            profile["rank_name"] = rank_name(int(profile["level"]))
-            skills = store.skill_progress()
-            study_topics = store.study_topics()
+        with LearningStore(self.database_path) as store:
+            topics = store.study_topics()
+            folders = store.topic_folders()
+            contexts = {topic["id"]: store.generation_context(topic["id"]) for topic in topics}
+            guides = [
+                {**folder, **guide_progress(
+                    [topic for topic in topics if topic.get("folder_id") == folder["id"]], contexts
+                )} for folder in folders
+            ]
             return {
-                "generated_at": utc_now().astimezone(timezone.utc).isoformat(),
-                "profile": profile,
-                "quests": deck.public_quests(),
-                "skills": skills,
-                "study_topics": study_topics,
-                "topic_folders": store.topic_folders(),
-                "subject_profiles": store.subject_profiles(),
+                "generated_at": utc_now().isoformat(),
+                "study_topics": topics,
+                "study_guides": guides,
                 "recent_attempts": store.recent_attempts(limit=50),
-                "catalog": {
-                    "quest_count": len(deck.quests),
-                    "quest_skill_count": len(deck.eligible_skill_ids),
-                    "generated_skill_count": len(GENERATED_SKILL_IDS),
-                    "generated_skill_ids": list(GENERATED_SKILL_IDS),
-                    "courses": {
-                        course: sum(
-                            skill["course"] == course for skill in skills
-                        )
-                        for course in ("precalculus", "calculus")
-                    },
-                },
-                "runtime": {
-                    "host": LOOPBACK_HOST,
-                    "storage": "Local SQLite",
-                    "model_access": "Hosted Responses API",
-                    "practice_api_version": PRACTICE_API_VERSION,
-                },
+                "runtime": {"host": LOOPBACK_HOST, "storage": "Local SQLite",
+                            "practice_api_version": PRACTICE_API_VERSION},
             }
 
-    def create_study_topic(
-        self,
-        *,
-        subject: str,
-        topic: str,
-        context: str,
-    ) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            return store.create_study_topic(
-                subject=subject,
-                topic=topic,
-                context=context,
-            )
 
     def study_topic(self, skill_id: str) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
+        with LearningStore(self.database_path) as store:
             return store.study_topic(skill_id)
 
-    def delete_study_topic(self, skill_id: str) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            return store.delete_study_topic(skill_id)
-
-    def restart_study_topic(self, skill_id: str) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            return store.restart_study_topic(skill_id)
-
-    def create_topic_folder(
-        self, *, subject: str, name: str, skill_ids: Collection[str]
-    ) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            return store.create_topic_folder(
-                subject=subject, name=name, skill_ids=skill_ids
-            )
-
-    def update_topic_folder(
-        self, folder_id: str, *, name: str, skill_ids: Collection[str]
-    ) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            return store.update_topic_folder(
-                folder_id, name=name, skill_ids=skill_ids
-            )
-
-    def delete_topic_folder(self, folder_id: str) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            return store.delete_topic_folder(folder_id)
-
-    def recent_topic_prompts(self, skill_id: str) -> tuple[str, ...]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            return store.recent_problems(skill_id, limit=ADAPTIVE_PROMPT_HISTORY)
-
-    def topic_materials(self, skill_id: str) -> list[dict[str, Any]]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            store.study_topic(skill_id)
-            return store.topic_materials(skill_id)
-
-    def add_topic_materials(
-        self, skill_id: str, materials: Collection[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            return store.add_topic_materials(skill_id, materials)
-
-    def delete_topic_material(self, material_id: str) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            return store.delete_topic_material(material_id)
-
-    def subject_profile(self, subject: str) -> str:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            return store.subject_profile(subject)
-
-    def set_subject_profile(self, subject: str, profile: str) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            return store.set_subject_profile(subject, profile)
-
-    def generation_context(self, skill_id: str) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            return store.generation_context(skill_id)
 
     def create_study_plan(
         self,
@@ -654,7 +461,7 @@ class DashboardService:
         course_profile: str,
         topics: Collection[dict[str, Any]],
     ) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
+        with LearningStore(self.database_path) as store:
             return store.create_study_plan(
                 subject=subject,
                 set_name=set_name,
@@ -665,7 +472,7 @@ class DashboardService:
     def generation_brief(self, skill_id: str) -> dict[str, Any]:
         """Collect everything one adaptive generation needs in one store session."""
 
-        with LearningStore(self.database_path, self.skills_path) as store:
+        with LearningStore(self.database_path) as store:
             skill = store.study_topic(skill_id)
             return {
                 "skill": skill,
@@ -680,7 +487,7 @@ class DashboardService:
     def lesson_brief(self, skill_id: str) -> dict[str, Any]:
         """Collect everything one guided lesson needs in one store session."""
 
-        with LearningStore(self.database_path, self.skills_path) as store:
+        with LearningStore(self.database_path) as store:
             skill = store.study_topic(skill_id)
             return {
                 "skill": skill,
@@ -690,24 +497,19 @@ class DashboardService:
             }
 
     def lesson_for_topic(self, skill_id: str) -> dict[str, Any] | None:
-        with LearningStore(self.database_path, self.skills_path) as store:
+        with LearningStore(self.database_path) as store:
             return store.lesson_for_topic(skill_id)
 
     def save_lesson(self, lesson: Lesson) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
+        with LearningStore(self.database_path) as store:
             return store.save_lesson(
                 lesson.skill_id, lesson.id, lesson.private_dict(), lesson.step_count
             )
 
     def advance_lesson(self, skill_id: str, step_index: int) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
+        with LearningStore(self.database_path) as store:
             return store.advance_lesson(skill_id, step_index)
 
-    def profile(self) -> dict[str, Any]:
-        with LearningStore(self.database_path, self.skills_path) as store:
-            profile = store.profile()
-            profile["rank_name"] = rank_name(int(profile["level"]))
-            return profile
 
     @staticmethod
     def public_lesson(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -724,46 +526,14 @@ class DashboardService:
     def lesson_progress_document(record: Mapping[str, Any]) -> dict[str, Any]:
         return {field: record[field] for field in LESSON_PROGRESS_FIELDS}
 
-    def public_generated_quest(self, quest: QuestTemplate) -> dict[str, str]:
-        deck = QuestDeck.load(
-            self.quests_path,
-            skills_path=self.skills_path,
-        )
-        try:
-            return quest.public_dict(
-                skill_name=deck.skill_names[quest.skill_id],
-                course=deck.skill_courses[quest.skill_id],
-            )
-        except KeyError as error:
-            raise ValueError(
-                f"Generated question has unknown skill {quest.skill_id!r}."
-            ) from error
 
     @staticmethod
     def public_adaptive_quest(quest: AdaptiveQuest) -> dict[str, Any]:
         return quest.public_dict()
 
-    def check_quest(
-        self,
-        quest: PracticeQuest,
-        answer: str,
-    ) -> VerificationResult:
-        return self.evaluate_quest(quest, answer).result
 
     def evaluate_quest(self, quest: PracticeQuest, answer: object) -> AttemptCheck:
-        """Check a single answer or a mapping of multi-part answers."""
-
-        if isinstance(quest, AdaptiveQuest):
-            return quest.evaluate(answer)
-        if not isinstance(answer, str):
-            raise ValueError("Enter one answer for this question.")
-        result = quest.check(answer, CalculusVerifier())
-        outcome = (
-            Outcome.CORRECT
-            if result.status is VerificationStatus.VERIFIED_CORRECT
-            else Outcome.INCORRECT
-        )
-        return AttemptCheck(result, outcome)
+        return quest.evaluate(answer)
 
     def record_attempt(
         self,
@@ -771,26 +541,22 @@ class DashboardService:
     ) -> dict[str, Any]:
         result = attempt.result
         if result.status is VerificationStatus.INCONCLUSIVE:
-            raise ValueError("An inconclusive check cannot be recorded as a quest result.")
+            raise ValueError("An inconclusive check cannot be recorded as a practice result.")
         outcome = attempt.outcome
         default_evidence = {
             Outcome.CORRECT: (
-                "The local verifier confirmed the submitted dashboard quest answer."
+                "The local verifier confirmed the submitted practice answer."
             ),
             Outcome.PARTIAL: (
                 "The local verifier confirmed some parts of the submitted dashboard "
                 "quest answer."
             ),
             Outcome.INCORRECT: (
-                "The local verifier rejected the submitted dashboard quest answer."
+                "The local verifier rejected the submitted practice answer."
             ),
         }[outcome]
         evidence = attempt.misconception_evidence or default_evidence
-        problem = (
-            attempt.quest.full_text
-            if isinstance(attempt.quest, AdaptiveQuest)
-            else attempt.quest.prompt
-        )
+        problem = attempt.quest.full_text
         event = LearningEvent(
             skill_id=attempt.quest.skill_id,
             outcome=outcome,
@@ -812,11 +578,10 @@ class DashboardService:
             verification_detail=result.detail,
             quest_id=attempt.quest.id,
         )
-        with LearningStore(self.database_path, self.skills_path) as store:
+        with LearningStore(self.database_path) as store:
             update = store.record_event(event)
             return {
                 "progress": asdict(update),
-                "profile": store.profile(),
             }
 
 
@@ -827,10 +592,8 @@ class SenseiDashboardServer(ThreadingHTTPServer):
         self,
         server_address: tuple[str, int],
         service: DashboardService,
-        quest_factory: GeneratedQuestFactory | None = None,
         adaptive_factory: AdaptiveQuestFactory | None = None,
         error_recorder: ErrorRecorder | None = None,
-        material_scanner: MaterialScanner | None = None,
         misconception_classifier: MisconceptionClassifier | None = None,
         study_plan_scanner: StudyPlanScanner | None = None,
         lesson_factory: LessonFactory | None = None,
@@ -838,9 +601,8 @@ class SenseiDashboardServer(ThreadingHTTPServer):
         self.service = service
         self.error_recorder = error_recorder or ErrorRecorder()
         self.csrf_token = secrets.token_urlsafe(32)
-        self.challenges = ChallengeStore(quest_factory, adaptive_factory)
+        self.challenges = ChallengeStore(adaptive_factory)
         self.adaptive_available = adaptive_factory is not None
-        self.material_scanner = material_scanner
         self.misconception_classifier = misconception_classifier
         self.study_plan_scanner = study_plan_scanner
         self.lesson_factory = lesson_factory
@@ -1143,9 +905,6 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             document["runtime"]["adaptive_generation"] = (
                 "ready" if self.server.adaptive_available else "unavailable"
             )
-            document["runtime"]["material_scan"] = (
-                "ready" if self.server.material_scanner is not None else "unavailable"
-            )
             document["runtime"]["lessons"] = (
                 "ready" if self.server.lesson_factory is not None else "unavailable"
             )
@@ -1153,25 +912,6 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 "ready" if self.server.study_plan_scanner is not None else "unavailable"
             )
             self._send_json(200, document)
-            return
-        if path == "/api/study/materials":
-            query = parse_qs(urlsplit(self.path).query)
-            skill_id = (query.get("skill_id") or [""])[0]
-            try:
-                skill_id = self._skill_id(skill_id)
-                materials = self.server.service.topic_materials(skill_id)
-            except ValueError as error:
-                error_id = self._record_exception(error, "list class material")
-                self._send_json(400, {"error": str(error), "error_id": error_id})
-                return
-            except Exception as error:  # keep request failures inside the server
-                error_id = self._record_exception(error, "list class material")
-                self._send_json(
-                    500,
-                    {"error": "Class material is unavailable.", "error_id": error_id},
-                )
-                return
-            self._send_json(200, {"skill_id": skill_id, "materials": materials})
             return
         asset = self.server.assets.get(path)
         if asset is None:
@@ -1225,86 +965,6 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     context={"stack": stack, "client": self.client_address[0]},
                 )
                 self._send_json(202, {"error_id": error_id})
-                return
-            if path == "/api/study/focus":
-                document = self._read_json({"subject", "topic", "context"})
-                if not all(isinstance(value, str) for value in document.values()):
-                    raise ValueError("Study-focus fields must be text.")
-                with self.server.topic_state_lock:
-                    skill = self.server.service.create_study_topic(
-                        subject=str(document["subject"]),
-                        topic=str(document["topic"]),
-                        context=str(document["context"]),
-                    )
-                self._send_json(200, {"study_topic": skill})
-                return
-            if path == "/api/study/delete":
-                document = self._read_json({"skill_id"})
-                skill_id = document["skill_id"]
-                if not isinstance(skill_id, str) or len(skill_id) > 80:
-                    raise ValueError("Study topic ID must be valid text.")
-                with self.server.topic_state_lock:
-                    deletion = self.server.service.delete_study_topic(skill_id)
-                    self.server.challenges.discard_skill(skill_id)
-                    self.server.pending_attempts.discard_skill(skill_id)
-                self._send_json(200, {"deleted_topic": deletion})
-                return
-            if path == "/api/study/restart":
-                document = self._read_json({"skill_id"})
-                skill_id = document["skill_id"]
-                if not isinstance(skill_id, str) or len(skill_id) > 80:
-                    raise ValueError("Study topic ID must be valid text.")
-                with self.server.topic_state_lock:
-                    restart = self.server.service.restart_study_topic(skill_id)
-                    self.server.challenges.discard_skill(skill_id)
-                    self.server.pending_attempts.discard_skill(skill_id)
-                self._send_json(200, {"restarted_topic": restart})
-                return
-            if path == "/api/folders/create":
-                document = self._read_json({"subject", "name", "skill_ids"})
-                subject = document["subject"]
-                name = document["name"]
-                skill_ids = document["skill_ids"]
-                if (
-                    not isinstance(subject, str)
-                    or not isinstance(name, str)
-                    or not isinstance(skill_ids, list)
-                    or not all(isinstance(skill_id, str) for skill_id in skill_ids)
-                ):
-                    raise ValueError("Folder details and topic selections are invalid.")
-                with self.server.topic_state_lock:
-                    folder = self.server.service.create_topic_folder(
-                        subject=subject, name=name, skill_ids=skill_ids
-                    )
-                self._send_json(200, {"topic_folder": folder})
-                return
-            if path == "/api/folders/update":
-                document = self._read_json({"folder_id", "name", "skill_ids"})
-                folder_id = document["folder_id"]
-                name = document["name"]
-                skill_ids = document["skill_ids"]
-                if (
-                    not isinstance(folder_id, str)
-                    or len(folder_id) > 80
-                    or not isinstance(name, str)
-                    or not isinstance(skill_ids, list)
-                    or not all(isinstance(skill_id, str) for skill_id in skill_ids)
-                ):
-                    raise ValueError("Folder details and topic selections are invalid.")
-                with self.server.topic_state_lock:
-                    folder = self.server.service.update_topic_folder(
-                        folder_id, name=name, skill_ids=skill_ids
-                    )
-                self._send_json(200, {"topic_folder": folder})
-                return
-            if path == "/api/folders/delete":
-                document = self._read_json({"folder_id"})
-                folder_id = document["folder_id"]
-                if not isinstance(folder_id, str) or len(folder_id) > 80:
-                    raise ValueError("Folder ID must be valid text.")
-                with self.server.topic_state_lock:
-                    folder = self.server.service.delete_topic_folder(folder_id)
-                self._send_json(200, {"deleted_folder": folder})
                 return
             if path == "/api/study/plan/scan":
                 document = self._read_json(
@@ -1383,117 +1043,6 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     )
                 self._send_json(200, result)
                 return
-            if path == "/api/study/materials/add":
-                document = self._read_json(
-                    {"skill_id", "materials"}, max_bytes=MAX_MATERIALS_REQUEST_BYTES
-                )
-                skill_id = self._skill_id(document["skill_id"])
-                raw_materials = document["materials"]
-                if (
-                    not isinstance(raw_materials, list)
-                    or not 1 <= len(raw_materials) <= MAX_MATERIALS_PER_REQUEST
-                    or not all(isinstance(item, dict) for item in raw_materials)
-                ):
-                    raise ValueError(
-                        "Class material must be a list of 1 to "
-                        f"{MAX_MATERIALS_PER_REQUEST} entries."
-                    )
-                for item in raw_materials:
-                    if not set(item) <= {"kind", "body", "solution", "source_label"}:
-                        raise ValueError(
-                            "Each class material may only include kind, body, "
-                            "solution, and source_label."
-                        )
-                    if not all(
-                        value is None or isinstance(value, str)
-                        for value in item.values()
-                    ):
-                        raise ValueError("Class material fields must be text.")
-                with self.server.topic_state_lock:
-                    added = self.server.service.add_topic_materials(
-                        skill_id, raw_materials
-                    )
-                    materials = self.server.service.topic_materials(skill_id)
-                self._send_json(
-                    200,
-                    {
-                        "skill_id": skill_id,
-                        "added": added,
-                        "materials": materials,
-                        "material_count": len(materials),
-                    },
-                )
-                return
-            if path == "/api/study/materials/delete":
-                document = self._read_json({"material_id"})
-                material_id = document["material_id"]
-                if not isinstance(material_id, str) or len(material_id) > 80:
-                    raise ValueError("Class material ID must be valid text.")
-                with self.server.topic_state_lock:
-                    deleted = self.server.service.delete_topic_material(material_id)
-                    materials = self.server.service.topic_materials(
-                        str(deleted["skill_id"])
-                    )
-                self._send_json(
-                    200,
-                    {
-                        "deleted_material": deleted,
-                        "materials": materials,
-                        "material_count": len(materials),
-                    },
-                )
-                return
-            if path == "/api/study/materials/scan":
-                document = self._read_json(
-                    {"skill_id", "filename", "media_base64", "media_type"},
-                    max_bytes=MAX_UPLOAD_REQUEST_BYTES,
-                )
-                skill_id = self._skill_id(document["skill_id"])
-                if not all(
-                    isinstance(document[field], str)
-                    for field in ("filename", "media_base64", "media_type")
-                ):
-                    raise ValueError("Scan fields must be text.")
-                try:
-                    media_bytes = base64.b64decode(
-                        str(document["media_base64"]), validate=True
-                    )
-                except (binascii.Error, ValueError) as error:
-                    raise ValueError("The uploaded file data is invalid.") from error
-                scanner = self.server.material_scanner
-                if scanner is None:
-                    raise RuntimeError(
-                        "Class-material scanning is unavailable. Restart Sensei with "
-                        "a valid hosted LLM API connection."
-                    )
-                skill = self.server.service.study_topic(skill_id)
-                generation_context = {"skill_id": skill_id}
-                proposals = scanner.scan(
-                    media_bytes,
-                    filename=str(document["filename"]),
-                    media_type=str(document["media_type"]),
-                    subject=str(skill["course"]),
-                    topic=str(skill["name"]),
-                    practice_instructions=str(skill.get("description") or ""),
-                )
-                self._send_json(
-                    200,
-                    {
-                        "skill_id": skill_id,
-                        "proposals": [proposal.public_dict() for proposal in proposals],
-                    },
-                )
-                return
-            if path == "/api/study/profile":
-                document = self._read_json({"subject", "profile"})
-                if not all(isinstance(value, str) for value in document.values()):
-                    raise ValueError("Course profile fields must be text.")
-                with self.server.topic_state_lock:
-                    profile = self.server.service.set_subject_profile(
-                        str(document["subject"]), str(document["profile"])
-                    )
-                self._send_json(200, {"subject_profile": profile})
-                return
             if path == "/api/study/generate":
                 document = self._read_json({"skill_id"})
                 skill_id = self._skill_id(document["skill_id"])
@@ -1555,22 +1104,17 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 factory = self._lesson_factory()
                 grade = factory.grade_check_in(skill, lesson, step_index, answer)
                 progress = self.server.service.lesson_progress_document(record)
-                xp_awarded = 0
                 completed = False
-                profile = None
                 if grade.passed and step_index == int(record["current_step"]):
                     with self.server.topic_state_lock:
                         advanced = self.server.service.advance_lesson(
                             skill_id, step_index
                         )
-                        xp_awarded = int(advanced.pop("xp_awarded_now"))
                         progress = advanced
                         completed = (
                             advanced["status"] == "complete"
                             and record["status"] != "complete"
                         )
-                        if completed:
-                            profile = self.server.service.profile()
                 self._send_json(
                     200,
                     {
@@ -1578,8 +1122,6 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                         "feedback": grade.feedback,
                         "progress": progress,
                         "completed": completed,
-                        "xp_awarded": xp_awarded,
-                        "profile": profile,
                     },
                 )
                 return
@@ -1599,22 +1141,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 answer = factory.answer_question(skill, lesson, step_index, question)
                 self._send_json(200, {"answer": answer})
                 return
-            if path == "/api/quest/generate":
-                document = self._read_json({"skill_id"})
-                skill_id = document["skill_id"]
-                if not isinstance(skill_id, str) or len(skill_id) > 80:
-                    raise ValueError("Skill ID must be valid text.")
-                with self.server.topic_state_lock:
-                    challenge_token, quest = self.server.challenges.issue(skill_id)
-                self._send_json(
-                    200,
-                    {
-                        "quest": self.server.service.public_generated_quest(quest),
-                        "challenge_token": challenge_token,
-                    },
-                )
-                return
-            if path == "/api/quest/help":
+            if path == "/api/practice/help":
                 document = self._read_json({"challenge_token"})
                 challenge_token = document["challenge_token"]
                 if not isinstance(challenge_token, str) or len(challenge_token) > 200:
@@ -1625,14 +1152,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     200,
                     {
                         **asdict(reveal),
-                        "reward": help_reward_preview(
-                            reveal.hints_used,
-                            solution_revealed=reveal.final_answer,
-                        ),
                     },
                 )
                 return
-            if path == "/api/quest/check":
+            if path == "/api/practice/check":
                 document = self._read_json({"challenge_token", "answer"})
                 challenge_token = document["challenge_token"]
                 answer = document["answer"]
@@ -1656,7 +1179,6 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 finding = None
                 if (
                     conclusive
-                    and isinstance(quest, AdaptiveQuest)
                     and check.outcome is not Outcome.CORRECT
                     and not solution_revealed
                 ):
@@ -1675,7 +1197,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     if conclusive
                     else None
                 )
-                spec = quest.spec if isinstance(quest, AdaptiveQuest) else None
+                spec = quest.spec
                 self._send_json(
                     200,
                     {
@@ -1684,13 +1206,13 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                         "parts": part_documents(quest, check),
                         "attempt_token": attempt_token,
                         "solution": (
-                            quest.solution if isinstance(quest, AdaptiveQuest) else None
+                            quest.solution
                         ),
                         "likely_mistake": finding.misconception if finding else None,
                     },
                 )
                 return
-            if path == "/api/quest/record":
+            if path == "/api/practice/record":
                 document = self._read_json({"attempt_token"})
                 token = document["attempt_token"]
                 if not isinstance(token, str) or len(token) > 200:
@@ -1707,8 +1229,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             operation, message = LESSON_FAILURE_MESSAGES.get(
                 path,
                 (
-                    "generate and validate adaptive encounter",
-                    "Sensei could not finish a valid new encounter. Please try again.",
+                    "generate and validate adaptive question",
+                    "Sensei could not finish a valid new question. Please try again.",
                 ),
             )
             error_id = self._record_exception(
@@ -1750,8 +1272,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 error,
             )
             message = (
-                "Sensei could not generate a new encounter. Please try again."
-                if path in {"/api/study/generate", "/api/quest/generate"}
+                "Sensei could not generate a new question. Please try again."
+                if path == "/api/study/generate"
                 else "Sensei could not build the lesson. Please try again."
                 if path == "/api/study/learn/start"
                 else "Sensei could not finish that lesson step. Please try again."
@@ -1760,18 +1282,6 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 if path == "/api/study/plan/scan"
                 else "The study plan could not be saved."
                 if path == "/api/study/plan/create"
-                else "Sensei could not scan that page. Please try again."
-                if path == "/api/study/materials/scan"
-                else "Class material could not be saved."
-                if path.startswith("/api/study/materials/")
-                else "The course profile could not be saved."
-                if path == "/api/study/profile"
-                else "The topic and its learning data could not be deleted."
-                if path == "/api/study/delete"
-                else "The topic's progress could not be restarted."
-                if path == "/api/study/restart"
-                else "The Atlas folder could not be saved."
-                if path.startswith("/api/folders/")
                 else "The local attempt could not be recorded."
             )
             self._send_json(
@@ -1810,10 +1320,8 @@ def create_server(
     service: DashboardService,
     *,
     port: int = DEFAULT_DASHBOARD_PORT,
-    quest_factory: GeneratedQuestFactory | None = None,
     adaptive_factory: AdaptiveQuestFactory | None = None,
     error_recorder: ErrorRecorder | None = None,
-    material_scanner: MaterialScanner | None = None,
     misconception_classifier: MisconceptionClassifier | None = None,
     study_plan_scanner: StudyPlanScanner | None = None,
     lesson_factory: LessonFactory | None = None,
@@ -1823,10 +1331,8 @@ def create_server(
     return SenseiDashboardServer(
         (LOOPBACK_HOST, port),
         service,
-        quest_factory,
         adaptive_factory,
         error_recorder,
-        material_scanner=material_scanner,
         misconception_classifier=misconception_classifier,
         study_plan_scanner=study_plan_scanner,
         lesson_factory=lesson_factory,
@@ -1835,7 +1341,7 @@ def create_server(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Show Sensei's local RPG learning dashboard."
+        description="Show Sensei's study-guide learning dashboard."
     )
     parser.add_argument(
         "--database",
@@ -1889,7 +1395,6 @@ class HostedComponents:
     """Every hosted-model client the dashboard builds from one credential."""
 
     factory: AdaptiveQuestFactory
-    scanner: MaterialScanner
     classifier: MisconceptionClassifier
     plan_scanner: StudyPlanScanner
     practice_model: str
@@ -1913,16 +1418,6 @@ def _hosted_components(args: argparse.Namespace) -> HostedComponents:
             settings.model,
             base_url=settings.base_url,
             max_output_tokens=PRACTICE_MAX_OUTPUT_TOKENS,
-            json_mode=True,
-        )
-    )
-    scanner = MaterialScanner(
-        ResponsesAPIProvider(
-            settings.api_key,
-            scanner_model,
-            base_url=settings.base_url,
-            timeout_seconds=300,
-            max_output_tokens=SCANNER_MAX_OUTPUT_TOKENS,
             json_mode=True,
         )
     )
@@ -1964,21 +1459,12 @@ def _hosted_components(args: argparse.Namespace) -> HostedComponents:
     )
     return HostedComponents(
         factory,
-        scanner,
         classifier,
         plan_scanner,
         settings.model,
         scanner_model,
         lesson_factory,
     )
-
-
-def _adaptive_factory(
-    args: argparse.Namespace,
-    stack: ExitStack,
-) -> AdaptiveQuestFactory:
-    del stack
-    return _hosted_components(args).factory
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1994,7 +1480,6 @@ def main(argv: list[str] | None = None) -> int:
                 port=args.port,
                 adaptive_factory=components.factory,
                 error_recorder=error_recorder,
-                material_scanner=components.scanner,
                 misconception_classifier=components.classifier,
                 study_plan_scanner=components.plan_scanner,
                 lesson_factory=components.lesson_factory,

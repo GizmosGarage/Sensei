@@ -1,3 +1,3 @@
-"""Sensei API-backed learner-directed practice tutor."""
+"""Sensei study-guide-first adaptive tutor."""
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"

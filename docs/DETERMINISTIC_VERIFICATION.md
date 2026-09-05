@@ -2,22 +2,13 @@
 
 Sensei uses a symbolic verifier as a correctness boundary separate from the language model. The model teaches, asks questions, and identifies likely misconceptions; the verifier checks supported mathematical claims before they affect progress.
 
-## Using `/check`
+## Checking practice answers
 
-Start or discuss a problem, then choose a check type:
-
-```text
-/check derivative
-/check limit
-/check antiderivative
-/check equivalent
-```
-
-The terminal asks only for the fields needed by that check. For example, a derivative check asks for the original function, variable, and proposed derivative. Common terminal notation such as `2x`, `x^2`, `sin(x)`, `sqrt(x)`, `pi`, and `oo` is accepted. Basic forms of `π`, `∞`, `×`, and function-style LaTeX names such as `\sin` are normalized.
-
-Run the check again after revising an answer. Only the latest result is attached to the active problem. `/new`, `/done`, and a new problem clear it.
-
-Curated review quests use the same verifier through `/answer`. Their symbolic target is fixed by the versioned quest catalog, so the general `/check` wizard cannot replace it while a quest is active.
+Practice answers use the protected answer specification created by the generator
+and independent reviewer. Supported inputs include expressions, numbers with units,
+solution sets, intervals, points, choices, and multi-part answers. The browser never
+supplies its own answer key. Expressions accept forms such as `2x`, `x^2`, `sin(x)`,
+`sqrt(x)`, `pi`, and `oo`.
 
 ## Supported checks
 
@@ -46,9 +37,9 @@ Object attributes, indexing, collections, comprehensions, comparisons, assignmen
 
 ## Learning-memory trust rule
 
-A conclusive verifier result is the effective outcome used for XP, mastery, and review scheduling. Sensei also keeps the student- or model-reported outcome and its source. This means a self-report of `correct` can coexist with an effective `verified_incorrect` result without destroying either piece of evidence.
+A conclusive verifier result is the effective outcome used for mastery and review scheduling. Sensei also keeps the student- or model-reported outcome and its source. This means a self-report of `correct` can coexist with an effective `verified_incorrect` result without destroying either piece of evidence.
 
-The schema stores the verifier kind and version, submitted and expected forms, status, and concise detail. Existing unverified records remain valid after automatic schema migration.
+The schema stores the verifier kind and version, submitted and expected forms, status, and concise detail. The fresh schema stores only records from the current guide workflow.
 
 ## Current limitations
 

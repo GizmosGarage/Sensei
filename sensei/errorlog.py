@@ -14,7 +14,7 @@ from typing import Mapping
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ERROR_LOG_PATH = REPOSITORY_ROOT / "data" / "logs" / "sensei-errors.jsonl"
+DEFAULT_ERROR_LOG_PATH = REPOSITORY_ROOT / "data" / "logs" / "study-errors.jsonl"
 DEFAULT_MAX_LOG_BYTES = 5 * 1024 * 1024
 DEFAULT_BACKUP_COUNT = 10
 MAX_CONTEXT_VALUE_CHARACTERS = 2_000

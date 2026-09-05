@@ -1,4 +1,4 @@
-"""Guided, step-by-step lessons that teach how to tackle one Atlas topic."""
+"""Guided, step-by-step lessons that teach how to tackle one guide concept."""
 
 from __future__ import annotations
 
@@ -17,8 +17,7 @@ from sensei.practice import (
     _json_object,
 )
 from sensei.providers import ChatProvider, ProviderError
-from sensei.storage import LESSON_XP
-from sensei.tutor import student_facing_text
+from sensei.text import student_facing_text
 
 
 MIN_LESSON_STEPS = 2
@@ -49,7 +48,6 @@ STEP_FIELDS = {
 
 __all__ = [
     "CHECK_IN_VERDICTS",
-    "LESSON_XP",
     "CheckInGrade",
     "Lesson",
     "LessonFactory",

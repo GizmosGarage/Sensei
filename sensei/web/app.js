@@ -1,43 +1,31 @@
 "use strict";
 
 const byId = (id) => document.getElementById(id);
-const skillTemplate = byId("skill-template");
 const historyTemplate = byId("history-template");
-const viewNames = ["dojo", "profile", "past-quest"];
+const viewNames = ["study", "history"];
 const viewTitles = {
-  dojo: "Sensei // Adaptive Dojo",
-  profile: "Profile // Sensei",
-  "past-quest": "Past Quest // Sensei",
+  study: "Study // Sensei",
+  "history": "Learning history // Sensei",
 };
 let dashboardState = null;
 let activeQuest = null;
 let attemptToken = null;
 let activeSessionSkillId = null;
-let activeAnswer = "";
 let activeFeedback = null;
-let attemptRecorded = false;
-let activeHelpCount = 0;
 let helpExhausted = false;
 let revealingHelp = false;
+let checkingAnswer = false;
 let generatingQuestion = false;
-let activeSubjectFilter = "all";
-let editingFolderId = null;
-let editingFolderSubject = "";
 const generationStatuses = new Map();
-const changingTopicIds = new Set();
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
-const CLIENT_ERROR_STORAGE_KEY = "sensei.pending-client-errors.v1";
-const FOLDER_STATE_STORAGE_KEY = "sensei.closed-topic-folders.v1";
+const CLIENT_ERROR_STORAGE_KEY = "sensei.study-client-errors.v1";
 const MAX_PENDING_CLIENT_ERRORS = 25;
 const reportedClientErrors = new WeakSet();
-const closedFolderIds = readClosedFolderIds();
-const PRACTICE_API_VERSION = 7;
+const PRACTICE_API_VERSION = 8;
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 let partAnswers = {};
-let materialTopic = null;
-let materialProposals = [];
 let currentPlan = null;
 let importMode = "file";
 let analyzing = false;
@@ -45,44 +33,18 @@ let activeLesson = null;
 let activeLessonSkillId = null;
 let lessonProgress = null;
 let revealedLessonStep = 0;
-let lessonAwardedNow = 0;
 let generatingLesson = false;
 let checkingLesson = false;
 let askingLesson = false;
 
-function readClosedFolderIds() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(FOLDER_STATE_STORAGE_KEY) || "[]");
-    return new Set(Array.isArray(stored) ? stored.filter((folderId) => typeof folderId === "string") : []);
-  } catch {
-    return new Set();
-  }
-}
-
-function rememberFolderState(folderId, isOpen) {
-  if (isOpen) {
-    closedFolderIds.delete(folderId);
-  } else {
-    closedFolderIds.add(folderId);
-  }
-  try {
-    if (closedFolderIds.size) {
-      localStorage.setItem(FOLDER_STATE_STORAGE_KEY, JSON.stringify(Array.from(closedFolderIds)));
-    } else {
-      localStorage.removeItem(FOLDER_STATE_STORAGE_KEY);
-    }
-  } catch {
-    // Folder state still survives dashboard refreshes when storage is unavailable.
-  }
-}
 
 function viewFromHash() {
   const requestedView = window.location.hash.slice(1);
-  return viewNames.includes(requestedView) ? requestedView : "dojo";
+  return viewNames.includes(requestedView) ? requestedView : "study";
 }
 
 function showView(viewName, { updateHash = true, focus = false } = {}) {
-  const nextView = viewNames.includes(viewName) ? viewName : "dojo";
+  const nextView = viewNames.includes(viewName) ? viewName : "study";
   document.querySelectorAll(".app-view").forEach((view) => {
     view.hidden = view.id !== `${nextView}-view`;
   });
@@ -357,17 +319,6 @@ function renderGraph(graph) {
   byId("arena-graph-description").textContent = graph.description;
 }
 
-function relativeDate(value) {
-  if (!value) return "new topic";
-  const target = new Date(value);
-  if (Number.isNaN(target.getTime())) return "review scheduled";
-  const days = Math.round((target.getTime() - Date.now()) / 86400000);
-  if (days < -1) return `${Math.abs(days)} days overdue`;
-  if (days === -1) return "1 day overdue";
-  if (days === 0) return "due today";
-  if (days === 1) return "review tomorrow";
-  return `review in ${days} days`;
-}
 
 function relativeMoment(value) {
   const target = new Date(value);
@@ -378,419 +329,12 @@ function relativeMoment(value) {
   return `${days} days ago`;
 }
 
-function renderProfile(profile) {
-  const progress = clamp(profile.xp_into_level / profile.xp_for_next_level, 0, 1);
-  byId("level").textContent = profile.level;
-  byId("rank-name").textContent = profile.rank_name;
-  byId("xp-summary").textContent = `${profile.xp_into_level} / ${profile.xp_for_next_level} XP`;
-  byId("total-xp").textContent = `${profile.total_xp} total`;
-  byId("attempts").textContent = profile.attempts;
-  byId("practiced").textContent = profile.skills_practiced;
-  byId("mastered").textContent = profile.skills_mastered;
-  byId("xp-progress").style.width = `${progress * 100}%`;
-  byId("rank-ring").style.setProperty("--xp-angle", `${progress * 360}deg`);
-}
-
-function subjectKey(subject) {
-  return String(subject || "Uncategorized").trim().replace(/\s+/g, " ").toLocaleLowerCase();
-}
-
-function groupTopicsBySubject(topics, folders = []) {
-  const groups = new Map();
-  const ensureGroup = (subjectValue) => {
-    const subject = String(subjectValue || "Uncategorized").trim().replace(/\s+/g, " ") || "Uncategorized";
-    const key = subjectKey(subject);
-    if (!groups.has(key)) groups.set(key, { key, subject, topics: [], folders: [] });
-    return groups.get(key);
-  };
-  topics.forEach((topic) => {
-    ensureGroup(topic.course).topics.push(topic);
-  });
-  folders.forEach((folder) => ensureGroup(folder.subject).folders.push(folder));
-  return Array.from(groups.values())
-    .map((group) => ({
-      ...group,
-      practiced: group.topics.some((topic) => Number(topic.attempts_count) > 0),
-      topics: group.topics.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" })),
-      folders: group.folders.sort((left, right) => Number(left.sort_order) - Number(right.sort_order)),
-    }))
-    .sort((left, right) => left.subject.localeCompare(right.subject, undefined, { sensitivity: "base" }));
-}
-
-function renderSubjectFilters(groups) {
-  const filters = byId("subject-filters");
-  filters.replaceChildren();
-  const options = [
-    { key: "all", label: "All subjects", count: groups.reduce((total, group) => total + group.topics.length, 0) },
-    ...groups
-      .map((group) => ({ key: group.key, label: group.subject, count: group.topics.length })),
-  ];
-  options.forEach((option) => {
-    const button = document.createElement("button");
-    const selected = activeSubjectFilter === option.key;
-    button.type = "button";
-    button.dataset.subjectKey = option.key;
-    button.classList.toggle("active", selected);
-    button.setAttribute("aria-pressed", String(selected));
-    const label = document.createElement("span");
-    label.textContent = option.label;
-    const count = document.createElement("span");
-    count.className = "filter-count";
-    count.textContent = option.count;
-    button.append(label, count);
-    button.addEventListener("click", () => {
-      activeSubjectFilter = option.key;
-      renderTopics(dashboardState?.study_topics || []);
-      const selectedButton = Array.from(byId("subject-filters").querySelectorAll("button"))
-        .find((item) => item.dataset.subjectKey === activeSubjectFilter);
-      selectedButton?.focus();
-    });
-    filters.append(button);
-  });
-}
 
 function trainTopic(topic, statusTarget) {
-  showView("dojo");
+  showView("study");
   void startAdaptiveQuest(topic.id, statusTarget || byId("arena-generation-status"), { resetSession: true });
 }
 
-function topicCard(topic) {
-  const card = skillTemplate.content.firstElementChild.cloneNode(true);
-  card.querySelector(".skill-subject").textContent = topic.course;
-  card.querySelector(".skill-score").textContent = `${Math.round(topic.mastery_score)} / 100`;
-  card.querySelector(".skill-name").textContent = topic.name;
-  card.querySelector(".skill-label").textContent = topic.mastery_label;
-  card.querySelector(".skill-track i").style.width = `${clamp(topic.mastery_score, 0, 100)}%`;
-  card.querySelector(".skill-attempts").textContent = `${topic.attempts_count} encounter${topic.attempts_count === 1 ? "" : "s"}`;
-  card.querySelector(".skill-review").textContent = relativeDate(topic.next_review_at);
-  const generationStatus = card.querySelector(".card-generation-status");
-  restoreGenerationStatus(generationStatus, topic.id);
-  const practiceButton = card.querySelector(".practice-button");
-  const learnButton = card.querySelector(".learn-button");
-  const restartButton = card.querySelector(".restart-topic-button");
-  const deleteButton = card.querySelector(".delete-topic-button");
-  const materialButton = card.querySelector(".material-button");
-  learnButton.textContent = lessonButtonLabel(topic);
-  learnButton.setAttribute("aria-label", `${lessonButtonLabel(topic)} for ${topic.name}`);
-  learnButton.addEventListener("click", () => learnTopic(topic, generationStatus));
-  const materialCount = Number(topic.material_count) || 0;
-  materialButton.textContent = materialCount
-    ? `Class material · ${materialCount}`
-    : "Add class material";
-  materialButton.setAttribute("aria-label", `Manage class material for ${topic.name}`);
-  materialButton.addEventListener("click", () => openMaterialDialog(topic));
-  restartButton.setAttribute("aria-label", `Restart ${topic.name} from the beginning`);
-  deleteButton.setAttribute("aria-label", `Delete ${topic.name} and its saved data`);
-  practiceButton.addEventListener("click", () => trainTopic(topic, generationStatus));
-  restartButton.addEventListener("click", () => restartTopic(
-    topic,
-    restartButton,
-    deleteButton,
-    practiceButton,
-    generationStatus,
-    learnButton,
-  ));
-  deleteButton.addEventListener("click", () => deleteTopic(
-    topic,
-    deleteButton,
-    restartButton,
-    practiceButton,
-    generationStatus,
-    learnButton,
-  ));
-  return card;
-}
-
-function lessonButtonLabel(topic) {
-  if (topic.lesson_status === "complete") return "Review lesson";
-  if (topic.lesson_status === "in_progress") {
-    return `Resume lesson · step ${Math.min(topic.lesson_step + 1, topic.lesson_step_count)} of ${topic.lesson_step_count}`;
-  }
-  return "Learn this topic";
-}
-
-function learnTopic(topic, statusTarget) {
-  showView("dojo");
-  void startLesson(topic.id, statusTarget || byId("lesson-generation-status"), { restart: false });
-}
-
-function folderById(folderId) {
-  return (dashboardState?.topic_folders || []).find((folder) => folder.id === folderId) || null;
-}
-
-function closeFolderDialog() {
-  const dialog = byId("folder-dialog");
-  if (dialog.open) dialog.close();
-  editingFolderId = null;
-  editingFolderSubject = "";
-  byId("folder-dialog-status").textContent = "";
-}
-
-function openFolderDialog(subject, folder = null) {
-  editingFolderId = folder?.id || null;
-  editingFolderSubject = subject;
-  byId("folder-dialog-subject").textContent = subject;
-  byId("folder-dialog-title").textContent = folder ? "Edit folder" : "Create a folder";
-  byId("folder-name").value = folder?.name || "";
-  byId("folder-save").textContent = folder ? "Save folder" : "Create folder";
-  byId("folder-delete").hidden = !folder;
-  byId("folder-dialog-status").textContent = "";
-
-  const selected = new Set(folder?.topic_ids || []);
-  const topicList = byId("folder-topic-list");
-  topicList.replaceChildren();
-  const topics = (dashboardState?.study_topics || [])
-    .filter((topic) => subjectKey(topic.course) === subjectKey(subject))
-    .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
-  topics.forEach((topic) => {
-    const label = document.createElement("label");
-    label.className = "folder-topic-option";
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.name = "folder-topic";
-    checkbox.value = topic.id;
-    checkbox.checked = selected.has(topic.id);
-    const copy = document.createElement("span");
-    const name = document.createElement("strong");
-    name.textContent = topic.name;
-    copy.append(name);
-    const currentFolder = folderById(topic.folder_id);
-    if (currentFolder && currentFolder.id !== folder?.id) {
-      const location = document.createElement("small");
-      location.textContent = `Currently in ${currentFolder.name}`;
-      copy.append(location);
-    }
-    label.append(checkbox, copy);
-    topicList.append(label);
-  });
-  if (!topics.length) {
-    const empty = document.createElement("p");
-    empty.className = "folder-topic-empty";
-    empty.textContent = "Add a topic to this subject before filing it.";
-    topicList.append(empty);
-  }
-
-  const dialog = byId("folder-dialog");
-  dialog.showModal();
-  requestAnimationFrame(() => byId("folder-name").focus());
-}
-
-async function saveFolder(event) {
-  event.preventDefault();
-  const name = byId("folder-name").value.trim();
-  if (!name) {
-    byId("folder-dialog-status").textContent = "Give this folder a name.";
-    byId("folder-name").focus();
-    return;
-  }
-  const skillIds = Array.from(byId("folder-topic-list").querySelectorAll('input[type="checkbox"]:checked'))
-    .map((checkbox) => checkbox.value);
-  const saveButton = byId("folder-save");
-  saveButton.disabled = true;
-  byId("folder-dialog-status").textContent = "Saving your folder…";
-  try {
-    if (editingFolderId) {
-      await postJson("/api/folders/update", { folder_id: editingFolderId, name, skill_ids: skillIds });
-    } else {
-      await postJson("/api/folders/create", { subject: editingFolderSubject, name, skill_ids: skillIds });
-    }
-    closeFolderDialog();
-    await loadDashboard();
-  } catch (error) {
-    void reportClientProblem(error, "saveFolder");
-    byId("folder-dialog-status").textContent = error.message;
-  } finally {
-    saveButton.disabled = false;
-  }
-}
-
-async function deleteFolder() {
-  const folder = folderById(editingFolderId);
-  if (!folder) return;
-  const confirmed = window.confirm(
-    `Remove the folder “${folder.name}”?\n\nIts topics will become unfiled. No topic or learning progress will be deleted.`,
-  );
-  if (!confirmed) return;
-  const deleteButton = byId("folder-delete");
-  deleteButton.disabled = true;
-  byId("folder-dialog-status").textContent = "Removing the folder…";
-  try {
-    await postJson("/api/folders/delete", { folder_id: folder.id });
-    rememberFolderState(folder.id, true);
-    closeFolderDialog();
-    await loadDashboard();
-  } catch (error) {
-    void reportClientProblem(error, "deleteFolder");
-    byId("folder-dialog-status").textContent = error.message;
-  } finally {
-    deleteButton.disabled = false;
-  }
-}
-
-async function restartTopic(topic, restartButton, deleteButton, practiceButton, statusTarget, learnButton) {
-  const confirmed = window.confirm(
-    `Restart “${topic.name}” from the beginning?\n\nThis permanently removes this topic’s saved attempts, XP, mastery, misconceptions, lesson progress, and review progress. The topic and its folder will stay in your Atlas.`,
-  );
-  if (!confirmed) return;
-
-  changingTopicIds.add(topic.id);
-  restartButton.disabled = true;
-  deleteButton.disabled = true;
-  practiceButton.disabled = true;
-  learnButton.disabled = true;
-  setGenerationStatus(statusTarget, "Resetting this topic’s mastery and XP…", "working", topic.id);
-  try {
-    await postJson("/api/study/restart", { skill_id: topic.id });
-    generationStatuses.delete(topic.id);
-    if (activeSessionSkillId === topic.id) closeArena();
-    if (activeLessonSkillId === topic.id) closeLesson();
-    await loadDashboard();
-  } catch (error) {
-    void reportClientProblem(error, "restartTopic");
-    setGenerationStatus(statusTarget, error.message, "error", topic.id);
-  } finally {
-    changingTopicIds.delete(topic.id);
-    restartButton.disabled = false;
-    deleteButton.disabled = false;
-    practiceButton.disabled = false;
-    learnButton.disabled = false;
-  }
-}
-
-async function deleteTopic(topic, deleteButton, restartButton, practiceButton, statusTarget, learnButton) {
-  const confirmed = window.confirm(
-    `Delete “${topic.name}” from your Atlas?\n\nThis permanently deletes all saved attempts, XP, mastery, misconceptions, lessons, and other Atlas data for this topic. It cannot be recovered once deleted.`,
-  );
-  if (!confirmed) return;
-
-  changingTopicIds.add(topic.id);
-  deleteButton.disabled = true;
-  restartButton.disabled = true;
-  practiceButton.disabled = true;
-  learnButton.disabled = true;
-  setGenerationStatus(statusTarget, "Permanently deleting this topic and its learning data…", "working", topic.id);
-  try {
-    await postJson("/api/study/delete", { skill_id: topic.id });
-    generationStatuses.delete(topic.id);
-    if (activeSessionSkillId === topic.id) closeArena();
-    if (activeLessonSkillId === topic.id) closeLesson();
-    await loadDashboard();
-  } catch (error) {
-    void reportClientProblem(error, "deleteTopic");
-    setGenerationStatus(statusTarget, error.message, "error", topic.id);
-  } finally {
-    changingTopicIds.delete(topic.id);
-    deleteButton.disabled = false;
-    restartButton.disabled = false;
-    practiceButton.disabled = false;
-    learnButton.disabled = false;
-  }
-}
-
-function renderTopics(topics) {
-  const atlas = byId("skill-grid");
-  atlas.replaceChildren();
-  const folders = dashboardState?.topic_folders || [];
-  const hasAtlasContent = topics.length > 0 || folders.length > 0;
-  byId("empty-atlas").hidden = hasAtlasContent;
-  byId("atlas-controls").hidden = !hasAtlasContent;
-  if (!hasAtlasContent) {
-    activeSubjectFilter = "all";
-    byId("subject-filters").replaceChildren();
-    byId("atlas-summary").textContent = "No fixed curriculum. Add only what matters to you.";
-    return;
-  }
-
-  const groups = groupTopicsBySubject(topics, folders);
-  const availableFilters = new Set(groups.map((group) => group.key));
-  if (activeSubjectFilter !== "all" && !availableFilters.has(activeSubjectFilter)) activeSubjectFilter = "all";
-  renderSubjectFilters(groups);
-  const visibleGroups = activeSubjectFilter === "all"
-    ? groups
-    : groups.filter((group) => group.key === activeSubjectFilter);
-  const visibleTopicCount = visibleGroups.reduce((total, group) => total + group.topics.length, 0);
-  byId("atlas-summary").textContent = activeSubjectFilter === "all"
-    ? `${topics.length} topic${topics.length === 1 ? "" : "s"} across ${groups.length} subject${groups.length === 1 ? "" : "s"}, organized into ${folders.length} folder${folders.length === 1 ? "" : "s"}.`
-    : `Showing ${visibleTopicCount} ${visibleGroups[0].subject} topic${visibleTopicCount === 1 ? "" : "s"} in ${visibleGroups[0].folders.length} folder${visibleGroups[0].folders.length === 1 ? "" : "s"}.`;
-
-  visibleGroups.forEach((group, index) => {
-    const section = document.createElement("section");
-    section.className = "subject-group";
-    const heading = document.createElement("div");
-    heading.className = "subject-group-heading";
-    const title = document.createElement("h3");
-    title.id = `atlas-subject-${index}`;
-    title.textContent = group.subject;
-    section.setAttribute("aria-labelledby", title.id);
-    const count = document.createElement("span");
-    count.textContent = `${group.topics.length} topic${group.topics.length === 1 ? "" : "s"}`;
-    const createButton = document.createElement("button");
-    createButton.className = "new-folder-button";
-    createButton.type = "button";
-    createButton.textContent = "+ New folder";
-    createButton.addEventListener("click", () => openFolderDialog(group.subject));
-    heading.append(title, count, createButton);
-    section.append(heading);
-
-    group.folders.forEach((folder) => {
-      const folderTopics = group.topics.filter((topic) => topic.folder_id === folder.id);
-      const container = document.createElement("details");
-      container.className = "topic-folder";
-      container.open = !closedFolderIds.has(folder.id);
-      container.addEventListener("toggle", () => rememberFolderState(folder.id, container.open));
-      const summary = document.createElement("summary");
-      const icon = document.createElement("span");
-      icon.className = "folder-icon";
-      icon.setAttribute("aria-hidden", "true");
-      const folderCopy = document.createElement("span");
-      folderCopy.className = "folder-copy";
-      const folderName = document.createElement("strong");
-      folderName.textContent = folder.name;
-      const folderCount = document.createElement("small");
-      folderCount.textContent = `${folderTopics.length} topic${folderTopics.length === 1 ? "" : "s"}`;
-      folderCopy.append(folderName, folderCount);
-      const editButton = document.createElement("button");
-      editButton.type = "button";
-      editButton.className = "folder-edit-button";
-      editButton.textContent = "Edit";
-      editButton.setAttribute("aria-label", `Edit ${folder.name} folder`);
-      editButton.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        openFolderDialog(group.subject, folder);
-      });
-      summary.append(icon, folderCopy, editButton);
-      container.append(summary);
-      if (folderTopics.length) {
-        const folderGrid = document.createElement("div");
-        folderGrid.className = "skill-grid folder-skill-grid";
-        folderTopics.forEach((topic) => folderGrid.append(topicCard(topic)));
-        container.append(folderGrid);
-      } else {
-        const emptyFolder = document.createElement("p");
-        emptyFolder.className = "empty-folder-copy";
-        emptyFolder.textContent = "This folder is empty. Choose Edit to add topics.";
-        container.append(emptyFolder);
-      }
-      section.append(container);
-    });
-
-    const unfiledTopics = group.topics.filter((topic) => !topic.folder_id || !folderById(topic.folder_id));
-    if (unfiledTopics.length) {
-      if (group.folders.length) {
-        const unfiledHeading = document.createElement("p");
-        unfiledHeading.className = "unfiled-heading";
-        unfiledHeading.textContent = "Unfiled topics";
-        section.append(unfiledHeading);
-      }
-      const grid = document.createElement("div");
-      grid.className = "skill-grid";
-      unfiledTopics.forEach((topic) => grid.append(topicCard(topic)));
-      section.append(grid);
-    }
-    atlas.append(section);
-  });
-}
 
 function renderHistory(attempts) {
   const list = byId("history-list");
@@ -798,7 +342,7 @@ function renderHistory(attempts) {
   if (!attempts.length) {
     const empty = document.createElement("p");
     empty.className = "empty-history";
-    empty.textContent = "No encounters yet. Visit the Dojo to forge your first quest.";
+    empty.textContent = "No practice yet. Upload a guide to get started.";
     list.append(empty);
     return;
   }
@@ -823,28 +367,18 @@ function studyTopicById(skillId) {
 function beginPracticeSession(topic) {
   activeSessionSkillId = topic.id;
   activeQuest = null;
-  activeAnswer = "";
   activeFeedback = null;
-  attemptRecorded = false;
   attemptToken = null;
   resetArenaFeedback();
   renderGraph(null);
-  byId("quest-arena").hidden = true;
+  byId("practice-panel").hidden = true;
   byId("chat-history").replaceChildren();
-  byId("session-subject").textContent = topic.course;
-  byId("session-topic").textContent = topic.name;
-  setNotationText(
-    byId("session-context"),
-    topic.description || "No extra instructions provided.",
-  );
-  renderSessionBrief(topic.material_count, null);
+
 }
 
 function resetArenaFeedback() {
   attemptToken = null;
-  activeAnswer = "";
   activeFeedback = null;
-  attemptRecorded = false;
   byId("learner-answer-turn").hidden = true;
   byId("learner-answer-copy").textContent = "";
   const feedback = byId("answer-feedback");
@@ -858,7 +392,7 @@ function resetArenaFeedback() {
   byId("solution-text").textContent = "";
   byId("record-attempt").hidden = true;
   byId("continue-practice").hidden = true;
-  byId("quest-answer").disabled = false;
+  byId("practice-answer").disabled = false;
   byId("check-answer").disabled = false;
   byId("part-results").replaceChildren();
   byId("part-results").hidden = true;
@@ -868,7 +402,6 @@ function resetArenaFeedback() {
 }
 
 function resetProgressiveHelp() {
-  activeHelpCount = 0;
   helpExhausted = false;
   revealingHelp = false;
   byId("help-steps").replaceChildren();
@@ -902,7 +435,7 @@ function renderOptions(quest) {
     button.addEventListener("click", () => {
       grid.querySelectorAll("button").forEach((item) => item.classList.remove("selected"));
       button.classList.add("selected");
-      byId("quest-answer").value = letter;
+      byId("practice-answer").value = letter;
     });
     grid.append(button);
   });
@@ -912,32 +445,31 @@ function openArena(quest) {
   byId("chat-history").replaceChildren();
   closeLesson();
   activeQuest = quest;
-  showView("dojo");
+  showView("study");
   resetArenaFeedback();
   byId("arena-skill").textContent = `${quest.subject} · ${quest.skill_name}`;
   byId("arena-title").textContent = "Practice chat";
   byId("problem-title").textContent = quest.title;
   setNotationText(byId("arena-prompt"), quest.prompt);
   renderGraph(quest.graph);
-  byId("quest-answer").value = "";
-  byId("quest-answer").placeholder = quest.answer_type === "multiple_choice" ? "Choose A, B, C, or D" : "Enter only the requested value";
+  byId("practice-answer").value = "";
+  byId("practice-answer").placeholder = quest.answer_type === "multiple_choice" ? "Choose A, B, C, or D" : "Enter only the requested value";
   const multiPart = quest.answer_type === "multi_part";
-  byId("quest-answer").hidden = multiPart;
+  byId("practice-answer").hidden = multiPart;
   byId("check-answer").textContent = multiPart ? "Check all parts" : "Send answer";
   const hint = byId("notation-help");
   hint.textContent = multiPart ? "Answer every part, then check them together." : (quest.answer_format_hint || "");
   hint.hidden = !hint.textContent;
-  renderSessionBrief(quest.material_count, quest.difficulty_tier);
   resetProgressiveHelp();
   renderOptions(quest);
   renderParts(quest);
-  const arena = byId("quest-arena");
+  const arena = byId("practice-panel");
   arena.hidden = false;
   arena.scrollIntoView({ behavior: "smooth", block: "start" });
   if (multiPart) {
     byId("part-list").querySelector(".part-answer")?.focus({ preventScroll: true });
   } else if (quest.answer_type !== "multiple_choice") {
-    byId("quest-answer").focus({ preventScroll: true });
+    byId("practice-answer").focus({ preventScroll: true });
   }
 }
 
@@ -946,7 +478,7 @@ async function startAdaptiveQuest(
   statusTarget = byId("arena-generation-status"),
   { resetSession = false } = {},
 ) {
-  if (!dashboardState || generatingQuestion || generatingLesson || changingTopicIds.has(skillId)) return;
+  if (!dashboardState || generatingQuestion || generatingLesson) return;
   if (dashboardState.runtime.practice_api_version !== PRACTICE_API_VERSION) {
     setGenerationStatus(
       statusTarget,
@@ -958,13 +490,13 @@ async function startAdaptiveQuest(
   }
   const topic = studyTopicById(skillId);
   if (!topic) {
-    setGenerationStatus(statusTarget, "That Atlas topic is no longer available.", "error", skillId);
+    setGenerationStatus(statusTarget, "That concept is no longer available.", "error", skillId);
     return;
   }
   if (resetSession || activeSessionSkillId !== skillId) beginPracticeSession(topic);
   generatingQuestion = true;
   document.body.classList.add("generating");
-  setGenerationStatus(statusTarget, "Sensei is drafting and independently checking your encounter…", "working", skillId);
+  setGenerationStatus(statusTarget, "Sensei is drafting and independently checking your next question…", "working", skillId);
   byId("new-question").disabled = true;
   byId("continue-practice").disabled = true;
   try {
@@ -981,7 +513,7 @@ async function startAdaptiveQuest(
         ),
       },
     );
-    if (changingTopicIds.has(skillId) || !studyTopicById(skillId)) return;
+    if (!studyTopicById(skillId)) return;
     openArena({ ...response.quest, challenge_token: response.challenge_token });
     setGenerationStatus(statusTarget, "Problem validated. Your practice chat is ready.", "success", skillId);
   } catch (error) {
@@ -1002,7 +534,7 @@ function closeArena() {
   resetProgressiveHelp();
   renderGraph(null);
   byId("chat-history").replaceChildren();
-  byId("quest-arena").hidden = true;
+  byId("practice-panel").hidden = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1072,17 +604,15 @@ function lessonCompletionMessage() {
   const { article, bubble } = lessonMessage("Sensei", { feedback: "correct lesson-complete" });
   const status = document.createElement("p");
   status.className = "feedback-status";
-  status.textContent = lessonAwardedNow ? `Lesson complete · +${lessonAwardedNow} XP` : "Lesson complete";
+  status.textContent = "Lesson complete";
   const note = document.createElement("p");
-  note.textContent = lessonAwardedNow
-    ? "The lesson bonus is awarded once per topic. Mastery only moves when you train, so take the method into practice."
-    : "You already earned this topic’s lesson bonus. Review any step above, or train to build mastery.";
+  note.textContent = "Now try it yourself to see what you can apply independently.";
   const actions = document.createElement("div");
   actions.className = "feedback-actions";
   const train = document.createElement("button");
   train.type = "button";
   train.className = "primary-button";
-  train.textContent = "Train this topic";
+  train.textContent = "Check understanding";
   train.addEventListener("click", () => {
     const topic = studyTopicById(activeLessonSkillId);
     if (topic) trainTopic(topic);
@@ -1142,9 +672,8 @@ function openLesson(topic, lesson, progress) {
   activeLesson = lesson;
   activeLessonSkillId = topic.id;
   lessonProgress = progress;
-  lessonAwardedNow = 0;
   revealedLessonStep = Math.min(progress.current_step, lesson.step_count - 1);
-  showView("dojo");
+  showView("study");
   byId("lesson-skill").textContent = `${topic.course} · ${topic.name}`;
   byId("lesson-title").textContent = "Guided lesson";
   renderLesson();
@@ -1159,7 +688,6 @@ function closeLesson() {
   activeLessonSkillId = null;
   lessonProgress = null;
   revealedLessonStep = 0;
-  lessonAwardedNow = 0;
   byId("lesson-thread").replaceChildren();
   byId("lesson-panel").hidden = true;
 }
@@ -1169,7 +697,7 @@ async function startLesson(
   statusTarget = byId("lesson-generation-status"),
   { restart = false } = {},
 ) {
-  if (!dashboardState || generatingLesson || generatingQuestion || changingTopicIds.has(skillId)) return;
+  if (!dashboardState || generatingLesson || generatingQuestion) return;
   if (dashboardState.runtime.practice_api_version !== PRACTICE_API_VERSION) {
     setGenerationStatus(
       statusTarget,
@@ -1181,7 +709,7 @@ async function startLesson(
   }
   const topic = studyTopicById(skillId);
   if (!topic) {
-    setGenerationStatus(statusTarget, "That Atlas topic is no longer available.", "error", skillId);
+    setGenerationStatus(statusTarget, "That concept is no longer available.", "error", skillId);
     return;
   }
   const fresh = restart || topic.lesson_status === "none";
@@ -1205,11 +733,11 @@ async function startLesson(
         ),
       },
     );
-    if (changingTopicIds.has(skillId) || !studyTopicById(skillId)) return;
+    if (!studyTopicById(skillId)) return;
     openLesson(topic, response.lesson, response.progress);
     setGenerationStatus(
       statusTarget,
-      response.generated ? "Lesson validated. Work through it one step at a time." : "Lesson loaded from your Atlas.",
+      response.generated ? "Lesson validated. Work through it one step at a time." : "Your saved lesson is ready.",
       "success",
       skillId,
     );
@@ -1227,7 +755,7 @@ async function startLesson(
 function restartLesson() {
   if (!activeLessonSkillId || generatingLesson) return;
   const confirmed = window.confirm(
-    "Start this lesson over?\n\nSensei writes a new lesson for this topic and replaces your progress in the current one. The one-time XP bonus is not awarded twice.",
+    "Start this lesson over?\n\nSensei writes a new lesson for this topic and replaces your progress in the current one. You can practice again after the lesson.",
   );
   if (!confirmed) return;
   void startLesson(activeLessonSkillId, byId("lesson-generation-status"), { restart: true });
@@ -1278,7 +806,6 @@ async function checkLessonStep() {
     }[response.verdict] || "Checked";
     feedback.bubble.append(verdict, notationParagraph(response.feedback));
     if (response.completed) {
-      lessonAwardedNow = response.xp_awarded;
       renderLesson();
       const closing = thread.querySelector(".lesson-closing");
       if (closing) {
@@ -1368,9 +895,8 @@ async function askSenseiForHelp() {
   button.disabled = true;
   byId("check-answer").disabled = true;
   try {
-    const response = await postJson("/api/quest/help", { challenge_token: challengeToken });
+    const response = await postJson("/api/practice/help", { challenge_token: challengeToken });
     if (!activeQuest || activeQuest.challenge_token !== challengeToken) return;
-    activeHelpCount = response.hints_used;
     helpExhausted = response.final_answer;
     const step = document.createElement("li");
     setNotationText(step, response.step);
@@ -1378,11 +904,11 @@ async function askSenseiForHelp() {
     byId("help-panel").hidden = false;
     const reward = byId("help-reward");
     if (response.final_answer) {
-      reward.textContent = "Final answer revealed — this attempt can earn 0 XP and contribute 0 mastery evidence.";
+      reward.textContent = "You’ve seen the solution. A fresh question will check your independent understanding.";
       reward.classList.add("final");
       button.textContent = "Final answer revealed";
     } else {
-      reward.textContent = `${response.reward.xp_if_correct} XP remain; a correct answer can contribute ${Math.round(response.reward.mastery_evidence_if_correct)}/100 mastery evidence. Your topic score also reflects practice volume and all saved answers. Step ${response.step_number} of ${response.total_steps}.`;
+      reward.textContent = `Step ${response.step_number} of ${response.total_steps}. Sensei will remember that you used support here.`;
       reward.classList.remove("final");
       button.textContent = "Ask Sensei for help";
     }
@@ -1432,7 +958,7 @@ async function postJson(path, document, { retries = 0, onRetry = null } = {}) {
 }
 
 async function checkAnswer() {
-  if (!activeQuest || revealingHelp) return;
+  if (!activeQuest || revealingHelp || checkingAnswer || activeFeedback) return;
   const challengeToken = activeQuest.challenge_token;
   const multiPart = activeQuest.answer_type === "multi_part";
   let answer;
@@ -1449,19 +975,19 @@ async function checkAnswer() {
       answer[part.label] = value;
     }
   } else {
-    answer = byId("quest-answer").value.trim();
-    if (!answer) { byId("quest-answer").focus(); return; }
+    answer = byId("practice-answer").value.trim();
+    if (!answer) { byId("practice-answer").focus(); return; }
   }
   const button = byId("check-answer");
+  checkingAnswer = true;
   resetArenaFeedback();
   button.disabled = true;
   byId("ask-sensei-help").disabled = true;
   try {
-    const response = await postJson("/api/quest/check", { challenge_token: challengeToken, answer });
+    const response = await postJson("/api/practice/check", { challenge_token: challengeToken, answer });
     if (!activeQuest || activeQuest.challenge_token !== challengeToken) return;
     const result = response.result;
     attemptToken = response.attempt_token;
-    activeAnswer = multiPart ? Object.values(answer).join(" · ") : answer;
     const feedback = byId("answer-feedback");
     const outcome = response.outcome || (result.status === "verified_correct" ? "correct" : "incorrect");
     const correct = outcome === "correct";
@@ -1477,10 +1003,10 @@ async function checkAnswer() {
     const parts = Array.isArray(response.parts) ? response.parts : [];
     const correctParts = parts.filter((part) => part.status === "verified_correct").length;
     byId("feedback-status").textContent = correct
-      ? "Victory — your answer holds."
+      ? "That’s correct."
       : outcome === "partial"
         ? `Partial — ${correctParts} of ${parts.length} parts hold.`
-        : "Not yet — this encounter has another opening.";
+        : "Not quite yet. Let’s work through it.";
     const detail = byId("feedback-detail");
     const showTechnicalDetail = activeQuest.source !== "adaptive";
     setNotationText(detail, showTechnicalDetail ? result.detail : "");
@@ -1506,10 +1032,11 @@ async function checkAnswer() {
     byId("record-attempt").hidden = !attemptToken;
     feedback.hidden = false;
     feedback.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    byId("quest-answer").disabled = true;
+    byId("practice-answer").disabled = true;
     byId("option-grid").querySelectorAll("button").forEach((option) => { option.disabled = true; });
     byId("part-list").querySelectorAll("input, button").forEach((control) => { control.disabled = true; });
     byId("ask-sensei-help").disabled = true;
+    if (attemptToken) await recordAttempt();
   } catch (error) {
     void reportClientProblem(error, "checkAnswer");
     const feedback = byId("answer-feedback");
@@ -1519,6 +1046,7 @@ async function checkAnswer() {
     byId("feedback-detail").hidden = false;
     feedback.hidden = false;
   } finally {
+    checkingAnswer = false;
     button.disabled = Boolean(activeFeedback);
     byId("ask-sensei-help").disabled = helpExhausted || Boolean(activeFeedback);
   }
@@ -1529,10 +1057,10 @@ async function recordAttempt() {
   const button = byId("record-attempt");
   button.disabled = true;
   try {
-    const response = await postJson("/api/quest/record", { attempt_token: attemptToken });
+    const response = await postJson("/api/practice/record", { attempt_token: attemptToken });
     attemptToken = null;
-    attemptRecorded = true;
-    byId("feedback-expected").textContent = `Recorded: +${response.progress.xp_awarded} XP · ${Math.round(response.progress.mastery_evidence)}/100 attempt evidence · ${Math.round(response.progress.mastery_score)}/100 topic mastery.`;
+    byId("feedback-detail").textContent = "Progress saved. Sensei will use this answer and any help you needed to plan your next step.";
+    byId("feedback-detail").hidden = false;
     button.hidden = true;
     byId("continue-practice").hidden = false;
     await loadDashboard();
@@ -1547,10 +1075,8 @@ async function recordAttempt() {
 
 function render(state) {
   dashboardState = state;
-  renderProfile(state.profile);
-  byId("practiced").textContent = state.study_topics.length;
-  renderTopics(state.study_topics);
-  renderStudySets(state.study_topics, state.topic_folders || []);
+
+  renderStudySets();
   renderHistory(state.recent_attempts);
   const modelState = state.runtime.adaptive_generation === "ready" ? "LLM API ready" : "LLM API unavailable";
   byId("updated-at").textContent = `${modelState} · synced ${new Date(state.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
@@ -1578,23 +1104,6 @@ async function loadDashboard() {
   }
 }
 
-function tierLabel(tier) {
-  const labels = {
-    foundational: "Foundational — isolate the skill",
-    standard: "Standard — a typical exam problem",
-    challenging: "Challenging — an extra step, less scaffolding",
-    synthesis: "Synthesis — combine with prerequisite skills",
-  };
-  return labels[tier] || tier;
-}
-
-function renderSessionBrief(materialCount, tier) {
-  const count = Number(materialCount) || 0;
-  byId("session-materials").textContent = count
-    ? `${count} saved exemplar${count === 1 ? "" : "s"} guide this problem's style.`
-    : "None yet — add homework or exam problems so Sensei can match your class.";
-  byId("session-tier").textContent = tier ? tierLabel(tier) : "Chosen from your mastery when the problem is drafted.";
-}
 
 function renderParts(quest) {
   const list = byId("part-list");
@@ -1684,164 +1193,6 @@ function renderPartResults(parts) {
   list.hidden = parts.length === 0;
 }
 
-function kindLabel(kind) {
-  return { example_problem: "Problem", worked_example: "Worked example", notes: "Notes" }[kind] || kind;
-}
-
-function subjectProfileFor(subject) {
-  const profiles = dashboardState?.subject_profiles || {};
-  const key = subjectKey(subject);
-  const match = Object.keys(profiles).find((name) => subjectKey(name) === key);
-  return match ? profiles[match] : "";
-}
-
-function closeMaterialDialog() {
-  const dialog = byId("material-dialog");
-  if (dialog.open) dialog.close();
-  materialTopic = null;
-  materialProposals = [];
-  byId("material-dialog-status").textContent = "";
-}
-
-function renderMaterialList(materials) {
-  const list = byId("material-list");
-  list.replaceChildren();
-  if (!materials.length) {
-    const empty = document.createElement("p");
-    empty.className = "folder-topic-empty";
-    empty.textContent = "No class material yet. Paste a homework or exam problem below, or scan a page.";
-    list.append(empty);
-    return;
-  }
-  materials.forEach((material) => {
-    const item = document.createElement("article");
-    item.className = "material-item";
-    const heading = document.createElement("div");
-    heading.className = "material-heading";
-    const kind = document.createElement("span");
-    kind.className = "material-kind";
-    kind.textContent = kindLabel(material.kind);
-    const source = document.createElement("strong");
-    source.textContent = material.source_label || "Untitled";
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "material-delete";
-    remove.textContent = "Remove";
-    remove.setAttribute("aria-label", `Remove ${material.source_label || "this material"}`);
-    remove.addEventListener("click", () => deleteMaterial(material, remove));
-    heading.append(kind, source, remove);
-    const body = document.createElement("p");
-    body.className = "material-body";
-    setNotationText(body, material.body);
-    item.append(heading, body);
-    if (material.solution) {
-      const solution = document.createElement("p");
-      solution.className = "material-solution";
-      setNotationText(solution, `Solution: ${material.solution}`);
-      item.append(solution);
-    }
-    list.append(item);
-  });
-}
-
-async function openMaterialDialog(topic) {
-  materialTopic = topic;
-  materialProposals = [];
-  byId("material-dialog-subject").textContent = topic.course;
-  byId("material-dialog-title").textContent = `Class material · ${topic.name}`;
-  byId("material-profile-subject").textContent = topic.course;
-  byId("material-profile").value = subjectProfileFor(topic.course);
-  byId("material-kind").value = "example_problem";
-  byId("material-body").value = "";
-  byId("material-solution").value = "";
-  byId("material-source").value = "";
-  byId("material-file").value = "";
-  byId("material-proposals").replaceChildren();
-  byId("material-save-proposals").hidden = true;
-  byId("material-list").replaceChildren();
-  byId("material-dialog-status").textContent = "Loading saved material…";
-  byId("material-dialog").showModal();
-  try {
-    const response = await fetch(`/api/study/materials?skill_id=${encodeURIComponent(topic.id)}`, { cache: "no-store" });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || `Request failed: ${response.status}`);
-    renderMaterialList(result.materials || []);
-    byId("material-dialog-status").textContent = "";
-  } catch (error) {
-    void reportClientProblem(error, "openMaterialDialog");
-    byId("material-dialog-status").textContent = error.message;
-  }
-  requestAnimationFrame(() => byId("material-body").focus());
-}
-
-async function addMaterials(materials, statusText) {
-  if (!materialTopic) return;
-  byId("material-dialog-status").textContent = statusText;
-  const response = await postJson("/api/study/materials/add", { skill_id: materialTopic.id, materials });
-  renderMaterialList(response.materials || []);
-  materialTopic = { ...materialTopic, material_count: response.material_count };
-  await loadDashboard();
-}
-
-async function addPastedMaterial(event) {
-  event.preventDefault();
-  const body = byId("material-body").value.trim();
-  if (!body) { byId("material-body").focus(); return; }
-  const button = byId("material-add");
-  button.disabled = true;
-  try {
-    await addMaterials(
-      [{
-        kind: byId("material-kind").value,
-        body,
-        solution: byId("material-solution").value.trim(),
-        source_label: byId("material-source").value.trim(),
-      }],
-      "Saving this problem…",
-    );
-    byId("material-body").value = "";
-    byId("material-solution").value = "";
-    byId("material-source").value = "";
-    byId("material-dialog-status").textContent = "Saved. Sensei will imitate it on the next problem.";
-  } catch (error) {
-    void reportClientProblem(error, "addPastedMaterial");
-    byId("material-dialog-status").textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-}
-
-async function deleteMaterial(material, button) {
-  if (!window.confirm("Remove this class material? Sensei will stop imitating it.")) return;
-  button.disabled = true;
-  try {
-    const response = await postJson("/api/study/materials/delete", { material_id: material.id });
-    renderMaterialList(response.materials || []);
-    if (materialTopic) materialTopic = { ...materialTopic, material_count: response.material_count };
-    await loadDashboard();
-  } catch (error) {
-    void reportClientProblem(error, "deleteMaterial");
-    byId("material-dialog-status").textContent = error.message;
-    button.disabled = false;
-  }
-}
-
-async function saveCourseProfile() {
-  if (!materialTopic) return;
-  const button = byId("material-profile-save");
-  button.disabled = true;
-  byId("material-dialog-status").textContent = "Saving the course profile…";
-  try {
-    await postJson("/api/study/profile", { subject: materialTopic.course, profile: byId("material-profile").value.trim() });
-    await loadDashboard();
-    byId("material-dialog-status").textContent = "Course profile saved for every topic in this subject.";
-  } catch (error) {
-    void reportClientProblem(error, "saveCourseProfile");
-    byId("material-dialog-status").textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-}
 
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -1855,182 +1206,64 @@ function fileToBase64(file) {
   });
 }
 
-function renderProposals(proposals) {
-  const container = byId("material-proposals");
-  container.replaceChildren();
-  proposals.forEach((proposal, index) => {
-    const item = document.createElement("div");
-    item.className = "material-proposal";
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = true;
-    checkbox.dataset.index = String(index);
-    checkbox.setAttribute("aria-label", `Save scanned item ${index + 1}`);
-    const fields = document.createElement("div");
-    fields.className = "material-proposal-fields";
-    const meta = document.createElement("div");
-    meta.className = "material-proposal-meta";
-    const kind = document.createElement("select");
-    kind.dataset.field = "kind";
-    ["example_problem", "worked_example", "notes"].forEach((value) => {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = kindLabel(value);
-      option.selected = proposal.kind === value;
-      kind.append(option);
-    });
-    const source = document.createElement("input");
-    source.type = "text";
-    source.maxLength = 120;
-    source.placeholder = "Source, e.g. HW 4 #7";
-    source.value = proposal.source_label || "";
-    source.dataset.field = "source_label";
-    meta.append(kind, source);
-    const body = document.createElement("textarea");
-    body.rows = 4;
-    body.maxLength = 4000;
-    body.value = proposal.body || "";
-    body.dataset.field = "body";
-    const solution = document.createElement("textarea");
-    solution.rows = 2;
-    solution.maxLength = 4000;
-    solution.placeholder = "Printed solution or answer (optional)";
-    solution.value = proposal.solution || "";
-    solution.dataset.field = "solution";
-    fields.append(meta, body, solution);
-    item.append(checkbox, fields);
-    container.append(item);
-  });
-  byId("material-save-proposals").hidden = proposals.length === 0;
+
+function guideForSkill(skillId) {
+  return (dashboardState?.study_guides || []).find((guide) => guide.concepts.some((concept) => concept.skill_id === skillId));
 }
 
-async function scanMaterialFile() {
-  if (!materialTopic) return;
-  const status = byId("material-dialog-status");
-  const file = byId("material-file").files?.[0];
-  if (!file) { status.textContent = "Choose a PDF or photo first."; return; }
-  const isPdf = file.type === "application/pdf";
-  if (!isPdf && !IMAGE_TYPES.includes(file.type)) {
-    status.textContent = "Upload a PDF or a PNG, JPEG, or WebP image.";
-    return;
-  }
-  if (file.size > (isPdf ? MAX_UPLOAD_BYTES : MAX_IMAGE_BYTES)) {
-    status.textContent = isPdf ? "PDF files must be 20 MB or smaller." : "Images must be 8 MB or smaller.";
-    return;
-  }
-  const button = byId("material-scan");
-  button.disabled = true;
-  status.textContent = "Sensei is reading the page and transcribing its problems…";
-  try {
-    const response = await postJson("/api/study/materials/scan", {
-      skill_id: materialTopic.id,
-      filename: file.name,
-      media_base64: await fileToBase64(file),
-      media_type: file.type,
-    });
-    materialProposals = response.proposals || [];
-    renderProposals(materialProposals);
-    status.textContent = materialProposals.length
-      ? `Found ${materialProposals.length} item${materialProposals.length === 1 ? "" : "s"}. Review, edit, and save the ones you want.`
-      : "No problems were found on that page.";
-  } catch (error) {
-    void reportClientProblem(error, "scanMaterialFile");
-    status.textContent = error.message;
-  } finally {
-    button.disabled = false;
+function followGuide(guide, statusTarget) {
+  if (!guide?.next) return;
+  const next = guide.next;
+  if (next.action === "learn") {
+    void startLesson(next.skill_id, statusTarget, { restart: false });
+  } else {
+    void startAdaptiveQuest(next.skill_id, statusTarget, { resetSession: activeSessionSkillId !== next.skill_id });
   }
 }
 
-async function saveSelectedProposals() {
-  const rows = Array.from(byId("material-proposals").querySelectorAll(".material-proposal"));
-  const materials = rows
-    .filter((row) => row.querySelector('input[type="checkbox"]').checked)
-    .map((row) => ({
-      kind: row.querySelector('[data-field="kind"]').value,
-      body: row.querySelector('[data-field="body"]').value.trim(),
-      solution: row.querySelector('[data-field="solution"]').value.trim(),
-      source_label: row.querySelector('[data-field="source_label"]').value.trim(),
-    }))
-    .filter((material) => material.body);
-  if (!materials.length) {
-    byId("material-dialog-status").textContent = "Select at least one item with problem text.";
-    return;
-  }
-  const button = byId("material-save-proposals");
-  button.disabled = true;
-  try {
-    await addMaterials(materials, "Saving scanned material…");
-    byId("material-proposals").replaceChildren();
-    materialProposals = [];
-    button.hidden = true;
-    byId("material-file").value = "";
-    byId("material-dialog-status").textContent = `Saved ${materials.length} item${materials.length === 1 ? "" : "s"}.`;
-  } catch (error) {
-    void reportClientProblem(error, "saveSelectedProposals");
-    byId("material-dialog-status").textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-}
-
-function renderStudySets(topics, folders) {
+function renderStudySets() {
   const container = byId("study-sets");
   container.replaceChildren();
-  const hasContent = topics.length > 0 || folders.length > 0;
-  byId("empty-study-sets").hidden = hasContent;
-  if (!hasContent) {
-    byId("study-sets-summary").textContent = "";
-    return;
-  }
-  const groups = groupTopicsBySubject(topics, folders);
-  byId("study-sets-summary").textContent = `${topics.length} topic${topics.length === 1 ? "" : "s"} in ${folders.length} study set${folders.length === 1 ? "" : "s"}.`;
-  groups.forEach((group, groupIndex) => {
-    group.folders.forEach((folder, folderIndex) => {
-      const folderTopics = group.topics
-        .filter((topic) => topic.folder_id === folder.id)
-        .sort((left, right) => Number(left.sort_order) - Number(right.sort_order));
-      const section = document.createElement("section");
-      section.className = "subject-group study-set";
-      const heading = document.createElement("div");
-      heading.className = "subject-group-heading";
-      const title = document.createElement("h3");
-      title.id = `study-set-${groupIndex}-${folderIndex}`;
-      title.textContent = `${group.subject} · ${folder.name}`;
-      section.setAttribute("aria-labelledby", title.id);
-      const count = document.createElement("span");
-      count.textContent = `${folderTopics.length} topic${folderTopics.length === 1 ? "" : "s"}`;
-      heading.append(title, count);
-      section.append(heading);
-      const grid = document.createElement("div");
-      grid.className = "skill-grid";
-      folderTopics.forEach((topic) => grid.append(topicCard(topic)));
-      if (!folderTopics.length) {
-        const empty = document.createElement("p");
-        empty.className = "empty-folder-copy";
-        empty.textContent = "This study set has no topics yet.";
-        section.append(empty);
-      } else {
-        section.append(grid);
-      }
-      container.append(section);
-    });
-    const unfiled = group.topics.filter((topic) => !topic.folder_id || !folderById(topic.folder_id));
-    if (unfiled.length) {
-      const section = document.createElement("section");
-      section.className = "subject-group study-set";
-      const heading = document.createElement("div");
-      heading.className = "subject-group-heading";
-      const title = document.createElement("h3");
-      title.textContent = group.folders.length ? `${group.subject} · Other topics` : group.subject;
-      const count = document.createElement("span");
-      count.textContent = `${unfiled.length} topic${unfiled.length === 1 ? "" : "s"}`;
-      heading.append(title, count);
-      const grid = document.createElement("div");
-      grid.className = "skill-grid";
-      unfiled.forEach((topic) => grid.append(topicCard(topic)));
-      section.append(heading, grid);
-      container.append(section);
+  const guides = dashboardState.study_guides || [];
+  byId("empty-study-sets").hidden = guides.length > 0;
+  byId("study-sets-summary").textContent = guides.length ? "Sensei chooses the next step from your answers." : "";
+  guides.forEach((guide) => {
+    const section = document.createElement("article");
+    section.className = "panel guide-card";
+    const eyebrow = notationParagraph(guide.subject || guide.course || "Study guide", "eyebrow");
+    const title = document.createElement("h3");
+    title.textContent = guide.name;
+    const coverage = notationParagraph(`${guide.checked} of ${guide.concepts.length} concepts checked · understanding grows through practice`, "guide-coverage");
+    section.append(eyebrow, title, coverage);
+    if (guide.next) {
+      const focus = document.createElement("h4");
+      focus.textContent = `Next: ${guide.next.name}`;
+      const reason = notationParagraph(guide.next.reason);
+      const status = document.createElement("p");
+      status.className = "generation-status";
+      status.setAttribute("role", "status");
+      restoreGenerationStatus(status, guide.next.skill_id);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "primary-button";
+      button.textContent = guide.next.label;
+      button.addEventListener("click", () => followGuide(guide, status));
+      section.append(focus, reason, button, status);
     }
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = "What Sensei is learning about you";
+    details.append(summary);
+    const list = document.createElement("ul");
+    guide.concepts.forEach((concept) => {
+      const row = document.createElement("li");
+      row.textContent = `${concept.name} — ${concept.status}`;
+      concept.mistakes.forEach((mistake) => row.append(notationParagraph(`Possible gap: ${mistake}`)));
+      list.append(row);
+    });
+    details.append(list);
+    section.append(details);
+    container.append(section);
   });
 }
 
@@ -2121,7 +1354,7 @@ function renderPlanReview(plan) {
     name.maxLength = 120;
     name.value = topic.name || "";
     name.dataset.field = "name";
-    name.setAttribute("aria-label", "Topic name");
+    name.setAttribute("aria-label", "Concept name");
     const section = document.createElement("span");
     section.className = "plan-topic-section";
     section.textContent = topic.section ? `§ ${topic.section}` : "";
@@ -2153,8 +1386,8 @@ function renderPlanReview(plan) {
     list.append(row);
   });
   const topicCount = (plan.topics || []).length;
-  byId("plan-summary").textContent = `${topicCount} topic${topicCount === 1 ? "" : "s"} · ${plan.material_count || 0} example problem${plan.material_count === 1 ? "" : "s"}`;
-  byId("plan-status").textContent = "Uncheck anything you do not need, rename topics, then create the plan.";
+  byId("plan-summary").textContent = `${topicCount} concept${topicCount === 1 ? "" : "s"} · ${plan.material_count || 0} example problem${plan.material_count === 1 ? "" : "s"}`;
+  byId("plan-status").textContent = "Check that this matches your guide. Sensei will choose where to start.";
   byId("plan-review").hidden = false;
   byId("plan-review").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -2210,7 +1443,7 @@ async function createStudyPlan() {
     await loadDashboard();
     setGenerationStatus(
       byId("import-status"),
-      `Created “${response.folder.name}” with ${response.topics.length} topic${response.topics.length === 1 ? "" : "s"} and ${response.added_materials} example problem${response.added_materials === 1 ? "" : "s"}. Pick a topic below to train.`,
+      `Created “${response.folder.name}” with ${response.topics.length} concept${response.topics.length === 1 ? "" : "s"} and ${response.added_materials} example problem${response.added_materials === 1 ? "" : "s"}. Sensei has chosen your first check-in below.`,
       "success",
     );
     byId("study-sets-section").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -2239,14 +1472,14 @@ document.querySelectorAll(".nav-tab").forEach((tab, index, tabs) => {
 });
 document.querySelector(".brand").addEventListener("click", (event) => {
   event.preventDefault();
-  showView("dojo");
+  showView("study");
 });
 window.addEventListener("hashchange", () => showView(viewFromHash(), { updateHash: false }));
 byId("new-question").addEventListener("click", () => {
   if (activeQuest) startAdaptiveQuest(activeQuest.skill_id, byId("arena-generation-status"));
 });
 byId("continue-practice").addEventListener("click", () => {
-  if (activeQuest) startAdaptiveQuest(activeQuest.skill_id, byId("arena-generation-status"));
+  if (activeQuest) followGuide(guideForSkill(activeQuest.skill_id), byId("arena-generation-status"));
 });
 byId("close-arena").addEventListener("click", closeArena);
 byId("close-lesson").addEventListener("click", closeLesson);
@@ -2258,24 +1491,8 @@ byId("lesson-question").addEventListener("keydown", (event) => { if (event.key =
 byId("ask-sensei-help").addEventListener("click", askSenseiForHelp);
 byId("check-answer").addEventListener("click", checkAnswer);
 byId("record-attempt").addEventListener("click", recordAttempt);
-byId("quest-answer").addEventListener("keydown", (event) => { if (event.key === "Enter") checkAnswer(); });
+byId("practice-answer").addEventListener("keydown", (event) => { if (event.key === "Enter") checkAnswer(); });
 byId("refresh-button").addEventListener("click", loadDashboard);
-byId("folder-form").addEventListener("submit", saveFolder);
-byId("folder-cancel").addEventListener("click", closeFolderDialog);
-byId("folder-dialog-close").addEventListener("click", closeFolderDialog);
-byId("folder-delete").addEventListener("click", deleteFolder);
-byId("material-form").addEventListener("submit", addPastedMaterial);
-byId("material-dialog-close").addEventListener("click", closeMaterialDialog);
-byId("material-done").addEventListener("click", closeMaterialDialog);
-byId("material-profile-save").addEventListener("click", saveCourseProfile);
-byId("material-scan").addEventListener("click", scanMaterialFile);
-byId("material-save-proposals").addEventListener("click", saveSelectedProposals);
-byId("material-dialog").addEventListener("click", (event) => {
-  if (event.target === byId("material-dialog")) closeMaterialDialog();
-});
-byId("folder-dialog").addEventListener("click", (event) => {
-  if (event.target === byId("folder-dialog")) closeFolderDialog();
-});
 showView(viewFromHash());
 loadDashboard();
 setInterval(() => { if (!document.hidden && !generatingQuestion && !generatingLesson) loadDashboard(); }, 30000);

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sensei-calculus-tutor"
-version = "0.11.0"
+version = "0.12.0"
 description = "An API-backed tutor with learner-owned local SQLite memory"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-sensei = "sensei.cli:main"
+sensei = "sensei.dashboard:main"
 sensei-dashboard = "sensei.dashboard:main"
 
 [tool.setuptools.packages.find]
@@ -23,6 +23,7 @@ include = ["sensei*"]
 
 [tool.setuptools.package-data]
 sensei = [
+    "schema.sql",
     "web/*.html",
     "web/*.css",
     "web/*.js",

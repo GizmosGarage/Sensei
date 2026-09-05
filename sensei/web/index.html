@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="An API-backed, learner-directed RPG practice tutor with local learning memory.">
-    <title>Sensei // Adaptive Dojo</title>
+    <meta name="description" content="An adaptive tutor that turns your study guide into focused help and remembers where you struggle.">
+    <title>Sensei · Your study companion</title>
     <link rel="stylesheet" href="/assets/vendor/katex/katex-swap.min.css">
     <link rel="stylesheet" href="/assets/styles.css">
     <script src="/assets/vendor/katex/katex.min.js" defer></script>
@@ -15,14 +15,13 @@
   <body>
     <div class="ambient-grid" aria-hidden="true"></div>
     <header class="topbar">
-      <a class="brand" href="#dojo" aria-label="Enter Sensei's dojo">
+      <a class="brand" href="#study" aria-label="Study with Sensei">
         <span class="brand-mark" aria-hidden="true">道</span>
-        <span><strong>Sensei</strong><small>Adaptive Dojo</small></span>
+        <span><strong>Sensei</strong><small>Your study companion</small></span>
       </a>
       <nav class="primary-nav" aria-label="Sensei sections" role="tablist">
-        <button class="nav-tab active" id="dojo-tab" type="button" role="tab" aria-selected="true" aria-controls="dojo-view" data-view="dojo">Dojo</button>
-        <button class="nav-tab" id="profile-tab" type="button" role="tab" aria-selected="false" aria-controls="profile-view" data-view="profile" tabindex="-1">Profile</button>
-        <button class="nav-tab" id="past-quest-tab" type="button" role="tab" aria-selected="false" aria-controls="past-quest-view" data-view="past-quest" tabindex="-1">Past Quest</button>
+        <button class="nav-tab active" id="study-tab" type="button" role="tab" aria-selected="true" aria-controls="study-view" data-view="study">Study</button>
+        <button class="nav-tab" id="history-tab" type="button" role="tab" aria-selected="false" aria-controls="history-view" data-view="history" tabindex="-1">Learning history</button>
       </nav>
       <div class="topbar-actions">
         <span class="connection-badge"><i aria-hidden="true"></i> LLM API</span>
@@ -31,12 +30,12 @@
     </header>
 
     <main id="top">
-      <section class="app-view dojo-view" id="dojo-view" role="tabpanel" aria-labelledby="dojo-tab" tabindex="0">
+      <section class="app-view study-view" id="study-view" role="tabpanel" aria-labelledby="study-tab" tabindex="0">
         <section class="forge-section panel import-section" id="import-section" aria-labelledby="import-heading">
           <div class="import-heading">
             <p class="eyebrow">Start here</p>
-            <h2 id="import-heading">Turn a study guide into a study plan</h2>
-            <p class="import-copy">Upload your exam study guide, syllabus, review sheet, or a textbook section. Sensei reads it, lists the skills the exam expects, and keeps the document's own problems as the model for every practice problem it writes.</p>
+            <h2 id="import-heading">Start with what you need to learn</h2>
+            <p class="import-copy">Upload your study guide. Sensei checks what you understand, helps you work through the gaps, and remembers what needs another look. One step at a time.</p>
           </div>
           <form class="focus-form import-form" id="import-form">
             <div class="import-mode" role="group" aria-label="Source">
@@ -47,7 +46,7 @@
             <label id="import-text-row" hidden>Study guide text<textarea id="import-text" rows="8" maxlength="200000" placeholder="Paste the study guide, syllabus, or textbook section here."></textarea></label>
             <div class="field-pair">
               <label>Subject <span>optional</span><input id="import-subject" maxlength="80" autocomplete="off" placeholder="MAC2311 Calculus I"></label>
-              <label>Study set name <span>optional</span><input id="import-set-name" maxlength="80" autocomplete="off" placeholder="Test 1"></label>
+              <label>Guide name <span>optional</span><input id="import-set-name" maxlength="80" autocomplete="off" placeholder="Test 1"></label>
             </div>
             <div class="form-action-row">
               <p id="import-status" role="status">Your document is sent only to the analysis model and is never stored.</p>
@@ -56,28 +55,28 @@
           </form>
           <div class="focus-form plan-review" id="plan-review" hidden>
             <div class="plan-review-heading">
-              <div><p class="eyebrow">Review the plan</p><h3>Sensei found these topics</h3></div>
+              <div><p class="eyebrow">Review the plan</p><h3>Here’s what we’ll work through</h3></div>
               <p class="plan-summary" id="plan-summary"></p>
             </div>
             <div class="field-pair">
               <label>Subject<input id="plan-subject" maxlength="80" autocomplete="off"></label>
-              <label>Study set name<input id="plan-set-name" maxlength="80" autocomplete="off"></label>
+              <label>Guide name<input id="plan-set-name" maxlength="80" autocomplete="off"></label>
             </div>
-            <label class="context-row">Course profile <span>applies to every topic in this subject</span><textarea id="plan-profile" rows="3" maxlength="2000"></textarea></label>
-            <ol class="plan-topics" id="plan-topics" aria-label="Proposed topics"></ol>
+            <label class="context-row">Class instructions <span>notation, methods, and expectations</span><textarea id="plan-profile" rows="3" maxlength="2000"></textarea></label>
+            <ol class="plan-topics" id="plan-topics" aria-label="Concepts from your guide"></ol>
             <div class="form-action-row">
-              <p id="plan-status" role="status">Uncheck anything you do not need, rename topics, then create the plan.</p>
+              <p id="plan-status" role="status">Check that this matches your guide. Sensei will choose where to start.</p>
               <div class="plan-actions">
                 <button class="secondary-button" id="plan-discard" type="button">Discard</button>
-                <button class="primary-button" id="plan-create" type="button">Create study plan</button>
+                <button class="primary-button" id="plan-create" type="button">Use this guide</button>
               </div>
             </div>
           </div>
         </section>
 
-        <section class="arena-section panel" id="quest-arena" aria-labelledby="arena-title" hidden>
+        <section class="arena-section panel" id="practice-panel" aria-labelledby="arena-title" hidden>
           <div class="arena-heading">
-            <div><p class="eyebrow" id="arena-skill">Selected discipline</p><h2 id="arena-title">Practice chat</h2></div>
+            <div><p class="eyebrow" id="arena-skill">Current focus</p><h2 id="arena-title">Practice chat</h2></div>
             <div class="arena-actions">
               <button class="secondary-button" id="new-question" type="button">Skip to next problem</button>
               <button class="icon-button" id="close-arena" type="button" aria-label="Close practice chat">Close</button>
@@ -85,19 +84,6 @@
           </div>
           <p class="generation-status arena-generation-status" id="arena-generation-status" role="status"></p>
           <div class="chat-thread" id="chat-thread" aria-live="polite">
-            <article class="chat-message learner-message study-brief-message">
-              <span class="chat-avatar" aria-hidden="true">You</span>
-              <div class="chat-bubble">
-                <p class="chat-role">Your study brief</p>
-                <dl class="study-brief">
-                  <div><dt>Subject</dt><dd id="session-subject"></dd></div>
-                  <div><dt>Atlas topic</dt><dd id="session-topic"></dd></div>
-                  <div><dt>Practice brief</dt><dd id="session-context"></dd></div>
-                  <div><dt>Class material</dt><dd id="session-materials"></dd></div>
-                  <div><dt>Target</dt><dd id="session-tier"></dd></div>
-                </dl>
-              </div>
-            </article>
             <div class="chat-history" id="chat-history"></div>
             <article class="chat-message sensei-chat-message" id="active-problem-turn">
               <span class="chat-avatar sensei-chat-avatar" aria-hidden="true">道</span>
@@ -112,7 +98,7 @@
                 <div class="option-grid" id="option-grid"></div>
                 <div class="coach-row">
                   <button class="help-button" id="ask-sensei-help" type="button" aria-describedby="help-policy">Ask Sensei for help</button>
-                  <p class="help-policy" id="help-policy">Reveals one next step. Each use lowers potential XP and mastery; revealing the final answer reduces both rewards to zero.</p>
+                  <p class="help-policy" id="help-policy">Ask whenever you need help. Sensei distinguishes supported answers from independent understanding.</p>
                   <p class="notation-help" id="notation-help"></p>
                 </div>
                 <div class="help-panel" id="help-panel" hidden>
@@ -136,16 +122,16 @@
                 <p class="likely-mistake" id="likely-mistake" hidden></p>
                 <div class="solution-copy" id="solution-copy" hidden><strong>Sensei’s walkthrough</strong><p id="solution-text"></p></div>
                 <div class="feedback-actions">
-                  <button class="secondary-button" id="record-attempt" type="button" hidden>Save progress to Atlas</button>
-                  <button class="primary-button" id="continue-practice" type="button" hidden>Next problem</button>
+                  <button class="secondary-button" id="record-attempt" type="button" hidden>Retry saving progress</button>
+                  <button class="primary-button" id="continue-practice" type="button" hidden>Continue with Sensei</button>
                 </div>
               </div>
             </div>
           </div>
           <div class="chat-composer">
-            <label class="answer-label" for="quest-answer">Message Sensei</label>
+            <label class="answer-label" for="practice-answer">Message Sensei</label>
             <div class="answer-row">
-              <input id="quest-answer" type="text" maxlength="500" autocomplete="off" spellcheck="false" placeholder="Type your answer">
+              <input id="practice-answer" type="text" maxlength="500" autocomplete="off" spellcheck="false" placeholder="Type your answer">
               <button class="primary-button" id="check-answer" type="button">Send answer</button>
             </div>
           </div>
@@ -153,7 +139,7 @@
 
         <section class="arena-section lesson-section panel" id="lesson-panel" aria-labelledby="lesson-title" hidden>
           <div class="arena-heading">
-            <div><p class="eyebrow" id="lesson-skill">Selected discipline</p><h2 id="lesson-title">Guided lesson</h2></div>
+            <div><p class="eyebrow" id="lesson-skill">Current focus</p><h2 id="lesson-title">Guided lesson</h2></div>
             <div class="arena-actions">
               <button class="secondary-button" id="lesson-restart" type="button">Start lesson over</button>
               <button class="icon-button" id="close-lesson" type="button" aria-label="Close lesson">Close</button>
@@ -163,7 +149,7 @@
           <div class="lesson-progress">
             <span id="lesson-progress-label" role="status">Step 1 of 1</span>
             <div class="progress-track" aria-label="Lesson progress"><i id="lesson-progress-bar"></i></div>
-            <p class="lesson-policy">Answer each check-in to unlock the next step. Finishing a lesson earns a one-time XP bonus; mastery only moves when you train.</p>
+            <p class="lesson-policy">Work through each step, then check your understanding. Independent practice shows what you can apply.</p>
           </div>
           <div class="chat-thread" id="lesson-thread" aria-live="polite"></div>
           <div class="chat-composer" id="lesson-check-composer">
@@ -184,160 +170,29 @@
 
         <section class="study-sets-section" id="study-sets-section" aria-labelledby="study-sets-heading">
           <div class="section-heading compact">
-            <div><p class="eyebrow">Your study sets</p><h2 id="study-sets-heading">Train a topic</h2></div>
+            <div><p class="eyebrow">Your learning</p><h2 id="study-sets-heading">Pick up where you left off</h2></div>
             <p class="atlas-summary" id="study-sets-summary"></p>
           </div>
           <div class="atlas-groups" id="study-sets" aria-live="polite"></div>
           <div class="empty-atlas panel" id="empty-study-sets">
-            <span aria-hidden="true">📄</span><p>Import a study guide above. Sensei will list the topics your exam expects, each with its own mastery score and unlimited practice problems.</p>
+            <span aria-hidden="true">📄</span><p>Your first guide starts here. We’ll check each concept before deciding what needs more attention.</p>
           </div>
         </section>
       </section>
 
-      <section class="app-view profile-view" id="profile-view" role="tabpanel" aria-labelledby="profile-tab" tabindex="0" hidden>
-        <article class="rank-card panel" aria-labelledby="rank-heading">
-          <div class="rank-ring" id="rank-ring">
-            <div><span>LVL</span><strong id="level">1</strong></div>
-          </div>
-          <div class="rank-copy">
-            <p class="panel-kicker">Current rank</p>
-            <h2 id="rank-heading"><span id="rank-name">Dojo Novice</span></h2>
-            <div class="xp-label"><span id="xp-summary">0 / 100 XP</span><span id="total-xp">0 total</span></div>
-            <div class="progress-track" aria-label="Experience toward next level"><i id="xp-progress"></i></div>
-            <dl class="mini-stats">
-              <div><dt>Attempts</dt><dd id="attempts">0</dd></div>
-              <div><dt>Topics</dt><dd id="practiced">0</dd></div>
-              <div><dt>Mastered</dt><dd id="mastered">0</dd></div>
-            </dl>
-          </div>
-        </article>
-
-        <section class="mastery-section" aria-labelledby="mastery-heading">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Your growing atlas</p><h2 id="mastery-heading">Practiced realms</h2>
-              <p class="mastery-policy">Mastery reflects accuracy and practice volume. XP is tracked separately.</p>
-            </div>
-            <p class="atlas-summary" id="atlas-summary">No fixed curriculum. Add only what matters to you.</p>
-          </div>
-          <div class="atlas-controls" id="atlas-controls" hidden>
-            <div class="atlas-filter-copy">
-              <p class="atlas-filter-label" id="atlas-filter-label">Show topics</p>
-              <p>Choose a subject, then file its topics into named folders like a desktop.</p>
-            </div>
-            <div class="unit-filters" id="subject-filters" role="group" aria-labelledby="atlas-filter-label"></div>
-          </div>
-          <div class="atlas-groups" id="skill-grid" aria-live="polite"></div>
-          <div class="empty-atlas panel" id="empty-atlas">
-            <span aria-hidden="true">＋</span><p>Your first topic will appear here with its own mastery score, review schedule, and quest history.</p>
-          </div>
-        </section>
-      </section>
-
-      <section class="app-view past-quest-view history-section" id="past-quest-view" role="tabpanel" aria-labelledby="past-quest-tab" tabindex="0" hidden>
+      <section class="app-view history-view history-section" id="history-view" role="tabpanel" aria-labelledby="history-tab" tabindex="0" hidden>
         <div class="section-heading compact">
-          <div><p class="eyebrow">Adventure log</p><h2 id="history-heading">Recent encounters</h2></div>
+          <div><p class="eyebrow">Learning memory</p><h2 id="history-heading">Recent practice</h2></div>
           <p class="updated-at" id="updated-at" role="status">Connecting to local memory...</p>
         </div>
         <div class="history-list panel" id="history-list"></div>
       </section>
     </main>
 
-    <dialog class="folder-dialog" id="folder-dialog" aria-labelledby="folder-dialog-title">
-      <form method="dialog" id="folder-form">
-        <div class="folder-dialog-heading">
-          <div>
-            <p class="eyebrow" id="folder-dialog-subject">Subject</p>
-            <h2 id="folder-dialog-title">Create a folder</h2>
-          </div>
-          <button class="dialog-close" id="folder-dialog-close" type="button" aria-label="Close folder editor">×</button>
-        </div>
-        <label class="folder-name-label" for="folder-name">Folder name
-          <input id="folder-name" name="folder-name" maxlength="80" autocomplete="off" placeholder="Exam review" required>
-        </label>
-        <fieldset class="folder-topic-fieldset">
-          <legend>Choose topics</legend>
-          <p>Topics can belong to one folder at a time. Selecting a filed topic moves it here.</p>
-          <div class="folder-topic-list" id="folder-topic-list"></div>
-        </fieldset>
-        <p class="folder-dialog-status" id="folder-dialog-status" role="status"></p>
-        <div class="folder-dialog-actions">
-          <button class="delete-topic-button folder-delete-button" id="folder-delete" type="button" hidden>Remove folder</button>
-          <span></span>
-          <button class="secondary-button" id="folder-cancel" type="button">Cancel</button>
-          <button class="primary-button" id="folder-save" type="submit">Create folder</button>
-        </div>
-      </form>
-    </dialog>
-
-    <dialog class="folder-dialog material-dialog" id="material-dialog" aria-labelledby="material-dialog-title">
-      <div class="material-dialog-body">
-        <div class="folder-dialog-heading">
-          <div>
-            <p class="eyebrow" id="material-dialog-subject">Subject</p>
-            <h2 id="material-dialog-title">Class material</h2>
-          </div>
-          <button class="dialog-close" id="material-dialog-close" type="button" aria-label="Close class material">×</button>
-        </div>
-        <p class="material-intro">Paste or scan real problems from your homework, quizzes, and exams. Sensei imitates their structure, method, notation, and difficulty when it writes new problems for this topic.</p>
-        <section class="material-section" aria-labelledby="material-profile-heading">
-          <h3 id="material-profile-heading">Course profile for <span id="material-profile-subject"></span></h3>
-          <p>Conventions that apply to every topic in this subject: exam format, notation, calculator policy, and what your professor expects in an answer.</p>
-          <textarea id="material-profile" maxlength="2000" rows="3" placeholder="Example: Exams are five free-response problems, no calculator. Answers must carry units. Related-rates problems always ask for a rate and its sign."></textarea>
-          <div class="material-row-actions"><button class="secondary-button" id="material-profile-save" type="button">Save profile</button></div>
-        </section>
-        <section class="material-section" aria-labelledby="material-list-heading">
-          <h3 id="material-list-heading">Saved material</h3>
-          <div class="material-list" id="material-list"></div>
-        </section>
-        <section class="material-section" aria-labelledby="material-add-heading">
-          <h3 id="material-add-heading">Paste a problem</h3>
-          <form id="material-form" class="material-form">
-            <div class="material-meta">
-              <label>Kind<select id="material-kind"><option value="example_problem">Problem</option><option value="worked_example">Worked example</option><option value="notes">Notes</option></select></label>
-              <label>Source <span>optional</span><input id="material-source" maxlength="120" autocomplete="off" placeholder="HW 4 #7"></label>
-            </div>
-            <label>Problem text<textarea id="material-body" maxlength="4000" rows="5" placeholder="Paste the full problem, including every given value and each part (a), (b), (c)." required></textarea></label>
-            <label>Solution or answer key <span>optional</span><textarea id="material-solution" maxlength="4000" rows="3" placeholder="Paste the worked solution or final answers if you have them."></textarea></label>
-            <div class="material-row-actions"><button class="primary-button" id="material-add" type="submit">Save problem</button></div>
-          </form>
-        </section>
-        <section class="material-section" aria-labelledby="material-scan-heading">
-          <h3 id="material-scan-heading">Scan a page</h3>
-          <p>Upload a PDF or a photo of a homework or exam page. Sensei transcribes the problems so you can review and save them. The file is sent only to the scanner model and is never stored.</p>
-          <div class="material-scan-row">
-            <input id="material-file" type="file" accept="application/pdf,image/png,image/jpeg,image/webp" aria-label="Choose a PDF or image to scan">
-            <button class="secondary-button" id="material-scan" type="button">Scan page</button>
-          </div>
-          <div class="material-proposals" id="material-proposals"></div>
-          <div class="material-row-actions"><button class="primary-button" id="material-save-proposals" type="button" hidden>Save selected</button></div>
-        </section>
-        <p class="folder-dialog-status" id="material-dialog-status" role="status"></p>
-        <div class="folder-dialog-actions"><span></span><span></span><button class="secondary-button" id="material-done" type="button">Done</button></div>
-      </div>
-    </dialog>
-
     <footer>
       <p><span class="footer-mark">S</span> Sensei keeps your learning memory on this machine.</p>
-      <p>Hosted LLM API <span aria-hidden="true">•</span> Local SQLite <span aria-hidden="true">•</span> Learner-owned path</p>
+      <p>Your material. Your pace. Help that remembers.</p>
     </footer>
-
-    <template id="skill-template">
-      <article class="skill-card panel">
-        <div class="skill-topline"><span class="skill-subject"></span><span class="skill-score"></span></div>
-        <h3 class="skill-name"></h3><p class="skill-label"></p>
-        <div class="progress-track skill-track"><i></i></div>
-        <div class="skill-footer"><span class="skill-attempts"></span><span class="skill-review"></span></div>
-        <div class="topic-actions">
-          <button class="practice-button" type="button">Train this topic</button>
-          <button class="learn-button" type="button">Learn this topic</button>
-          <button class="restart-topic-button" type="button">Restart</button>
-          <button class="delete-topic-button" type="button">Delete</button>
-          <button class="material-button secondary-button" type="button">Add class material</button>
-        </div>
-        <p class="generation-status card-generation-status" role="status"></p>
-      </article>
-    </template>
 
     <template id="history-template">
       <article class="history-row">

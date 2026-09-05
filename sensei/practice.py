@@ -33,7 +33,6 @@ from sensei.verification import (
 )
 
 
-EXACT_VERIFIER_VERSION = "sensei-answer-key-2"
 MAX_PROMPT_CHARACTERS = 2_500
 MAX_PART_PROMPT_CHARACTERS = 800
 MAX_SOLUTION_CHARACTERS = 4_000
@@ -52,10 +51,7 @@ COMMON_PRACTICE_FIELDS = {
     "solution",
 }
 BASE_PRACTICE_FIELDS = COMMON_PRACTICE_FIELDS | {"help_steps"}
-LEGACY_BASE_PRACTICE_FIELDS = COMMON_PRACTICE_FIELDS | {"hint"}
 OPTIONAL_PRACTICE_FIELDS = {"graph", "parts", "tolerance", "unit"}
-PRACTICE_FIELDS = BASE_PRACTICE_FIELDS | OPTIONAL_PRACTICE_FIELDS
-LEGACY_PRACTICE_FIELDS = LEGACY_BASE_PRACTICE_FIELDS | OPTIONAL_PRACTICE_FIELDS
 PART_REQUIRED_FIELDS = {"label", "prompt", "answer_type", "answer"}
 PART_OPTIONAL_FIELDS = {"options", "tolerance", "unit"}
 EXEMPLAR_KINDS = {"example_problem", "worked_example"}
@@ -779,8 +775,7 @@ def parse_adaptive_quest(
 ) -> AdaptiveQuest:
     document = _json_object(text)
     fields = frozenset(document)
-    legacy = "help_steps" not in fields and "hint" in fields
-    required = LEGACY_BASE_PRACTICE_FIELDS if legacy else BASE_PRACTICE_FIELDS
+    required = BASE_PRACTICE_FIELDS
     if not required <= fields <= required | OPTIONAL_PRACTICE_FIELDS:
         raise PracticeGenerationError(
             f"fields must be exactly {sorted(BASE_PRACTICE_FIELDS)} plus any of "
@@ -822,29 +817,24 @@ def parse_adaptive_quest(
         unit = spec.unit
 
     raw_help_steps = document.get("help_steps")
-    if raw_help_steps is None:
-        # Accept already-issued/test fixtures from practice API v4 while normalizing
-        # every new quest to the progressive-help contract.
-        help_steps = (_display_text(document, "hint", maximum=500),)
-    else:
-        if (
-            not isinstance(raw_help_steps, list)
-            or not MIN_HELP_STEPS <= len(raw_help_steps) <= MAX_HELP_STEPS
-            or not all(isinstance(step, str) and step.strip() for step in raw_help_steps)
-        ):
-            raise PracticeGenerationError(
-                f"help_steps must contain from {MIN_HELP_STEPS} to "
-                f"{MAX_HELP_STEPS} non-empty steps"
-            )
-        help_steps = tuple(
-            _display_text({"step": step}, "step", maximum=MAX_HELP_STEP_CHARACTERS)
-            for step in raw_help_steps
+    if (
+        not isinstance(raw_help_steps, list)
+        or not MIN_HELP_STEPS <= len(raw_help_steps) <= MAX_HELP_STEPS
+        or not all(isinstance(step, str) and step.strip() for step in raw_help_steps)
+    ):
+        raise PracticeGenerationError(
+            f"help_steps must contain from {MIN_HELP_STEPS} to "
+            f"{MAX_HELP_STEPS} non-empty steps"
         )
-        if any(len(step) > MAX_HELP_STEP_CHARACTERS for step in help_steps):
-            raise PracticeGenerationError(
-                f"each help_steps entry must not exceed {MAX_HELP_STEP_CHARACTERS} "
-                "characters"
-            )
+    help_steps = tuple(
+        _display_text({"step": step}, "step", maximum=MAX_HELP_STEP_CHARACTERS)
+        for step in raw_help_steps
+    )
+    if any(len(step) > MAX_HELP_STEP_CHARACTERS for step in help_steps):
+        raise PracticeGenerationError(
+            f"each help_steps entry must not exceed {MAX_HELP_STEP_CHARACTERS} "
+            "characters"
+        )
 
     graph = _parse_graph(document)
     if _graph_topic(skill) and graph is None:

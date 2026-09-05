@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Protocol, Sequence
+from typing import Protocol, Sequence
 
 from dotenv import load_dotenv
 
@@ -23,7 +23,6 @@ LOCAL_ENV_FILENAME = ".env"
 
 # Responses messages may contain either plain text or multimodal content blocks.
 Message = dict[str, object]
-TokenCallback = Callable[[str], None]
 
 
 class ProviderError(RuntimeError):
@@ -53,7 +52,6 @@ class ChatProvider(Protocol):
     def complete(
         self,
         messages: Sequence[Message],
-        on_token: TokenCallback | None = None,
     ) -> CompletionResult: ...
 
 
@@ -93,24 +91,6 @@ def api_settings_from_environment(
     if not resolved_base_url.startswith(("https://", "http://")):
         raise ValueError("The hosted LLM base URL must begin with http:// or https://.")
     return APISettings(api_key, resolved_model, resolved_base_url.rstrip("/"))
-
-
-def parse_sse_data(line: bytes) -> dict[str, object] | None:
-    """Parse one server-sent-event data line; ignore comments and blank lines."""
-
-    decoded = line.decode("utf-8").strip()
-    if not decoded.startswith("data:"):
-        return None
-    payload = decoded[5:].strip()
-    if not payload or payload == "[DONE]":
-        return None
-    try:
-        parsed = json.loads(payload)
-    except json.JSONDecodeError as error:
-        raise ProviderError(f"Streaming event is invalid JSON: {error}") from error
-    if not isinstance(parsed, dict):
-        raise ProviderError("Streaming event payload is not a JSON object.")
-    return parsed
 
 
 def _usage(document: dict[str, object]) -> tuple[int | None, int | None]:
@@ -197,13 +177,13 @@ class ResponsesAPIProvider:
         self.max_output_tokens = max_output_tokens
         self.json_mode = json_mode
 
-    def _payload(self, messages: Sequence[Message], stream: bool) -> bytes:
+    def _payload(self, messages: Sequence[Message]) -> bytes:
         payload: dict[str, object] = {
             "model": self.model,
             "input": list(messages),
             "max_output_tokens": self.max_output_tokens,
             "store": False,
-            "stream": stream,
+            "stream": False,
         }
         if self.json_mode:
             payload["text"] = {"format": {"type": "json_object"}}
@@ -212,11 +192,10 @@ class ResponsesAPIProvider:
     def _request(
         self,
         messages: Sequence[Message],
-        stream: bool,
     ) -> urllib.request.Request:
         return urllib.request.Request(
             self.endpoint,
-            data=self._payload(messages, stream),
+            data=self._payload(messages),
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
@@ -227,20 +206,17 @@ class ResponsesAPIProvider:
     def complete(
         self,
         messages: Sequence[Message],
-        on_token: TokenCallback | None = None,
     ) -> CompletionResult:
         if not messages:
             raise ValueError("At least one chat message is required.")
 
         for attempt in range(self.max_retries + 1):
-            request = self._request(messages, stream=on_token is not None)
+            request = self._request(messages)
             try:
                 with urllib.request.urlopen(
                     request,
                     timeout=self.timeout_seconds,
                 ) as response:
-                    if on_token is not None:
-                        return self._read_stream(response, on_token)
                     document = json.loads(response.read().decode("utf-8"))
                     if not isinstance(document, dict):
                         raise ProviderError("The Responses API returned a non-object.")
@@ -262,61 +238,3 @@ class ResponsesAPIProvider:
             time.sleep(0.5 * (2**attempt))
 
         raise AssertionError("The retry loop must return or raise.")
-
-    @staticmethod
-    def _read_stream(
-        response: object,
-        on_token: TokenCallback,
-    ) -> CompletionResult:
-        parts: list[str] = []
-        prompt_tokens: int | None = None
-        completion_tokens: int | None = None
-        completed = False
-
-        try:
-            for raw_line in response:  # type: ignore[union-attr]
-                event = parse_sse_data(raw_line)
-                if event is None:
-                    continue
-                event_type = event.get("type")
-                if event_type == "response.output_text.delta":
-                    delta = event.get("delta")
-                    if isinstance(delta, str) and delta:
-                        parts.append(delta)
-                        on_token(delta)
-                elif event_type == "response.completed":
-                    final_response = event.get("response")
-                    if isinstance(final_response, dict):
-                        prompt_tokens, completion_tokens = _usage(final_response)
-                        completed = final_response.get("status") == "completed"
-                    else:
-                        completed = True
-                elif event_type in {
-                    "response.failed",
-                    "response.incomplete",
-                    "error",
-                }:
-                    error = event.get("error")
-                    message = error.get("message") if isinstance(error, dict) else None
-                    raise ProviderError(
-                        f"The streaming Responses API request failed: "
-                        f"{message or event_type}."
-                    )
-        except ProviderError:
-            raise
-        except (OSError, UnicodeDecodeError) as error:
-            raise ProviderError(
-                "The streaming connection ended before a complete response."
-            ) from error
-
-        text = "".join(parts)
-        if not text.strip():
-            raise ProviderError("The streaming response contained no student-facing text.")
-        if not completed:
-            raise ProviderError("The streaming response did not complete normally.")
-        return CompletionResult(
-            text=text,
-            finish_reason="completed",
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
